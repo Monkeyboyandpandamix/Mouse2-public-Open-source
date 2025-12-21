@@ -34,13 +34,17 @@ Preferred communication style: Simple, everyday language.
 - Real-time telemetry panel showing altitude, speed, attitude, and motor data
 - Interactive map with drone position, waypoints, flight path visualization, and address search
 - Mission planning with waypoint management and actions (hover, photo, drop/pickup payload, RTL)
-- Object tracking panel for computer vision-based target following
+- Object tracking panel with motion-based detection and IoU tracking for stable object IDs
 - Audio broadcast system with Pi GPIO speaker, USB speaker, and Orange Cube+ buzzer support
 - Flight controls including arm/disarm, takeoff, land, RTL, and emergency stop
 - Gripper control for payload drop/pickup operations
 - Google Sheets backup integration for data persistence
-- Laptop webcam testing mode for camera validation
+- Google Drive integration for video footage storage
+- Laptop webcam testing mode for camera validation with object detection overlay
 - Hardware presets for Skydroid C12, LW20/HA Lidar, Here3+ GPS configuration
+- Base location configuration in Settings for RTL functionality
+- Auto system diagnostics with manual override in top bar
+- Operations console with lazy loading and bounded log buffer
 
 ### Hardware Configuration
 - **Companion Computer**: Raspberry Pi 5 (16GB) running Trixie 13.2
