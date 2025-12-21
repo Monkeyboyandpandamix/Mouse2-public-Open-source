@@ -78,7 +78,7 @@ export default function Home() {
       {/* Background Grid Pattern */}
       <div className="absolute inset-0 bg-grid-pattern opacity-20 pointer-events-none z-0" />
 
-      <TopBar />
+      <TopBar onSettingsClick={() => setActiveTab("settings")} />
 
       <div className="flex flex-1 overflow-hidden relative z-10">
         <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />

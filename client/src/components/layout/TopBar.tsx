@@ -20,7 +20,11 @@ import {
 } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
-export function TopBar() {
+interface TopBarProps {
+  onSettingsClick?: () => void;
+}
+
+export function TopBar({ onSettingsClick }: TopBarProps) {
   const [time, setTime] = useState(new Date());
 
   useEffect(() => {
@@ -108,7 +112,12 @@ export function TopBar() {
           {time.toLocaleTimeString([], { hour12: false })}
         </div>
         
-        <Button variant="ghost" size="icon">
+        <Button 
+          variant="ghost" 
+          size="icon"
+          onClick={onSettingsClick}
+          data-testid="button-settings"
+        >
           <Settings className="h-5 w-5" />
         </Button>
       </div>

@@ -5,7 +5,10 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Trash2, Save, Play, MapPin, Navigation } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Plus, Trash2, Save, Play, MapPin, Navigation, Search, Edit2, AlertTriangle } from "lucide-react";
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -34,6 +37,12 @@ interface Waypoint {
 export function MissionPlanningPanel() {
   const queryClient = useQueryClient();
   const [selectedMission, setSelectedMission] = useState<number | null>(null);
+  const [targetMethod, setTargetMethod] = useState<"map" | "address" | "coordinates">("map");
+  const [addressInput, setAddressInput] = useState("");
+  const [coordLat, setCoordLat] = useState("");
+  const [coordLon, setCoordLon] = useState("");
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [missionToDelete, setMissionToDelete] = useState<Mission | null>(null);
 
   const { data: missions = [] } = useQuery<Mission[]>({
     queryKey: ["/api/missions"],
@@ -60,6 +69,24 @@ export function MissionPlanningPanel() {
     },
   });
 
+  const deleteMission = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await fetch(`/api/missions/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("Failed to delete mission");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/missions"] });
+      setSelectedMission(null);
+      setDeleteDialogOpen(false);
+      toast.success("Mission deleted");
+    },
+    onError: () => {
+      toast.error("Failed to delete mission");
+    },
+  });
+
   const addWaypoint = useMutation({
     mutationFn: async (waypoint: any) => {
       const res = await fetch("/api/waypoints", {
@@ -75,6 +102,64 @@ export function MissionPlanningPanel() {
       toast.success("Waypoint added");
     },
   });
+
+  const deleteWaypoint = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await fetch(`/api/waypoints/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("Failed to delete waypoint");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/missions", selectedMission, "waypoints"] });
+      toast.success("Waypoint removed");
+    },
+  });
+
+  const handleAddressSearch = async () => {
+    if (!addressInput.trim()) {
+      toast.error("Please enter an address");
+      return;
+    }
+    toast.success(`Searching for: ${addressInput}`);
+  };
+
+  const handleAddWaypointFromCoords = () => {
+    const lat = parseFloat(coordLat);
+    const lon = parseFloat(coordLon);
+    
+    if (isNaN(lat) || isNaN(lon)) {
+      toast.error("Please enter valid coordinates");
+      return;
+    }
+    
+    if (selectedMission) {
+      addWaypoint.mutate({
+        missionId: selectedMission,
+        order: waypoints.length + 1,
+        latitude: lat,
+        longitude: lon,
+        altitude: 50,
+        speed: 5,
+        action: "flythrough",
+      });
+      setCoordLat("");
+      setCoordLon("");
+    }
+  };
+
+  const handleDeleteMission = (mission: Mission) => {
+    setMissionToDelete(mission);
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDeleteMission = () => {
+    if (missionToDelete) {
+      deleteMission.mutate(missionToDelete.id);
+    }
+  };
+
+  const selectedMissionData = missions.find(m => m.id === selectedMission);
 
   return (
     <div className="h-full flex">
@@ -98,7 +183,7 @@ export function MissionPlanningPanel() {
 
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-2">
-            {missions.map((mission: any) => (
+            {missions.map((mission) => (
               <Card
                 key={mission.id}
                 className={`cursor-pointer transition-colors hover:bg-accent/50 ${
@@ -112,7 +197,20 @@ export function MissionPlanningPanel() {
                       <CardTitle className="text-sm font-mono">{mission.name}</CardTitle>
                       <p className="text-xs text-muted-foreground mt-1">{mission.description}</p>
                     </div>
-                    <Badge variant="outline" className="ml-2">{mission.status}</Badge>
+                    <div className="flex items-center gap-1">
+                      <Badge variant="outline" className="text-xs">{mission.status}</Badge>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteMission(mission);
+                        }}
+                      >
+                        <Trash2 className="h-3 w-3 text-destructive" />
+                      </Button>
+                    </div>
                   </div>
                 </CardHeader>
               </Card>
@@ -128,7 +226,7 @@ export function MissionPlanningPanel() {
             <div className="p-4 border-b border-border bg-card/80 backdrop-blur">
               <div className="flex items-center justify-between mb-4">
                 <div>
-                  <h2 className="text-xl font-bold font-sans">Mission Details</h2>
+                  <h2 className="text-xl font-bold font-sans">{selectedMissionData?.name || "Mission Details"}</h2>
                   <p className="text-sm text-muted-foreground">Configure waypoints and flight path</p>
                 </div>
                 <div className="flex gap-2">
@@ -146,7 +244,9 @@ export function MissionPlanningPanel() {
               <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-1">
                   <Label className="text-xs">Home Position</Label>
-                  <div className="font-mono text-sm">34.0522, -118.2437</div>
+                  <div className="font-mono text-sm">
+                    {selectedMissionData?.homeLatitude.toFixed(4)}, {selectedMissionData?.homeLongitude.toFixed(4)}
+                  </div>
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs">Waypoints</Label>
@@ -154,38 +254,90 @@ export function MissionPlanningPanel() {
                 </div>
                 <div className="space-y-1">
                   <Label className="text-xs">Est. Flight Time</Label>
-                  <div className="font-mono text-sm">~8 minutes</div>
+                  <div className="font-mono text-sm">~{Math.max(1, waypoints.length * 2)} minutes</div>
                 </div>
               </div>
+            </div>
+
+            <div className="p-4 border-b border-border bg-muted/30">
+              <h4 className="font-bold text-sm mb-3">Add Waypoint</h4>
+              <Tabs value={targetMethod} onValueChange={(v) => setTargetMethod(v as any)}>
+                <TabsList className="grid w-full grid-cols-3">
+                  <TabsTrigger value="map">
+                    <MapPin className="h-4 w-4 mr-2" />
+                    Click Map
+                  </TabsTrigger>
+                  <TabsTrigger value="address">
+                    <Search className="h-4 w-4 mr-2" />
+                    Address
+                  </TabsTrigger>
+                  <TabsTrigger value="coordinates">
+                    <Navigation className="h-4 w-4 mr-2" />
+                    Coordinates
+                  </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="map" className="mt-3">
+                  <div className="bg-muted/50 border border-dashed border-border rounded-lg p-6 text-center">
+                    <MapPin className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">
+                      Click on the map to add a waypoint at that location
+                    </p>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="address" className="mt-3 space-y-3">
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Enter address (e.g., 123 Main St, City)"
+                      value={addressInput}
+                      onChange={(e) => setAddressInput(e.target.value)}
+                      className="flex-1"
+                    />
+                    <Button onClick={handleAddressSearch}>
+                      <Search className="h-4 w-4 mr-2" />
+                      Search
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Address will be converted to GPS coordinates and added as a waypoint
+                  </p>
+                </TabsContent>
+
+                <TabsContent value="coordinates" className="mt-3 space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Latitude</Label>
+                      <Input
+                        placeholder="34.0522"
+                        value={coordLat}
+                        onChange={(e) => setCoordLat(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Longitude</Label>
+                      <Input
+                        placeholder="-118.2437"
+                        value={coordLon}
+                        onChange={(e) => setCoordLon(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <Button className="w-full" onClick={handleAddWaypointFromCoords}>
+                    <Plus className="h-4 w-4 mr-2" />
+                    Add Waypoint
+                  </Button>
+                </TabsContent>
+              </Tabs>
             </div>
 
             <ScrollArea className="flex-1 p-4">
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <h3 className="font-bold text-sm">Waypoint Sequence</h3>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => {
-                      if (selectedMission) {
-                        addWaypoint.mutate({
-                          missionId: selectedMission,
-                          order: waypoints.length + 1,
-                          latitude: 34.0522 + (Math.random() - 0.5) * 0.01,
-                          longitude: -118.2437 + (Math.random() - 0.5) * 0.01,
-                          altitude: 50,
-                          speed: 5,
-                          action: "hover",
-                        });
-                      }
-                    }}
-                  >
-                    <Plus className="h-3 w-3 mr-1" />
-                    Add Waypoint
-                  </Button>
                 </div>
 
-                {waypoints.map((wp: any, idx: number) => (
+                {waypoints.map((wp, idx) => (
                   <Card key={wp.id} className="border-l-4 border-l-primary">
                     <CardContent className="p-3">
                       <div className="flex items-start gap-3">
@@ -211,13 +363,28 @@ export function MissionPlanningPanel() {
                               <span className="font-mono ml-1">{wp.speed || 5}m/s</span>
                             </div>
                           </div>
-                          {wp.action && (
-                            <Badge variant="secondary" className="text-xs">
-                              Action: {wp.action}
-                            </Badge>
-                          )}
+                          <div className="flex items-center gap-2">
+                            <Select defaultValue={wp.action || "flythrough"}>
+                              <SelectTrigger className="h-7 text-xs w-32">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="flythrough">Fly Through</SelectItem>
+                                <SelectItem value="hover">Hover (5s)</SelectItem>
+                                <SelectItem value="photo">Take Photo</SelectItem>
+                                <SelectItem value="drop">Drop Payload</SelectItem>
+                                <SelectItem value="pickup">Pickup Payload</SelectItem>
+                                <SelectItem value="rtl">Return to Launch</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
                         </div>
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                        <Button 
+                          variant="ghost" 
+                          size="icon" 
+                          className="h-8 w-8"
+                          onClick={() => deleteWaypoint.mutate(wp.id)}
+                        >
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
                       </div>
@@ -229,7 +396,7 @@ export function MissionPlanningPanel() {
                   <div className="text-center py-12 text-muted-foreground">
                     <MapPin className="h-12 w-12 mx-auto mb-3 opacity-50" />
                     <p>No waypoints added yet</p>
-                    <p className="text-sm">Click map or use "Add Waypoint" button</p>
+                    <p className="text-sm">Use the options above to add waypoints</p>
                   </div>
                 )}
               </div>
@@ -245,6 +412,29 @@ export function MissionPlanningPanel() {
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              Delete Mission
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete "{missionToDelete?.name}"? This action cannot be undone and all waypoints will be permanently removed.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={confirmDeleteMission}>
+              Delete Mission
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
