@@ -101,6 +101,14 @@ const defaultCommands: SystemCommand[] = [
     category: "flight",
     command: "mavlink_shell 'disarm force' && echo 'EMERGENCY STOP EXECUTED'",
   },
+  {
+    id: "set_flight_mode",
+    name: "Set Flight Mode",
+    description: "Changes drone flight mode (stabilize, alt_hold, loiter, auto, guided, rtl, land)",
+    category: "flight",
+    command: "mavlink_shell 'mode ${mode}'",
+    parameters: [{ name: "mode", description: "Flight mode name", default: "loiter" }]
+  },
 
   // Navigation Commands
   {
@@ -137,12 +145,45 @@ const defaultCommands: SystemCommand[] = [
     category: "navigation",
     command: "mavlink_shell 'mode auto'",
   },
+  {
+    id: "pause_mission",
+    name: "Pause Mission",
+    description: "Pauses current mission and holds position",
+    category: "navigation",
+    command: "mavlink_shell 'mode loiter'",
+  },
+  {
+    id: "resume_mission",
+    name: "Resume Mission",
+    description: "Resumes paused mission from current waypoint",
+    category: "navigation",
+    command: "mavlink_shell 'mode auto'",
+  },
+  {
+    id: "set_home",
+    name: "Set Home Position",
+    description: "Sets current position as home/launch point",
+    category: "navigation",
+    command: "mavlink_shell 'set_home ${lat} ${lon} ${alt}'",
+    parameters: [
+      { name: "lat", description: "Latitude", default: "current" },
+      { name: "lon", description: "Longitude", default: "current" },
+      { name: "alt", description: "Altitude (m)", default: "current" }
+    ]
+  },
+  {
+    id: "get_mission_status",
+    name: "Get Mission Status",
+    description: "Returns current mission progress and active waypoint",
+    category: "navigation",
+    command: "mavlink_shell 'status mission'",
+  },
 
-  // Telemetry Commands
+  // Telemetry Commands - Orange Cube+ Sensors
   {
     id: "get_attitude",
     name: "Get Attitude (Pitch/Roll/Yaw)",
-    description: "Retrieves current pitch, roll, and yaw angles",
+    description: "Retrieves current pitch, roll, and yaw angles from IMU",
     category: "telemetry",
     command: "mavlink_shell 'status attitude'",
   },
@@ -155,8 +196,8 @@ const defaultCommands: SystemCommand[] = [
   },
   {
     id: "get_heading",
-    name: "Get Heading",
-    description: "Retrieves current compass heading",
+    name: "Get Compass Heading",
+    description: "Retrieves current magnetometer/compass heading",
     category: "telemetry",
     command: "mavlink_shell 'status compass'",
   },
@@ -180,6 +221,151 @@ const defaultCommands: SystemCommand[] = [
     description: "Retrieves RPM, temperature, and current for all motors",
     category: "telemetry",
     command: "mavlink_shell 'status motors'",
+  },
+  {
+    id: "get_accelerometer",
+    name: "Get Accelerometer Data",
+    description: "Reads Orange Cube+ accelerometer X/Y/Z values (m/s²)",
+    category: "telemetry",
+    command: "mavlink_shell 'status accel'",
+  },
+  {
+    id: "get_gyroscope",
+    name: "Get Gyroscope Data",
+    description: "Reads Orange Cube+ gyroscope angular rates (rad/s)",
+    category: "telemetry",
+    command: "mavlink_shell 'status gyro'",
+  },
+  {
+    id: "get_barometer1",
+    name: "Get Barometer 1 Data",
+    description: "Reads primary barometer pressure and altitude (Orange Cube+)",
+    category: "telemetry",
+    command: "mavlink_shell 'status baro1'",
+  },
+  {
+    id: "get_barometer2",
+    name: "Get Barometer 2 Data",
+    description: "Reads secondary barometer pressure and altitude (Orange Cube+)",
+    category: "telemetry",
+    command: "mavlink_shell 'status baro2'",
+  },
+  {
+    id: "get_magnetometer",
+    name: "Get Magnetometer Data",
+    description: "Reads Orange Cube+ magnetometer/compass raw values",
+    category: "telemetry",
+    command: "mavlink_shell 'status mag'",
+  },
+  {
+    id: "get_adsb",
+    name: "Get ADS-B Data",
+    description: "Retrieves nearby aircraft from ADSB Carrier Board receiver",
+    category: "telemetry",
+    command: "mavlink_shell 'adsb list'",
+  },
+  {
+    id: "get_adsb_config",
+    name: "Get ADS-B Configuration",
+    description: "Shows ADSB receiver settings and status",
+    category: "telemetry",
+    command: "mavlink_shell 'adsb status'",
+  },
+  {
+    id: "set_adsb_range",
+    name: "Set ADS-B Range",
+    description: "Configures ADS-B detection range in nautical miles",
+    category: "telemetry",
+    command: "mavlink_shell 'adsb range ${range}'",
+    parameters: [{ name: "range", description: "Range in NM", default: "10" }]
+  },
+  // Here3+ GPS Module Commands
+  {
+    id: "get_here3_gps",
+    name: "Get Here3+ GPS Data",
+    description: "Reads u-blox M8P-2 GNSS position (GPS/GLONASS/Galileo/BeiDou)",
+    category: "telemetry",
+    command: "mavlink_shell 'status gps2'",
+  },
+  {
+    id: "get_here3_rtk",
+    name: "Get Here3+ RTK Status",
+    description: "Shows RTK fix status and accuracy from Here3+ GPS",
+    category: "telemetry",
+    command: "mavlink_shell 'status rtk'",
+  },
+  {
+    id: "get_here3_accel",
+    name: "Get Here3+ Accelerometer",
+    description: "Reads Here3+ GPS module internal accelerometer",
+    category: "telemetry",
+    command: "mavlink_shell 'can read gps accel'",
+  },
+  {
+    id: "get_here3_gyro",
+    name: "Get Here3+ Gyroscope",
+    description: "Reads Here3+ GPS module internal gyroscope",
+    category: "telemetry",
+    command: "mavlink_shell 'can read gps gyro'",
+  },
+  {
+    id: "get_here3_compass",
+    name: "Get Here3+ RM3100 Compass",
+    description: "Reads Here3+ RM3100 high-precision compass data",
+    category: "telemetry",
+    command: "mavlink_shell 'can read gps compass'",
+  },
+  {
+    id: "get_here3_baro",
+    name: "Get Here3+ MS5611 Barometer",
+    description: "Reads Here3+ MS5611 barometer pressure and temperature",
+    category: "telemetry",
+    command: "mavlink_shell 'can read gps baro'",
+  },
+  {
+    id: "get_here3_led",
+    name: "Get Here3+ LED Status",
+    description: "Shows Here3+ Status LED current state and color",
+    category: "telemetry",
+    command: "mavlink_shell 'can read gps led'",
+  },
+  {
+    id: "set_here3_led",
+    name: "Set Here3+ LED Color",
+    description: "Sets Here3+ Status LED color (for testing)",
+    category: "telemetry",
+    command: "mavlink_shell 'can write gps led ${color}'",
+    parameters: [{ name: "color", description: "LED color (red/green/blue/off)", default: "green" }]
+  },
+  // LiDAR Commands
+  {
+    id: "get_lidar",
+    name: "Get LW20/HA LiDAR Range",
+    description: "Reads current distance measurement from LiDAR sensor",
+    category: "telemetry",
+    command: "mavlink_shell 'status lidar'",
+  },
+  {
+    id: "get_lidar_config",
+    name: "Get LiDAR Configuration",
+    description: "Shows LW20/HA LiDAR settings (range, rate, mode)",
+    category: "telemetry",
+    command: "mavlink_shell 'lidar config'",
+  },
+  // Vibration & System Health
+  {
+    id: "get_vibration",
+    name: "Get Vibration Data",
+    description: "Reads accelerometer vibration levels and clipping",
+    category: "telemetry",
+    command: "mavlink_shell 'status vibration'",
+  },
+  {
+    id: "get_system_status",
+    name: "Get System Status",
+    description: "Shows overall system health and sensor status",
+    category: "telemetry",
+    command: "mavlink_shell 'status all'",
   },
 
   // Camera Commands
@@ -205,18 +391,34 @@ const defaultCommands: SystemCommand[] = [
     command: "mavlink_shell 'gimbal pitch 0'",
   },
   {
+    id: "gimbal_set",
+    name: "Set Gimbal Angle",
+    description: "Sets gimbal pitch angle (-90° to +45°)",
+    category: "camera",
+    command: "mavlink_shell 'gimbal pitch ${angle}'",
+    parameters: [{ name: "angle", description: "Pitch angle in degrees", default: "-45" }]
+  },
+  {
     id: "switch_thermal",
     name: "Switch to Thermal",
-    description: "Switches camera feed to thermal imaging",
+    description: "Switches camera feed to thermal imaging (384x288)",
     category: "camera",
     command: "echo 'thermal' > /tmp/camera_mode",
   },
   {
     id: "switch_visible",
     name: "Switch to Visible",
-    description: "Switches camera feed to visible light",
+    description: "Switches camera feed to visible light (2K HD)",
     category: "camera",
     command: "echo 'visible' > /tmp/camera_mode",
+  },
+  {
+    id: "thermal_palette",
+    name: "Set Thermal Palette",
+    description: "Changes thermal camera color palette",
+    category: "camera",
+    command: "echo '${palette}' > /tmp/thermal_palette",
+    parameters: [{ name: "palette", description: "Palette (ironbow/rainbow/white-hot/black-hot)", default: "ironbow" }]
   },
 
   // Video Commands
@@ -237,10 +439,17 @@ const defaultCommands: SystemCommand[] = [
   {
     id: "video_stream_start",
     name: "Start Video Stream",
-    description: "Starts RTSP video stream for remote viewing",
+    description: "Starts UDP video stream for remote viewing",
     category: "video",
     command: "gst-launch-1.0 v4l2src device=/dev/video0 ! videoconvert ! x264enc tune=zerolatency ! rtph264pay ! udpsink host=${stream_ip} port=5600 &",
     parameters: [{ name: "stream_ip", description: "Stream destination IP", default: "192.168.1.100" }]
+  },
+  {
+    id: "video_stream_stop",
+    name: "Stop Video Stream",
+    description: "Stops active video stream",
+    category: "video",
+    command: "pkill -f 'gst-launch.*udpsink'",
   },
   {
     id: "video_input_script",
@@ -249,9 +458,16 @@ const defaultCommands: SystemCommand[] = [
     category: "video",
     command: "v4l2-ctl -d /dev/video0 --set-fmt-video=width=${width},height=${height},pixelformat=MJPG",
     parameters: [
-      { name: "width", description: "Video width", default: "1920" },
-      { name: "height", description: "Video height", default: "1080" }
+      { name: "width", description: "Video width", default: "2560" },
+      { name: "height", description: "Video height", default: "1440" }
     ]
+  },
+  {
+    id: "list_recordings",
+    name: "List Recordings",
+    description: "Shows all saved video recordings",
+    category: "video",
+    command: "ls -la /recordings/",
   },
 
   // System Commands
@@ -277,11 +493,57 @@ const defaultCommands: SystemCommand[] = [
     command: "mavlink_shell 'accel calibrate'",
   },
   {
+    id: "calibrate_gyro",
+    name: "Calibrate Gyroscope",
+    description: "Initiates gyroscope calibration (keep drone still)",
+    category: "system",
+    command: "mavlink_shell 'gyro calibrate'",
+  },
+  {
+    id: "calibrate_baro",
+    name: "Calibrate Barometer",
+    description: "Calibrates barometers to current altitude",
+    category: "system",
+    command: "mavlink_shell 'baro calibrate'",
+  },
+  {
     id: "check_prearm",
     name: "Pre-Arm Check",
     description: "Runs all pre-arm safety checks",
     category: "system",
     command: "mavlink_shell 'prearm_check'",
+  },
+  {
+    id: "get_params",
+    name: "List Parameters",
+    description: "Lists all flight controller parameters",
+    category: "system",
+    command: "mavlink_shell 'param show'",
+  },
+  {
+    id: "set_param",
+    name: "Set Parameter",
+    description: "Sets a flight controller parameter value",
+    category: "system",
+    command: "mavlink_shell 'param set ${param_name} ${value}'",
+    parameters: [
+      { name: "param_name", description: "Parameter name", default: "ARMING_CHECK" },
+      { name: "value", description: "Parameter value", default: "1" }
+    ]
+  },
+  {
+    id: "get_version",
+    name: "Get Firmware Version",
+    description: "Shows ArduPilot firmware version information",
+    category: "system",
+    command: "mavlink_shell 'version'",
+  },
+  {
+    id: "save_eeprom",
+    name: "Save to EEPROM",
+    description: "Saves current parameters to flight controller EEPROM",
+    category: "system",
+    command: "mavlink_shell 'param save'",
   },
 ];
 

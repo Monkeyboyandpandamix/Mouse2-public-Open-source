@@ -13,8 +13,10 @@ import { FlightLogsPanel } from "@/components/panels/FlightLogsPanel";
 import { AutomationPanel } from "@/components/panels/AutomationPanel";
 import { TerminalCommandsPanel } from "@/components/panels/TerminalCommandsPanel";
 import { UserAccessPanel } from "@/components/panels/UserAccessPanel";
+import { GeofencingPanel } from "@/components/panels/GeofencingPanel";
+import { GUIConfigPanel } from "@/components/panels/GUIConfigPanel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertTriangle, X, Wifi, Battery, Satellite } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface SystemError {
@@ -156,6 +158,18 @@ export default function Home() {
         return (
           <div className="flex-1 relative overflow-hidden">
             <UserAccessPanel />
+          </div>
+        );
+      case "geofence":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <GeofencingPanel />
+          </div>
+        );
+      case "guiconfig":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <GUIConfigPanel />
           </div>
         );
       case "settings":

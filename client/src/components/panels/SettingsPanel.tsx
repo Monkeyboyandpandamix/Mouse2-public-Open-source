@@ -42,6 +42,7 @@ export function SettingsPanel() {
     lidarAddress: "0x62",
     lidarRate: "10",
     lidarEnabled: true,
+    lidarPosition: "bottom" as "bottom" | "front",
     gpsCanId: "1",
     gpsEnabled: true,
     customSensors: [] as { name: string; type: string; address: string; port: string }[],
@@ -320,6 +321,7 @@ export function SettingsPanel() {
       lidarAddress: "0x62",
       lidarRate: "10",
       lidarEnabled: true,
+      lidarPosition: "bottom",
       gpsCanId: "1",
       gpsEnabled: true,
       customSensors: [],
@@ -665,6 +667,7 @@ export function SettingsPanel() {
                     <Input 
                       value={sensorSettings.lidarAddress}
                       onChange={(e) => updateSetting(setSensorSettings, "lidarAddress", e.target.value)}
+                      data-testid="input-lidar-address"
                     />
                   </div>
                   <div className="space-y-2">
@@ -673,7 +676,7 @@ export function SettingsPanel() {
                       value={sensorSettings.lidarRate}
                       onValueChange={(v) => updateSetting(setSensorSettings, "lidarRate", v)}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger data-testid="select-lidar-rate">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -690,9 +693,53 @@ export function SettingsPanel() {
                       <Switch 
                         checked={sensorSettings.lidarEnabled}
                         onCheckedChange={(v) => updateSetting(setSensorSettings, "lidarEnabled", v)}
+                        data-testid="switch-lidar-enabled"
                       />
                       <Label>Enabled</Label>
                     </div>
+                  </div>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-3">
+                  <Label className="text-sm font-medium">LiDAR Mounting Position</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Select where the LiDAR sensor is mounted on the drone to configure its use case
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Button
+                      variant={sensorSettings.lidarPosition === "bottom" ? "default" : "outline"}
+                      className="h-auto py-4 flex flex-col items-start text-left"
+                      onClick={() => updateSetting(setSensorSettings, "lidarPosition", "bottom")}
+                      data-testid="button-lidar-bottom"
+                    >
+                      <span className="font-bold">Bottom Mounted</span>
+                      <span className="text-xs text-muted-foreground mt-1 whitespace-normal">
+                        Points downward for altitude measurement
+                      </span>
+                      <ul className="text-[10px] mt-2 space-y-1 text-muted-foreground">
+                        <li>• Autonomous landing assistance</li>
+                        <li>• Terrain following mode</li>
+                        <li>• Precision altitude measurement</li>
+                      </ul>
+                    </Button>
+                    <Button
+                      variant={sensorSettings.lidarPosition === "front" ? "default" : "outline"}
+                      className="h-auto py-4 flex flex-col items-start text-left"
+                      onClick={() => updateSetting(setSensorSettings, "lidarPosition", "front")}
+                      data-testid="button-lidar-front"
+                    >
+                      <span className="font-bold">Front Mounted</span>
+                      <span className="text-xs text-muted-foreground mt-1 whitespace-normal">
+                        Points forward for obstacle detection
+                      </span>
+                      <ul className="text-[10px] mt-2 space-y-1 text-muted-foreground">
+                        <li>• Obstacle detection</li>
+                        <li>• Collision avoidance system</li>
+                        <li>• Forward range sensing</li>
+                      </ul>
+                    </Button>
                   </div>
                 </div>
               </CardContent>
