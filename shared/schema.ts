@@ -42,9 +42,45 @@ export const waypoints = pgTable("waypoints", {
   longitude: real("longitude").notNull(),
   altitude: real("altitude").notNull(),
   speed: real("speed"),
-  action: text("action"), // 'hover', 'photo', 'drop_payload', 'pickup_payload', 'rtl'
-  actionParams: json("action_params"),
+  action: text("action"), // 'flythrough', 'hover', 'photo', 'drop_payload', 'pickup_payload', 'rtl', 'alert', 'patrol'
+  actionParams: json("action_params"), // { hoverTime: number, alertMessage: string, patrolRadius: number }
+  address: text("address"), // Saved address for reference
 });
+
+// Flight Sessions for comprehensive logging
+export const flightSessions = pgTable("flight_sessions", {
+  id: serial("id").primaryKey(),
+  missionId: integer("mission_id").references(() => missions.id, { onDelete: "set null" }),
+  startTime: timestamp("start_time").defaultNow().notNull(),
+  endTime: timestamp("end_time"),
+  status: text("status").notNull().default("active"), // 'active', 'completed', 'aborted'
+  totalFlightTime: integer("total_flight_time"), // seconds
+  maxAltitude: real("max_altitude"),
+  totalDistance: real("total_distance"), // meters
+  videoFilePath: text("video_file_path"),
+  logFilePath: text("log_file_path"),
+  model3dFilePath: text("model_3d_file_path"),
+});
+
+export const insertFlightSessionSchema = createInsertSchema(flightSessions).omit({ id: true });
+export type InsertFlightSession = z.infer<typeof insertFlightSessionSchema>;
+export type FlightSession = typeof flightSessions.$inferSelect;
+
+// Flight Events (commands, alerts, waypoint arrivals)
+export const flightEvents = pgTable("flight_events", {
+  id: serial("id").primaryKey(),
+  sessionId: integer("session_id").references(() => flightSessions.id, { onDelete: "cascade" }),
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+  eventType: text("event_type").notNull(), // 'command', 'alert', 'waypoint_arrival', 'mode_change', 'error'
+  eventData: json("event_data").notNull(),
+  latitude: real("latitude"),
+  longitude: real("longitude"),
+  altitude: real("altitude"),
+});
+
+export const insertFlightEventSchema = createInsertSchema(flightEvents).omit({ id: true, timestamp: true });
+export type InsertFlightEvent = z.infer<typeof insertFlightEventSchema>;
+export type FlightEvent = typeof flightEvents.$inferSelect;
 
 export const insertWaypointSchema = createInsertSchema(waypoints).omit({ id: true });
 export type InsertWaypoint = z.infer<typeof insertWaypointSchema>;

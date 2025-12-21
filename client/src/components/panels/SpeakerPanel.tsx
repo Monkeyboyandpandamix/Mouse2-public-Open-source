@@ -6,8 +6,8 @@ import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { Volume2, Mic, Play, Square, MessageSquare, Plus, Trash2, Check, Settings2 } from "lucide-react";
-import { useState } from "react";
+import { Volume2, Mic, Play, Square, MessageSquare, Plus, Trash2, Check, Settings2, Radio, Loader2 } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 
 interface QuickMessage {
@@ -15,13 +15,22 @@ interface QuickMessage {
   text: string;
 }
 
+interface VoiceOption {
+  name: string;
+  lang: string;
+  voiceURI: string;
+}
+
 export function SpeakerPanel() {
   const [isRecording, setIsRecording] = useState(false);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
+  const [isPreviewing, setIsPreviewing] = useState(false);
   const [volume, setVolume] = useState([80]);
   const [ttsMessage, setTtsMessage] = useState("");
-  const [voiceType, setVoiceType] = useState("female");
+  const [voiceType, setVoiceType] = useState("default");
   const [speechRate, setSpeechRate] = useState([1]);
+  const [pitch, setPitch] = useState([1]);
+  const [availableVoices, setAvailableVoices] = useState<VoiceOption[]>([]);
   const [quickMessages, setQuickMessages] = useState<QuickMessage[]>([
     { id: "1", text: "Clear the area immediately" },
     { id: "2", text: "Emergency services have been notified" },
@@ -31,54 +40,127 @@ export function SpeakerPanel() {
   const [newQuickMessage, setNewQuickMessage] = useState("");
   const [showAddMessage, setShowAddMessage] = useState(false);
 
-  const handleStartRecording = () => {
-    setIsRecording(true);
-    setIsBroadcasting(true);
-    toast.success("Live broadcast started - speak into microphone");
+  useEffect(() => {
+    const loadVoices = () => {
+      const voices = speechSynthesis.getVoices();
+      const voiceOptions: VoiceOption[] = voices.map(v => ({
+        name: v.name,
+        lang: v.lang,
+        voiceURI: v.voiceURI,
+      }));
+      setAvailableVoices(voiceOptions);
+    };
+
+    loadVoices();
+    speechSynthesis.onvoiceschanged = loadVoices;
+  }, []);
+
+  const getSelectedVoice = () => {
+    const voices = speechSynthesis.getVoices();
+    
+    switch (voiceType) {
+      case "male":
+        return voices.find(v => 
+          v.name.toLowerCase().includes('male') || 
+          v.name.toLowerCase().includes('david') ||
+          v.name.toLowerCase().includes('james') ||
+          v.name.toLowerCase().includes('daniel')
+        ) || voices[0];
+      case "female":
+        return voices.find(v => 
+          v.name.toLowerCase().includes('female') || 
+          v.name.toLowerCase().includes('samantha') ||
+          v.name.toLowerCase().includes('karen') ||
+          v.name.toLowerCase().includes('victoria')
+        ) || voices[0];
+      case "robotic":
+        return voices.find(v => 
+          v.name.toLowerCase().includes('zira') ||
+          v.name.toLowerCase().includes('microsoft')
+        ) || voices[0];
+      default:
+        return voices[0];
+    }
   };
 
-  const handleStopRecording = () => {
-    setIsRecording(false);
-    setIsBroadcasting(false);
-    toast.info("Live broadcast stopped");
+  const speakText = (text: string, isPreview: boolean = false) => {
+    if (!text.trim()) {
+      toast.error("Please enter a message");
+      return;
+    }
+
+    speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = speechRate[0];
+    utterance.pitch = voiceType === "robotic" ? 0.5 : pitch[0];
+    utterance.volume = volume[0] / 100;
+    
+    const selectedVoice = getSelectedVoice();
+    if (selectedVoice) {
+      utterance.voice = selectedVoice;
+    }
+
+    if (isPreview) {
+      setIsPreviewing(true);
+      utterance.onend = () => setIsPreviewing(false);
+      utterance.onerror = () => setIsPreviewing(false);
+    }
+
+    speechSynthesis.speak(utterance);
   };
 
   const handlePreview = () => {
-    if (!ttsMessage.trim()) {
-      toast.error("Please enter a message to preview");
+    if (isPreviewing) {
+      speechSynthesis.cancel();
+      setIsPreviewing(false);
       return;
     }
-    
-    if ('speechSynthesis' in window) {
-      const utterance = new SpeechSynthesisUtterance(ttsMessage);
-      utterance.rate = speechRate[0];
-      speechSynthesis.speak(utterance);
-      toast.success("Playing preview locally...");
-    } else {
-      toast.error("Text-to-speech not supported in this browser");
-    }
+    speakText(ttsMessage, true);
+    toast.success("Playing preview locally...");
   };
 
-  const handleBroadcast = () => {
+  const handleBroadcast = async () => {
     if (!ttsMessage.trim()) {
       toast.error("Please enter a message to broadcast");
       return;
     }
+    
     setIsBroadcasting(true);
-    toast.success("Broadcasting message to drone speaker...");
-    setTimeout(() => {
-      setIsBroadcasting(false);
-      toast.info("Broadcast complete");
-    }, 3000);
+    toast.success("Broadcasting to drone speaker...");
+    
+    speakText(ttsMessage, false);
+    
+    await new Promise(resolve => setTimeout(resolve, 2000 + ttsMessage.length * 50));
+    
+    setIsBroadcasting(false);
+    toast.info("Broadcast complete");
   };
 
-  const handleQuickMessage = (message: string) => {
-    setTtsMessage(message);
+  const handleQuickMessage = async (message: string) => {
     setIsBroadcasting(true);
     toast.success(`Broadcasting: "${message}"`);
-    setTimeout(() => {
-      setIsBroadcasting(false);
-    }, 2000);
+    
+    speakText(message, false);
+    
+    await new Promise(resolve => setTimeout(resolve, 2000 + message.length * 50));
+    
+    setIsBroadcasting(false);
+  };
+
+  const handleStartRecording = async () => {
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+      setIsRecording(true);
+      toast.success("Live broadcast started - speak into microphone");
+    } catch (error) {
+      toast.error("Microphone access denied");
+    }
+  };
+
+  const handleStopRecording = () => {
+    setIsRecording(false);
+    toast.info("Live broadcast stopped");
   };
 
   const handleAddQuickMessage = () => {
@@ -115,8 +197,11 @@ export function SpeakerPanel() {
               <CardDescription>Raspberry Pi GPIO connected speaker</CardDescription>
             </div>
             <div className="flex items-center gap-2">
-              {isBroadcasting && (
-                <Badge className="bg-destructive animate-pulse">BROADCASTING</Badge>
+              {(isBroadcasting || isRecording) && (
+                <Badge className="bg-destructive animate-pulse">
+                  <Radio className="h-3 w-3 mr-1" />
+                  LIVE
+                </Badge>
               )}
               <Badge className="bg-emerald-500">ONLINE</Badge>
             </div>
@@ -144,12 +229,13 @@ export function SpeakerPanel() {
           <CardDescription>Real-time audio broadcast via microphone</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-center justify-center py-8">
+          <div className="flex items-center justify-center py-6">
             <Button
               size="lg"
               variant={isRecording ? "destructive" : "default"}
-              className="h-32 w-32 rounded-full text-lg"
+              className="h-28 w-28 rounded-full text-lg"
               onClick={isRecording ? handleStopRecording : handleStartRecording}
+              disabled={isBroadcasting}
             >
               {isRecording ? (
                 <Square className="h-8 w-8" />
@@ -165,7 +251,7 @@ export function SpeakerPanel() {
                 BROADCASTING LIVE - Click to stop
               </span>
             ) : (
-              "Click to start broadcasting"
+              "Click to start live broadcast"
             )}
           </p>
         </CardContent>
@@ -174,10 +260,10 @@ export function SpeakerPanel() {
       <Card>
         <CardHeader>
           <CardTitle>Text-to-Speech</CardTitle>
-          <CardDescription>Convert text message to audio announcement</CardDescription>
+          <CardDescription>Convert text to audio announcement</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Voice Type</Label>
               <Select value={voiceType} onValueChange={setVoiceType}>
@@ -185,6 +271,7 @@ export function SpeakerPanel() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value="default">Default</SelectItem>
                   <SelectItem value="female">Female</SelectItem>
                   <SelectItem value="male">Male</SelectItem>
                   <SelectItem value="robotic">Robotic</SelectItem>
@@ -194,7 +281,7 @@ export function SpeakerPanel() {
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label>Speed</Label>
-                <span className="text-xs text-muted-foreground">{speechRate[0]}x</span>
+                <span className="text-xs text-muted-foreground">{speechRate[0].toFixed(1)}x</span>
               </div>
               <Slider 
                 value={speechRate} 
@@ -204,6 +291,20 @@ export function SpeakerPanel() {
                 step={0.1}
               />
             </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Pitch</Label>
+                <span className="text-xs text-muted-foreground">{pitch[0].toFixed(1)}</span>
+              </div>
+              <Slider 
+                value={pitch} 
+                onValueChange={setPitch}
+                min={0.5}
+                max={2}
+                step={0.1}
+                disabled={voiceType === "robotic"}
+              />
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -211,7 +312,7 @@ export function SpeakerPanel() {
             <Textarea
               id="tts-message"
               placeholder="Enter message to broadcast..."
-              className="min-h-24 font-mono"
+              className="min-h-20 font-mono"
               value={ttsMessage}
               onChange={(e) => setTtsMessage(e.target.value)}
             />
@@ -221,18 +322,36 @@ export function SpeakerPanel() {
               variant="outline" 
               className="flex-1"
               onClick={handlePreview}
-              disabled={isBroadcasting}
+              disabled={isBroadcasting || !ttsMessage.trim()}
             >
-              <Play className="h-4 w-4 mr-2" />
-              Preview
+              {isPreviewing ? (
+                <>
+                  <Square className="h-4 w-4 mr-2" />
+                  Stop
+                </>
+              ) : (
+                <>
+                  <Play className="h-4 w-4 mr-2" />
+                  Preview
+                </>
+              )}
             </Button>
             <Button 
               className="flex-1"
               onClick={handleBroadcast}
-              disabled={isBroadcasting || !ttsMessage.trim()}
+              disabled={isBroadcasting || isRecording || !ttsMessage.trim()}
             >
-              <Volume2 className="h-4 w-4 mr-2" />
-              {isBroadcasting ? "Broadcasting..." : "Broadcast"}
+              {isBroadcasting ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Broadcasting...
+                </>
+              ) : (
+                <>
+                  <Volume2 className="h-4 w-4 mr-2" />
+                  Broadcast
+                </>
+              )}
             </Button>
           </div>
         </CardContent>
@@ -243,7 +362,7 @@ export function SpeakerPanel() {
           <div className="flex items-center justify-between">
             <div>
               <CardTitle>Quick Messages</CardTitle>
-              <CardDescription>Pre-configured emergency announcements</CardDescription>
+              <CardDescription>Pre-configured announcements</CardDescription>
             </div>
             <Button 
               variant="outline" 
@@ -263,6 +382,7 @@ export function SpeakerPanel() {
                 value={newQuickMessage}
                 onChange={(e) => setNewQuickMessage(e.target.value)}
                 className="flex-1"
+                onKeyDown={(e) => e.key === 'Enter' && handleAddQuickMessage()}
               />
               <Button size="sm" onClick={handleAddQuickMessage}>
                 <Check className="h-4 w-4" />
@@ -280,7 +400,7 @@ export function SpeakerPanel() {
                   variant="outline" 
                   className="flex-1 justify-start text-left h-auto py-3"
                   onClick={() => handleQuickMessage(message.text)}
-                  disabled={isBroadcasting}
+                  disabled={isBroadcasting || isRecording}
                 >
                   <MessageSquare className="h-4 w-4 mr-2 shrink-0" />
                   <span className="truncate">{message.text}</span>
@@ -295,44 +415,6 @@ export function SpeakerPanel() {
                 </Button>
               </div>
             ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Settings2 className="h-5 w-5" />
-            Audio Settings
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label>Audio Output Device</Label>
-            <Select defaultValue="gpio">
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="gpio">GPIO Speaker (Default)</SelectItem>
-                <SelectItem value="usb">USB Audio</SelectItem>
-                <SelectItem value="hdmi">HDMI Audio</SelectItem>
-                <SelectItem value="i2s">I2S DAC</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label>Audio Quality</Label>
-            <Select defaultValue="high">
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="low">Low (8kHz)</SelectItem>
-                <SelectItem value="medium">Medium (16kHz)</SelectItem>
-                <SelectItem value="high">High (44.1kHz)</SelectItem>
-              </SelectContent>
-            </Select>
           </div>
         </CardContent>
       </Card>

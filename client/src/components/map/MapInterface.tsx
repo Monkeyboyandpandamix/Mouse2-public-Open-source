@@ -1,12 +1,12 @@
-import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { useEffect, useState } from "react";
-import { Search, Map as MapIcon, Layers } from "lucide-react";
+import { Search, Map as MapIcon, Layers, ZoomIn, ZoomOut, RotateCcw, Crosshair } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { toast } from "sonner";
 
-// Fix for default marker icons in React Leaflet
 import icon from "leaflet/dist/images/marker-icon.png";
 import iconShadow from "leaflet/dist/images/marker-shadow.png";
 
@@ -19,7 +19,6 @@ let DefaultIcon = L.icon({
 
 L.Marker.prototype.options.icon = DefaultIcon;
 
-// Custom icons
 const DroneIcon = L.divIcon({
   className: "bg-transparent",
   html: `<div class="relative flex items-center justify-center w-8 h-8">
@@ -44,9 +43,58 @@ const WaypointIcon = (num: number) => L.divIcon({
   iconAnchor: [12, 12],
 });
 
+function ZoomControls() {
+  const map = useMap();
+  
+  const handleCenterOnDrone = () => {
+    map.setView([34.0522, -118.2437], 18);
+    toast.success("Centered on drone position");
+  };
+  
+  return (
+    <div className="absolute bottom-20 right-4 z-[400] flex flex-col gap-1 bg-card/90 backdrop-blur rounded-lg border border-border p-1 shadow-lg">
+      <Button 
+        variant="ghost" 
+        size="icon" 
+        className="h-8 w-8"
+        onClick={() => map.zoomIn()}
+        title="Zoom In"
+      >
+        <ZoomIn className="h-4 w-4" />
+      </Button>
+      <Button 
+        variant="ghost" 
+        size="icon" 
+        className="h-8 w-8"
+        onClick={() => map.zoomOut()}
+        title="Zoom Out"
+      >
+        <ZoomOut className="h-4 w-4" />
+      </Button>
+      <Button 
+        variant="ghost" 
+        size="icon" 
+        className="h-8 w-8"
+        onClick={handleCenterOnDrone}
+        title="Center on Drone"
+      >
+        <Crosshair className="h-4 w-4" />
+      </Button>
+      <Button 
+        variant="ghost" 
+        size="icon" 
+        className="h-8 w-8"
+        onClick={() => map.setView([34.0522, -118.2437], 16)}
+        title="Reset View"
+      >
+        <RotateCcw className="h-4 w-4" />
+      </Button>
+    </div>
+  );
+}
 
 export function MapInterface() {
-  const position: [number, number] = [34.0522, -118.2437]; // LA coordinates example
+  const position: [number, number] = [34.0522, -118.2437];
   const flightPath: [number, number][] = [
     [34.0522, -118.2437],
     [34.0525, -118.2440],
@@ -55,6 +103,8 @@ export function MapInterface() {
   ];
 
   const [mapType, setMapType] = useState<'dark' | 'satellite' | 'street'>('dark');
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
 
   const getTileUrl = () => {
     switch(mapType) {
@@ -68,6 +118,28 @@ export function MapInterface() {
     }
   };
 
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return;
+    
+    setIsSearching(true);
+    try {
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=1`
+      );
+      const results = await response.json();
+      
+      if (results.length > 0) {
+        toast.success(`Found: ${results[0].display_name.substring(0, 50)}...`);
+      } else {
+        toast.error("Location not found");
+      }
+    } catch (error) {
+      toast.error("Search failed");
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
   return (
     <div className="w-full h-full relative z-0 bg-background group">
       <MapContainer 
@@ -77,11 +149,12 @@ export function MapInterface() {
         className="w-full h-full"
         style={{ background: '#0f172a' }}
       >
-        {/* Map Tiles */}
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          attribution='&copy; OpenStreetMap'
           url={getTileUrl()}
         />
+        
+        <ZoomControls />
         
         {/* Drone Position */}
         <Marker position={position} icon={DroneIcon}>
@@ -119,12 +192,26 @@ export function MapInterface() {
 
       {/* Search Bar Overlay */}
       <div className="absolute top-4 left-4 z-[400] w-72">
-        <div className="relative">
-          <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input 
-            placeholder="Search address or coords..." 
-            className="pl-8 bg-card/80 backdrop-blur-md border-border text-foreground"
-          />
+        <div className="relative flex gap-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input 
+              placeholder="Search address or coords..." 
+              className="pl-8 bg-card/80 backdrop-blur-md border-border text-foreground"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            />
+          </div>
+          <Button 
+            variant="secondary" 
+            size="icon" 
+            className="bg-card/80 backdrop-blur-md"
+            onClick={handleSearch}
+            disabled={isSearching}
+          >
+            <Search className="h-4 w-4" />
+          </Button>
         </div>
       </div>
 
@@ -156,6 +243,11 @@ export function MapInterface() {
              <MapIcon className="w-3 h-3 mr-2" /> Street
            </Button>
         </div>
+      </div>
+
+      {/* Zoom Level Indicator */}
+      <div className="absolute bottom-4 left-4 z-[400] bg-card/80 backdrop-blur px-3 py-1 rounded text-xs font-mono text-muted-foreground">
+        Lat: {position[0].toFixed(4)} | Lon: {position[1].toFixed(4)}
       </div>
     </div>
   );
