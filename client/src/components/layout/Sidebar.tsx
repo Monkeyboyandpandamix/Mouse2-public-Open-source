@@ -2,11 +2,10 @@ import {
   Map, 
   Navigation, 
   Target, 
-  Box, 
+  Volume2, 
   Video, 
   Settings, 
-  FileText,
-  AlertCircle
+  FileText
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -21,9 +20,10 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
     { id: "map", icon: Map, label: "Map View" },
     { id: "mission", icon: Navigation, label: "Mission Plan" },
     { id: "tracking", icon: Target, label: "Object Track" },
-    { id: "payload", icon: Box, label: "Payload" },
+    { id: "payload", icon: Volume2, label: "Speaker" },
     { id: "feeds", icon: Video, label: "Camera Feeds" },
     { id: "logs", icon: FileText, label: "Flight Logs" },
+    { id: "settings", icon: Settings, label: "Settings" },
   ];
 
   return (
@@ -42,16 +42,11 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
             )}
             onClick={() => setActiveTab(item.id)}
             title={item.label}
+            data-testid={`sidebar-${item.id}`}
           >
             <item.icon className="h-6 w-6" />
           </Button>
         ))}
-      </div>
-      
-      <div className="mt-auto flex flex-col gap-2 w-full px-2">
-        <Button variant="ghost" size="icon" className="w-12 h-12 text-destructive hover:text-destructive hover:bg-destructive/10">
-          <AlertCircle className="h-6 w-6" />
-        </Button>
       </div>
     </div>
   );

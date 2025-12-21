@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
-import { Maximize2, Minimize2, Eye, EyeOff } from "lucide-react";
+import { Maximize2, Minimize2, Eye, EyeOff, Flame } from "lucide-react";
 import aerialImg from "@assets/generated_images/aerial_drone_view_of_a_suburban_street_with_overlaid_bounding_boxes.png";
 import fpvImg from "@assets/generated_images/fpv_drone_view_forward_facing_with_horizon.png";
 
 export function VideoFeed() {
   const [isMain, setIsMain] = useState(false);
   const [visible, setVisible] = useState(true);
-  const [activeCam, setActiveCam] = useState<'main' | 'fpv'>('main');
+  const [activeCam, setActiveCam] = useState<'gimbal' | 'thermal' | 'fpv'>('gimbal');
+  const [thermalMode, setThermalMode] = useState(false);
 
   if (!visible) {
     return (
@@ -30,11 +31,25 @@ export function VideoFeed() {
       <div className="absolute top-0 left-0 right-0 h-8 bg-black/60 backdrop-blur flex items-center justify-between px-2 z-10">
         <div className="text-xs font-mono text-primary flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-          LIVE FEED: {activeCam === 'main' ? 'GIMBAL CAM' : 'FPV CAM'}
+          LIVE: {activeCam === 'gimbal' ? (thermalMode ? 'THERMAL CAM' : 'GIMBAL CAM') : activeCam === 'thermal' ? 'THERMAL CAM' : 'FPV CAM'}
         </div>
         <div className="flex gap-1">
-          <button onClick={() => setActiveCam(activeCam === 'main' ? 'fpv' : 'main')} className="p-1 hover:text-white text-muted-foreground text-[10px] uppercase border border-white/20 rounded px-2">
-            Switch
+          <button 
+            onClick={() => {
+              if (activeCam === 'gimbal') setActiveCam('thermal');
+              else if (activeCam === 'thermal') setActiveCam('fpv');
+              else setActiveCam('gimbal');
+            }} 
+            className="p-1 hover:text-white text-muted-foreground text-[10px] uppercase border border-white/20 rounded px-2"
+          >
+            CAM
+          </button>
+          <button 
+            onClick={() => setThermalMode(!thermalMode)} 
+            className={cn("p-1 hover:text-white text-muted-foreground", thermalMode && "text-amber-500")}
+            title="Toggle Thermal"
+          >
+            <Flame className="h-3 w-3" />
           </button>
           <button onClick={() => setIsMain(!isMain)} className="p-1 hover:text-white text-muted-foreground">
             {isMain ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
@@ -48,9 +63,12 @@ export function VideoFeed() {
       {/* Content */}
       <div className="relative w-full h-full bg-slate-900">
          <img 
-            src={activeCam === 'main' ? aerialImg : fpvImg} 
+            src={activeCam === 'fpv' ? fpvImg : aerialImg} 
             alt="Drone Feed" 
-            className="w-full h-full object-cover opacity-90"
+            className={cn(
+              "w-full h-full object-cover",
+              thermalMode ? "opacity-90 hue-rotate-[280deg] saturate-[200%]" : "opacity-90"
+            )}
           />
          
          {/* HUD Overlay */}
@@ -65,9 +83,16 @@ export function VideoFeed() {
                <div className="absolute top-1/2 right-4 w-12 h-px bg-white/50" />
                
                {/* Object Detection Box Mockup */}
-               {activeCam === 'main' && (
+               {activeCam !== 'fpv' && !thermalMode && (
                  <div className="absolute top-1/3 left-1/4 w-24 h-24 border-2 border-amber-500 rounded-sm">
                     <div className="absolute -top-4 left-0 bg-amber-500 text-black text-[10px] px-1 font-bold">VEHICLE 98%</div>
+                 </div>
+               )}
+               
+               {/* Thermal Heat Signature Overlay */}
+               {thermalMode && (
+                 <div className="absolute top-1/4 right-1/4 w-16 h-20 border-2 border-amber-500 rounded-sm animate-pulse">
+                    <div className="absolute -top-4 left-0 bg-amber-500 text-black text-[10px] px-1 font-bold">HEAT: 36.5°C</div>
                  </div>
                )}
             </div>
