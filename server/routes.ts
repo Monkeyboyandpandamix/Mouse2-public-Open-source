@@ -13,6 +13,7 @@ import {
 } from "@shared/schema";
 import { ZodError } from "zod";
 import { syncDataToSheets, getOrCreateBackupSpreadsheet, getSpreadsheetUrl } from "./googleSheets";
+import { uploadFileToDrive, listDriveFiles, checkDriveConnection, deleteFileFromDrive } from "./googleDrive";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -373,6 +374,60 @@ export async function registerRoutes(
         connected: false,
         error: error.message,
       });
+    }
+  });
+
+  // Google Drive File Storage API
+  app.get("/api/drive/status", async (req, res) => {
+    try {
+      const status = await checkDriveConnection();
+      res.json(status);
+    } catch (error: any) {
+      res.json({ connected: false, error: error.message });
+    }
+  });
+
+  app.get("/api/drive/files", async (req, res) => {
+    try {
+      const { sessionId, sessionName } = req.query;
+      const result = await listDriveFiles(
+        sessionId as string | undefined,
+        sessionName as string | undefined
+      );
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post("/api/drive/upload", async (req, res) => {
+    try {
+      const { fileName, mimeType, sessionId, sessionName, data } = req.body;
+      
+      if (!fileName || !data) {
+        return res.status(400).json({ success: false, error: "Missing fileName or data" });
+      }
+
+      const buffer = Buffer.from(data, 'base64');
+      const result = await uploadFileToDrive(
+        buffer,
+        fileName,
+        mimeType || 'application/octet-stream',
+        sessionId,
+        sessionName
+      );
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.delete("/api/drive/files/:fileId", async (req, res) => {
+    try {
+      const result = await deleteFileFromDrive(req.params.fileId);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error.message });
     }
   });
 

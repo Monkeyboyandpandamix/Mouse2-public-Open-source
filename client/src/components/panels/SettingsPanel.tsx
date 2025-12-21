@@ -11,7 +11,9 @@ import { Progress } from "@/components/ui/progress";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useState, useEffect, useRef } from "react";
-import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cable, Upload, AlertTriangle, CheckCircle, RefreshCw, Cloud, Database, ExternalLink, Cpu, Radio } from "lucide-react";
+import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cable, Upload, AlertTriangle, CheckCircle, RefreshCw, Cloud, Database, ExternalLink, Cpu, Radio, Terminal, HardDrive } from "lucide-react";
+import { operationsLog, LogEntry, LogType } from "@/lib/operationsLog";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 export function SettingsPanel() {
   const queryClient = useQueryClient();
@@ -101,6 +103,20 @@ export function SettingsPanel() {
     syncing: boolean;
   }>({ connected: false, syncing: false });
 
+  // Operations Console state
+  const [operationsActive, setOperationsActive] = useState(false);
+  const [logEntries, setLogEntries] = useState<LogEntry[]>([]);
+  const [logFilter, setLogFilter] = useState<LogType | 'all'>('all');
+  const logScrollRef = useRef<HTMLDivElement>(null);
+
+  // Google Drive status
+  const [driveStatus, setDriveStatus] = useState<{
+    connected: boolean;
+    email?: string;
+    error?: string;
+  }>({ connected: false });
+  const [driveFiles, setDriveFiles] = useState<any[]>([]);
+
   const checkBackupStatus = async () => {
     try {
       const res = await fetch('/api/backup/google-sheets/status');
@@ -136,7 +152,18 @@ export function SettingsPanel() {
 
   useEffect(() => {
     checkBackupStatus();
+    checkDriveStatus();
   }, []);
+
+  const checkDriveStatus = async () => {
+    try {
+      const res = await fetch('/api/drive/status');
+      const data = await res.json();
+      setDriveStatus(data);
+    } catch (error) {
+      console.error('Failed to check Drive status:', error);
+    }
+  };
 
   const HARDWARE_PRESETS = {
     current: {
@@ -353,8 +380,18 @@ export function SettingsPanel() {
           )}
         </div>
 
-        <Tabs defaultValue="connections" className="w-full">
-          <TabsList className="grid w-full grid-cols-7">
+        <Tabs defaultValue="connections" className="w-full" onValueChange={(value) => {
+          if (value === 'operations') {
+            setOperationsActive(true);
+            operationsLog.activate();
+            const unsubscribe = operationsLog.subscribe(setLogEntries);
+            return () => unsubscribe();
+          } else {
+            setOperationsActive(false);
+            operationsLog.deactivate();
+          }
+        }}>
+          <TabsList className="grid w-full grid-cols-9">
             <TabsTrigger value="hardware">Hardware</TabsTrigger>
             <TabsTrigger value="connections">Connections</TabsTrigger>
             <TabsTrigger value="sensors">Sensors</TabsTrigger>
@@ -362,6 +399,8 @@ export function SettingsPanel() {
             <TabsTrigger value="camera">Camera</TabsTrigger>
             <TabsTrigger value="network">Network</TabsTrigger>
             <TabsTrigger value="backup">Backup</TabsTrigger>
+            <TabsTrigger value="storage">Storage</TabsTrigger>
+            <TabsTrigger value="operations">Console</TabsTrigger>
           </TabsList>
 
           <TabsContent value="hardware" className="space-y-4 mt-4">
@@ -609,6 +648,173 @@ export function SettingsPanel() {
                     </div>
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="storage" className="space-y-4 mt-4">
+            <Card className="border-2 border-primary/50">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <HardDrive className="h-5 w-5" />
+                      Google Drive Storage
+                    </CardTitle>
+                    <CardDescription>Store flight footage and recordings on Google Drive</CardDescription>
+                  </div>
+                  <Badge className={driveStatus.connected ? "bg-emerald-500" : "bg-amber-500"}>
+                    {driveStatus.connected ? "Connected" : "Not Connected"}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {driveStatus.connected && driveStatus.email && (
+                  <div className="p-3 bg-muted/30 rounded-lg">
+                    <p className="text-sm text-muted-foreground">Signed in as:</p>
+                    <p className="font-medium">{driveStatus.email}</p>
+                  </div>
+                )}
+
+                <div className="p-4 bg-muted/30 rounded-lg space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium">MOUSE_GCS_Footage</p>
+                      <p className="text-sm text-muted-foreground">
+                        Flight recordings, thermal images, session videos
+                      </p>
+                    </div>
+                    <Button 
+                      variant="outline"
+                      onClick={async () => {
+                        const res = await fetch('/api/drive/files');
+                        const data = await res.json();
+                        if (data.success) {
+                          setDriveFiles(data.files || []);
+                        }
+                      }}
+                    >
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Refresh
+                    </Button>
+                  </div>
+                </div>
+
+                {driveFiles.length > 0 && (
+                  <div className="space-y-2">
+                    <Label>Recent Files ({driveFiles.length}):</Label>
+                    <div className="max-h-48 overflow-y-auto space-y-2">
+                      {driveFiles.slice(0, 10).map((file: any) => (
+                        <div key={file.id} className="flex items-center justify-between p-2 bg-muted/20 rounded text-sm">
+                          <span className="truncate flex-1">{file.name}</span>
+                          <a 
+                            href={file.webViewLink} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-primary hover:underline flex items-center gap-1 ml-2"
+                          >
+                            Open <ExternalLink className="h-3 w-3" />
+                          </a>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <Label>Storage includes:</Label>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <CheckCircle className="h-4 w-4 text-emerald-500" />
+                      Flight Recordings
+                    </div>
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <CheckCircle className="h-4 w-4 text-emerald-500" />
+                      Thermal Captures
+                    </div>
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <CheckCircle className="h-4 w-4 text-emerald-500" />
+                      Session Videos
+                    </div>
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <CheckCircle className="h-4 w-4 text-emerald-500" />
+                      Log Bundles
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="operations" className="space-y-4 mt-4">
+            <Card className="border-2 border-primary/50">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Terminal className="h-5 w-5" />
+                      Operations Console
+                    </CardTitle>
+                    <CardDescription>Real-time system logs and operations</CardDescription>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge className={operationsActive ? "bg-emerald-500 animate-pulse" : "bg-gray-500"}>
+                      {operationsActive ? "Active" : "Inactive"}
+                    </Badge>
+                    <Button variant="outline" size="sm" onClick={() => operationsLog.clear()}>
+                      Clear
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex gap-2">
+                  {(['all', 'websocket', 'api', 'system', 'error'] as const).map((type) => (
+                    <Button
+                      key={type}
+                      variant={logFilter === type ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setLogFilter(type)}
+                    >
+                      {type.charAt(0).toUpperCase() + type.slice(1)}
+                    </Button>
+                  ))}
+                </div>
+
+                <ScrollArea className="h-80 w-full rounded border bg-black/90 p-3 font-mono text-xs">
+                  <div ref={logScrollRef} className="space-y-1">
+                    {logEntries
+                      .filter(e => logFilter === 'all' || e.type === logFilter)
+                      .slice(-200)
+                      .map((entry) => (
+                        <div 
+                          key={entry.id} 
+                          className={`flex gap-2 ${
+                            entry.type === 'error' ? 'text-red-400' :
+                            entry.type === 'websocket' ? 'text-cyan-400' :
+                            entry.type === 'api' ? 'text-amber-400' :
+                            'text-green-400'
+                          }`}
+                        >
+                          <span className="text-gray-500 shrink-0">
+                            {entry.timestamp.toLocaleTimeString()}
+                          </span>
+                          <span className="text-gray-600 shrink-0">[{entry.type.toUpperCase()}]</span>
+                          <span className="text-gray-400 shrink-0">{entry.category}:</span>
+                          <span className="break-all">{entry.message}</span>
+                        </div>
+                      ))}
+                    {logEntries.length === 0 && (
+                      <div className="text-gray-500 text-center py-8">
+                        No log entries yet. Console will capture events while this tab is open.
+                      </div>
+                    )}
+                  </div>
+                </ScrollArea>
+
+                <p className="text-xs text-muted-foreground">
+                  Console only captures events while this tab is open to conserve memory.
+                </p>
               </CardContent>
             </Card>
           </TabsContent>
