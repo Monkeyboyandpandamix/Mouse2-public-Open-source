@@ -53,11 +53,11 @@ export function ControlDeck() {
   };
 
   return (
-    <div className="h-40 border-t border-border bg-card/80 backdrop-blur-md p-4 flex gap-4 shrink-0 z-50">
+    <div className="h-auto min-h-[120px] sm:min-h-[140px] lg:h-40 border-t border-border bg-card/80 backdrop-blur-md p-2 sm:p-4 flex flex-wrap sm:flex-nowrap gap-2 sm:gap-4 shrink-0 z-50 overflow-x-auto">
       
       {/* Arming Panel */}
-      <div className="flex flex-col gap-2 w-36 shrink-0">
-        <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest">Master</span>
+      <div className="flex flex-col gap-1 sm:gap-2 w-24 sm:w-36 shrink-0">
+        <span className="text-[8px] sm:text-[10px] font-mono text-muted-foreground uppercase tracking-widest">Master</span>
         <Button 
           variant="outline" 
           className={cn(
@@ -75,9 +75,9 @@ export function ControlDeck() {
       </div>
 
       {/* Flight Modes */}
-      <div className="flex flex-col gap-2 flex-1 min-w-0">
-        <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest">Flight Controls</span>
-        <div className="grid grid-cols-4 gap-3 h-full">
+      <div className="flex flex-col gap-1 sm:gap-2 flex-1 min-w-0">
+        <span className="text-[8px] sm:text-[10px] font-mono text-muted-foreground uppercase tracking-widest">Flight Controls</span>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 h-full">
           <Button 
             variant="secondary" 
             className="h-full flex flex-col gap-1 hover:bg-primary/20 hover:text-primary transition-colors p-2"
@@ -125,8 +125,8 @@ export function ControlDeck() {
       </div>
 
       {/* Payload Control */}
-      <div className="flex flex-col gap-2 w-36 shrink-0">
-        <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest">Payload</span>
+      <div className="flex flex-col gap-1 sm:gap-2 w-24 sm:w-36 shrink-0">
+        <span className="text-[8px] sm:text-[10px] font-mono text-muted-foreground uppercase tracking-widest">Payload</span>
         <Button 
           variant="outline"
           className={cn(

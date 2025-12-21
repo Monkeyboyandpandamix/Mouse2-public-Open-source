@@ -283,7 +283,7 @@ export function VideoFeed() {
     return (
       <button 
         onClick={() => setVisible(true)}
-        className="absolute bottom-52 left-20 z-[100] bg-primary text-primary-foreground p-2 rounded shadow-lg hover:bg-primary/90"
+        className="absolute bottom-32 sm:bottom-52 left-2 sm:left-20 z-[100] bg-primary text-primary-foreground p-2 rounded shadow-lg hover:bg-primary/90"
       >
         <Eye className="h-4 w-4" />
       </button>
@@ -294,7 +294,9 @@ export function VideoFeed() {
     <div 
       className={cn(
         "absolute transition-all duration-300 z-[100] bg-black border-2 border-primary/50 shadow-2xl overflow-hidden group",
-        isMain ? "inset-4 bottom-52 top-16 right-84" : "bottom-52 left-20 w-80 h-48 rounded-lg"
+        isMain 
+          ? "inset-2 sm:inset-4 bottom-32 sm:bottom-52 top-16 right-10 sm:right-84" 
+          : "bottom-32 sm:bottom-52 left-2 sm:left-20 w-48 sm:w-80 h-32 sm:h-48 rounded-lg"
       )}
       onMouseEnter={() => setShowControls(true)}
       onMouseLeave={() => setShowControls(false)}

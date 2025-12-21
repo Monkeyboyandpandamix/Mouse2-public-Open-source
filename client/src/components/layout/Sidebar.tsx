@@ -37,15 +37,15 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
   ];
 
   return (
-    <div className="w-16 flex flex-col items-center py-4 border-r border-border bg-card/50 backdrop-blur-sm z-40">
-      <div className="flex-1 flex flex-col gap-2 w-full px-2">
+    <div className="w-12 sm:w-16 flex flex-col items-center py-2 sm:py-4 border-r border-border bg-card/50 backdrop-blur-sm z-40 overflow-y-auto">
+      <div className="flex-1 flex flex-col gap-1 sm:gap-2 w-full px-1 sm:px-2">
         {menuItems.map((item) => (
           <Button
             key={item.id}
             variant={activeTab === item.id ? "default" : "ghost"}
             size="icon"
             className={cn(
-              "w-12 h-12 rounded-lg transition-all duration-200",
+              "w-10 h-10 sm:w-12 sm:h-12 rounded-lg transition-all duration-200 shrink-0",
               activeTab === item.id 
                 ? "bg-primary text-primary-foreground shadow-[0_0_15px_rgba(6,182,212,0.5)]" 
                 : "text-muted-foreground hover:text-foreground hover:bg-accent"
@@ -54,7 +54,7 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
             title={item.label}
             data-testid={`sidebar-${item.id}`}
           >
-            <item.icon className="h-6 w-6" />
+            <item.icon className="h-5 w-5 sm:h-6 sm:w-6" />
           </Button>
         ))}
       </div>

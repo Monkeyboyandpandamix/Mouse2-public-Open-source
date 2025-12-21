@@ -110,15 +110,17 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
   }, []);
 
   return (
-    <header className="h-14 border-b border-border bg-card/80 backdrop-blur-md px-4 flex items-center justify-between shrink-0 z-50 relative">
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2">
-          <Gamepad2 className="h-6 w-6 text-primary animate-pulse" />
-          <h1 className="text-xl font-bold tracking-wider text-foreground font-sans">
-            M.O.U.S.E. <span className="text-muted-foreground text-sm font-normal">GCS v1.0</span>
+    <header className="h-14 border-b border-border bg-card/80 backdrop-blur-md px-2 sm:px-4 flex items-center justify-between shrink-0 z-50 relative">
+      <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+        <div className="flex items-center gap-2 shrink-0">
+          <Gamepad2 className="h-5 w-5 sm:h-6 sm:w-6 text-primary animate-pulse" />
+          <h1 className="text-base sm:text-xl font-bold tracking-wider text-foreground font-sans whitespace-nowrap">
+            <span className="hidden sm:inline">M.O.U.S.E.</span>
+            <span className="sm:hidden">MOUSE</span>
+            <span className="text-muted-foreground text-xs sm:text-sm font-normal hidden md:inline"> GCS v1.0</span>
           </h1>
         </div>
-        <div className="h-6 w-px bg-border mx-2" />
+        <div className="h-6 w-px bg-border mx-1 sm:mx-2 hidden sm:block" />
         
         {/* System Ready Status with Popover for manual override */}
         <Popover>
