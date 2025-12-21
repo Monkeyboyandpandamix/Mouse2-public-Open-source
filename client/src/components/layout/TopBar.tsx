@@ -252,8 +252,8 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           </PopoverContent>
         </Popover>
         
-        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 px-2 sm:px-3 font-mono text-[10px] sm:text-xs hidden sm:flex">
-          <span className="hidden md:inline">MODE: </span>STAB
+        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 px-2 font-mono text-[10px] sm:text-xs">
+          <span className="hidden sm:inline">MODE:</span>STAB
         </Badge>
 
         <Button 
@@ -273,28 +273,28 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
         </Button>
       </div>
 
-      <div className="flex items-center gap-2 sm:gap-4 lg:gap-6">
-        {/* Telemetry Status Bar */}
-        <div className="flex items-center gap-2 sm:gap-4 text-xs sm:text-sm font-mono text-muted-foreground">
-          <div className="flex items-center gap-1 sm:gap-2" title="GPS Satellites">
-            <Satellite className="h-3 w-3 sm:h-4 sm:w-4 text-primary" />
-            <span className="text-foreground hidden sm:inline">{diagnostics.gpsCount}</span>
+      <div className="flex items-center gap-2 sm:gap-4 lg:gap-6 shrink-0">
+        {/* Telemetry Status Bar - Always visible with compact display on small screens */}
+        <div className="flex items-center gap-1 sm:gap-3 text-[10px] sm:text-xs font-mono text-muted-foreground flex-wrap justify-end">
+          <div className="flex items-center gap-1" title="GPS Satellites">
+            <Satellite className="h-3 w-3 text-primary" />
+            <span className="text-foreground">{diagnostics.gpsCount}</span>
           </div>
-          <div className="flex items-center gap-1 sm:gap-2 hidden md:flex" title="RC Signal Strength">
-            <Signal className="h-3 w-3 sm:h-4 sm:w-4 text-emerald-500" />
-            <span className="text-foreground">{diagnostics.rcSignal}%</span>
+          <div className="flex items-center gap-1" title="RC Signal Strength">
+            <Signal className="h-3 w-3 text-emerald-500" />
+            <span className="text-foreground">{diagnostics.rcSignal}</span>
           </div>
-          <div className="flex items-center gap-1 sm:gap-2 hidden lg:flex" title="Telemetry Link Quality">
-            <Wifi className="h-3 w-3 sm:h-4 sm:w-4 text-emerald-500" />
-            <span className="text-foreground">{diagnostics.telemetryLink}%</span>
+          <div className="flex items-center gap-1" title="Telemetry Link Quality">
+            <Wifi className="h-3 w-3 text-emerald-500" />
+            <span className="text-foreground">{diagnostics.telemetryLink}</span>
           </div>
-          <div className="flex items-center gap-1 sm:gap-2" title="Drone Battery">
-            <Battery className="h-3 w-3 sm:h-4 sm:w-4 text-emerald-500" />
+          <div className="flex items-center gap-1" title="Drone Battery">
+            <Battery className="h-3 w-3 text-emerald-500" />
             <span className="text-foreground">{diagnostics.batteryPercent}%</span>
           </div>
         </div>
 
-        <div className="h-6 w-px bg-border hidden sm:block" />
+        <div className="h-6 w-px bg-border" />
 
         {/* Comms Panel */}
         <Popover>
@@ -331,21 +331,20 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           </PopoverContent>
         </Popover>
 
-        <div className="font-mono text-sm sm:text-lg text-foreground tabular-nums hidden sm:block">
+        <div className="font-mono text-xs sm:text-lg text-foreground tabular-nums">
           {time.toLocaleTimeString([], { hour12: false })}
         </div>
         
         {session.isLoggedIn && (
           <div className="flex items-center gap-1 sm:gap-2 border-l border-border pl-2 sm:pl-4">
-            <div className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm">
+            <div className="flex items-center gap-1 sm:gap-2 text-[10px] sm:text-sm">
               <User className="h-3 w-3 sm:h-4 sm:w-4 text-primary" />
-              <span className="font-medium hidden md:inline">{session.user?.username}</span>
-              <Badge variant="outline" className="text-[8px] sm:text-[10px] capitalize hidden lg:flex">{session.user?.role}</Badge>
+              <span className="font-medium">{session.user?.username}</span>
             </div>
             <Button 
               variant="ghost" 
               size="icon"
-              className="h-8 w-8 sm:h-9 sm:w-9"
+              className="h-7 w-7 sm:h-9 sm:w-9"
               onClick={handleLogout}
               title="Log out"
               data-testid="button-logout-topbar"

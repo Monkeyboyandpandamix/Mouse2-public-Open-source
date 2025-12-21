@@ -68,17 +68,6 @@ export function TelemetryPanel() {
 
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  useEffect(() => {
-    const handleResize = () => {
-      if (window.innerWidth < 1024) {
-        setIsCollapsed(true);
-      }
-    };
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
   if (isCollapsed) {
     return (
       <div className="w-10 h-full border-l border-border bg-card/80 backdrop-blur-md flex flex-col items-center py-4">
@@ -97,15 +86,15 @@ export function TelemetryPanel() {
   }
 
   return (
-    <Card className="w-64 lg:w-80 h-full border-l border-border rounded-none bg-card/80 backdrop-blur-md overflow-hidden flex flex-col">
+    <Card className="w-56 sm:w-64 lg:w-80 h-full border-l border-border rounded-none bg-card/80 backdrop-blur-md overflow-hidden flex flex-col">
       <CardHeader className="pb-2 shrink-0">
-        <CardTitle className="text-sm font-mono text-muted-foreground uppercase tracking-widest flex items-center justify-between gap-2">
+        <CardTitle className="text-xs sm:text-sm font-mono text-muted-foreground uppercase tracking-widest flex items-center justify-between gap-2">
           <span className="flex items-center gap-2">
             <Gauge className="h-4 w-4" /> Telemetry
           </span>
           <button 
             onClick={() => setIsCollapsed(true)}
-            className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground lg:hidden"
+            className="p-1 rounded hover:bg-accent text-muted-foreground hover:text-foreground"
             title="Collapse"
           >
             <ArrowUp className="h-3 w-3 rotate-90" />
