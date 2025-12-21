@@ -11,7 +11,9 @@ import {
   MessageSquare,
   Mic,
   CheckCircle,
-  XCircle
+  XCircle,
+  LogOut,
+  User
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import {
@@ -22,6 +24,12 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { toast } from "sonner";
+
+interface UserSession {
+  user: { id: string; username: string; role: string } | null;
+  isLoggedIn: boolean;
+}
 
 interface TopBarProps {
   onSettingsClick?: () => void;
@@ -43,6 +51,26 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
   const [time, setTime] = useState(new Date());
   const [manualOverride, setManualOverride] = useState(false);
   const [manualReady, setManualReady] = useState(true);
+  const [session, setSession] = useState<UserSession>(() => {
+    const saved = localStorage.getItem('mouse_gcs_session');
+    return saved ? JSON.parse(saved) : { user: null, isLoggedIn: false };
+  });
+  
+  // Listen for session changes
+  useEffect(() => {
+    const handleSessionChange = (e: CustomEvent<UserSession>) => {
+      setSession(e.detail);
+    };
+    window.addEventListener('session-change' as any, handleSessionChange);
+    return () => window.removeEventListener('session-change' as any, handleSessionChange);
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem('mouse_gcs_session');
+    setSession({ user: null, isLoggedIn: false });
+    window.dispatchEvent(new CustomEvent('session-change', { detail: { user: null, isLoggedIn: false } }));
+    toast.info("Logged out successfully");
+  };
   
   // Simulated diagnostics - in real implementation, would come from WebSocket
   const [diagnostics, setDiagnostics] = useState<SystemDiagnostics>({
@@ -287,6 +315,25 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           {time.toLocaleTimeString([], { hour12: false })}
         </div>
         
+        {session.isLoggedIn && (
+          <div className="flex items-center gap-2 border-l border-border pl-4">
+            <div className="flex items-center gap-2 text-sm">
+              <User className="h-4 w-4 text-primary" />
+              <span className="font-medium">{session.user?.username}</span>
+              <Badge variant="outline" className="text-[10px] capitalize">{session.user?.role}</Badge>
+            </div>
+            <Button 
+              variant="ghost" 
+              size="icon"
+              onClick={handleLogout}
+              title="Log out"
+              data-testid="button-logout-topbar"
+            >
+              <LogOut className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
+
         <Button 
           variant="ghost" 
           size="icon"

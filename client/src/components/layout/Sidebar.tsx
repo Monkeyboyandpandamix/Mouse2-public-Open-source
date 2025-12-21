@@ -5,7 +5,9 @@ import {
   Volume2, 
   Video, 
   Settings, 
-  FileText
+  FileText,
+  Code,
+  Users
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -23,6 +25,8 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
     { id: "payload", icon: Volume2, label: "Speaker" },
     { id: "feeds", icon: Video, label: "Camera Feeds" },
     { id: "logs", icon: FileText, label: "Flight Logs" },
+    { id: "scripts", icon: Code, label: "Automation" },
+    { id: "users", icon: Users, label: "User Access" },
     { id: "settings", icon: Settings, label: "Settings" },
   ];
 

@@ -129,6 +129,17 @@ export function FlightLogsPanel() {
   const [activeTab, setActiveTab] = useState("sessions");
   const [is3DGenerating, setIs3DGenerating] = useState(false);
   const [show3DDialog, setShow3DDialog] = useState(false);
+  const [flightSessions, setFlightSessions] = useState<FlightSession[]>(mockFlightSessions);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+
+  const handleDeleteSession = (id: number) => {
+    setFlightSessions(prev => prev.filter(s => s.id !== id));
+    if (selectedSession?.id === id) {
+      setSelectedSession(null);
+    }
+    setDeleteConfirmId(null);
+    toast.success("Flight record deleted successfully");
+  };
 
   const filteredLogs = mockSystemLogs.filter(log => {
     const matchesFilter = logFilter === "all" || log.level === logFilter;
@@ -214,7 +225,7 @@ export function FlightLogsPanel() {
           <TabsContent value="sessions" className="flex-1 mt-0 overflow-hidden">
             <ScrollArea className="h-full">
               <div className="p-2 space-y-2">
-                {mockFlightSessions.map((session) => (
+                {flightSessions.map((session) => (
                   <Card
                     key={session.id}
                     className={`cursor-pointer transition-colors ${
@@ -223,6 +234,7 @@ export function FlightLogsPanel() {
                         : "hover:bg-muted/50"
                     }`}
                     onClick={() => setSelectedSession(session)}
+                    data-testid={`card-flight-${session.id}`}
                   >
                     <CardContent className="p-3">
                       <div className="flex items-start justify-between">
@@ -235,9 +247,43 @@ export function FlightLogsPanel() {
                             {format(new Date(session.startTime), "MMM dd, yyyy HH:mm")}
                           </div>
                         </div>
-                        <Badge variant={session.status === 'completed' ? 'default' : 'outline'} className="text-[10px]">
-                          {session.status}
-                        </Badge>
+                        <div className="flex items-center gap-1">
+                          <Badge variant={session.status === 'completed' ? 'default' : 'outline'} className="text-[10px]">
+                            {session.status}
+                          </Badge>
+                          {deleteConfirmId === session.id ? (
+                            <div className="flex gap-1">
+                              <Button 
+                                size="icon" 
+                                variant="destructive" 
+                                className="h-5 w-5"
+                                onClick={(e) => { e.stopPropagation(); handleDeleteSession(session.id); }}
+                                data-testid={`button-confirm-delete-${session.id}`}
+                              >
+                                <CheckCircle className="h-3 w-3" />
+                              </Button>
+                              <Button 
+                                size="icon" 
+                                variant="outline" 
+                                className="h-5 w-5"
+                                onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(null); }}
+                                data-testid={`button-cancel-delete-${session.id}`}
+                              >
+                                <XCircle className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <Button 
+                              size="icon" 
+                              variant="ghost" 
+                              className="h-5 w-5 text-muted-foreground hover:text-red-500"
+                              onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(session.id); }}
+                              data-testid={`button-delete-flight-${session.id}`}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          )}
+                        </div>
                       </div>
                       <div className="grid grid-cols-3 gap-2 mt-2 text-[10px]">
                         <div className="text-center p-1 bg-muted/50 rounded">

@@ -11,7 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useState, useEffect, useRef } from "react";
-import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cable, Upload, AlertTriangle, CheckCircle, RefreshCw, Cloud, Database, ExternalLink, Cpu, Radio, Terminal, HardDrive, MapPin, Home } from "lucide-react";
+import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cable, Upload, AlertTriangle, CheckCircle, RefreshCw, Cloud, Database, ExternalLink, Cpu, Radio, Terminal, HardDrive, MapPin, Home, Shield } from "lucide-react";
 import { operationsLog, LogEntry, LogType } from "@/lib/operationsLog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -455,12 +455,13 @@ export function SettingsPanel() {
             operationsLog.deactivate();
           }
         }}>
-          <TabsList className="grid w-full grid-cols-9">
+          <TabsList className="grid w-full grid-cols-10">
             <TabsTrigger value="hardware">Hardware</TabsTrigger>
             <TabsTrigger value="connections">Connections</TabsTrigger>
             <TabsTrigger value="sensors">Sensors</TabsTrigger>
             <TabsTrigger value="input">Input</TabsTrigger>
             <TabsTrigger value="camera">Camera</TabsTrigger>
+            <TabsTrigger value="failsafe">Failsafe</TabsTrigger>
             <TabsTrigger value="network">Network</TabsTrigger>
             <TabsTrigger value="backup">Backup</TabsTrigger>
             <TabsTrigger value="storage">Storage</TabsTrigger>
@@ -1996,6 +1997,183 @@ export function SettingsPanel() {
                     <p className="text-xs text-muted-foreground">Begin 3D reconstruction when flight ends</p>
                   </div>
                   <Switch />
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="failsafe" className="space-y-4 mt-4">
+            <Card className="border-2 border-red-500/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5 text-red-500" />
+                  GPS-Denied Navigation
+                </CardTitle>
+                <CardDescription>Configure backup navigation for when GPS signal is lost</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-sm">
+                  <p className="text-red-500 font-medium">Critical Safety Feature</p>
+                  <p className="text-muted-foreground text-xs mt-1">
+                    When GPS is unavailable, the drone can use visual odometry (camera feed analysis) 
+                    and dead reckoning (IMU heading/speed data) to navigate back to base.
+                  </p>
+                </div>
+                
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Enable GPS-Denied Mode</Label>
+                    <p className="text-xs text-muted-foreground">Activate backup navigation when GPS is lost</p>
+                  </div>
+                  <Switch defaultChecked data-testid="switch-gps-denied" />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Primary Backup Method</Label>
+                  <Select defaultValue="visual">
+                    <SelectTrigger data-testid="select-backup-nav">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="visual">Visual Odometry (Camera)</SelectItem>
+                      <SelectItem value="dead">Dead Reckoning (IMU)</SelectItem>
+                      <SelectItem value="hybrid">Hybrid (Visual + Dead Reckoning)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Use Flight Path History</Label>
+                    <p className="text-xs text-muted-foreground">Backtrack using recorded heading/speed data</p>
+                  </div>
+                  <Switch defaultChecked />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Use Visual Feature Matching</Label>
+                    <p className="text-xs text-muted-foreground">Match camera footage to find return path</p>
+                  </div>
+                  <Switch defaultChecked />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>GPS Lost Timeout (sec)</Label>
+                    <Input type="number" defaultValue="10" min="5" max="60" data-testid="input-gps-timeout" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Min Satellites for GPS</Label>
+                    <Input type="number" defaultValue="6" min="4" max="12" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-2 border-amber-500/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Wifi className="h-5 w-5 text-amber-500" />
+                  Connection Loss Failsafe
+                </CardTitle>
+                <CardDescription>What happens when ground control connection is lost</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-sm">
+                  <p className="text-amber-500 font-medium">Autonomous Mission Completion</p>
+                  <p className="text-muted-foreground text-xs mt-1">
+                    If the drone loses connection to the ground control computer (not the onboard Raspberry Pi), 
+                    it can continue to complete its mission autonomously and then return to base.
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Complete Mission on Disconnect</Label>
+                    <p className="text-xs text-muted-foreground">Continue mission waypoints if GCS connection lost</p>
+                  </div>
+                  <Switch defaultChecked data-testid="switch-auto-complete-mission" />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>On Mission Complete (after disconnect)</Label>
+                  <Select defaultValue="rtl">
+                    <SelectTrigger data-testid="select-disconnect-action">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="rtl">Return to Base (RTL)</SelectItem>
+                      <SelectItem value="hover">Hover in Place</SelectItem>
+                      <SelectItem value="land">Land Immediately</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Connection Lost Timeout (sec)</Label>
+                    <Input type="number" defaultValue="30" min="10" max="120" data-testid="input-disconnect-timeout" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Reconnection Attempts</Label>
+                    <Input type="number" defaultValue="5" min="1" max="20" />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Auto-RTL on Low Battery</Label>
+                    <p className="text-xs text-muted-foreground">Return to base when battery drops below threshold</p>
+                  </div>
+                  <Switch defaultChecked />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Low Battery Threshold (%)</Label>
+                  <Input type="number" defaultValue="20" min="10" max="50" />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Shield className="h-5 w-5" />
+                  Emergency Actions
+                </CardTitle>
+                <CardDescription>Configure emergency behavior</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Geofence Enabled</Label>
+                    <p className="text-xs text-muted-foreground">Prevent drone from exceeding boundaries</p>
+                  </div>
+                  <Switch defaultChecked />
+                </div>
+
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>Max Altitude (m)</Label>
+                    <Input type="number" defaultValue="120" min="10" max="500" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Max Distance (m)</Label>
+                    <Input type="number" defaultValue="2000" min="100" max="10000" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Min Altitude (m)</Label>
+                    <Input type="number" defaultValue="10" min="2" max="50" />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Kill Switch Confirmation</Label>
+                    <p className="text-xs text-muted-foreground">Require double-press for emergency motor stop</p>
+                  </div>
+                  <Switch defaultChecked />
                 </div>
               </CardContent>
             </Card>
