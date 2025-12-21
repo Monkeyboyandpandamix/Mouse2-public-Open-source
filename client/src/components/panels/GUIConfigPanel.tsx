@@ -40,6 +40,15 @@ interface PanelConfig {
   draggable: boolean;
 }
 
+interface CustomWidget {
+  id: string;
+  name: string;
+  type: 'button' | 'display';
+  targetPage: string;
+  command?: string;
+  displayValue?: string;
+}
+
 const defaultTabs: TabConfig[] = [
   { id: "map", name: "Map View", icon: "Map", visible: true, order: 0, isCustom: false },
   { id: "mission", name: "Mission Plan", icon: "Navigation", visible: true, order: 1, isCustom: false },
@@ -76,6 +85,49 @@ export function GUIConfigPanel() {
   const [theme, setTheme] = useState<"dark" | "light" | "system">(() => {
     return (localStorage.getItem('mouse_theme') as "dark" | "light" | "system") || "dark";
   });
+  
+  const [customWidgets, setCustomWidgets] = useState<CustomWidget[]>(() => {
+    const saved = localStorage.getItem('mouse_gui_widgets');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [newWidget, setNewWidget] = useState<Partial<CustomWidget>>({
+    name: '',
+    type: 'button',
+    targetPage: 'map',
+    command: ''
+  });
+
+  useEffect(() => {
+    localStorage.setItem('mouse_gui_widgets', JSON.stringify(customWidgets));
+    window.dispatchEvent(new CustomEvent('gui-config-changed', { detail: { widgets: customWidgets } }));
+  }, [customWidgets]);
+
+  const addCustomWidget = () => {
+    if (!newWidget.name?.trim()) {
+      toast.error("Please enter a widget name");
+      return;
+    }
+    if (newWidget.type === 'button' && !newWidget.command?.trim()) {
+      toast.error("Please enter a command for the button");
+      return;
+    }
+    const widget: CustomWidget = {
+      id: `widget_${Date.now()}`,
+      name: newWidget.name,
+      type: newWidget.type || 'button',
+      targetPage: newWidget.targetPage || 'map',
+      command: newWidget.command,
+      displayValue: newWidget.displayValue
+    };
+    setCustomWidgets(prev => [...prev, widget]);
+    setNewWidget({ name: '', type: 'button', targetPage: 'map', command: '' });
+    toast.success(`Widget "${widget.name}" added to ${widget.targetPage} page`);
+  };
+
+  const deleteWidget = (id: string) => {
+    setCustomWidgets(prev => prev.filter(w => w.id !== id));
+    toast.success("Widget deleted");
+  };
 
   useEffect(() => {
     localStorage.setItem('mouse_gui_tabs', JSON.stringify(tabs));
@@ -389,6 +441,118 @@ export function GUIConfigPanel() {
             </Card>
           </div>
         </div>
+
+        <Card className="border-2 border-primary/50">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Plus className="h-5 w-5" />
+              Custom Widgets
+            </CardTitle>
+            <CardDescription>Add custom buttons and displays to pages connected to terminal commands</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {customWidgets.length > 0 && (
+              <ScrollArea className="max-h-48">
+                <div className="space-y-2">
+                  {customWidgets.map(widget => (
+                    <div 
+                      key={widget.id}
+                      className="flex items-center justify-between p-2 rounded border bg-muted/30"
+                      data-testid={`widget-${widget.id}`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline" className="text-[10px]">
+                          {widget.type}
+                        </Badge>
+                        <span className="font-medium text-sm">{widget.name}</span>
+                        <span className="text-xs text-muted-foreground">→ {widget.targetPage}</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-[10px] text-muted-foreground font-mono max-w-32 truncate">
+                          {widget.command}
+                        </span>
+                        <Button 
+                          variant="ghost" 
+                          size="icon" 
+                          className="h-7 w-7 text-destructive"
+                          onClick={() => deleteWidget(widget.id)}
+                          data-testid={`button-delete-widget-${widget.id}`}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+
+            <Separator />
+
+            <div className="space-y-3">
+              <Label>Add New Widget</Label>
+              <div className="grid grid-cols-4 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Widget Name</Label>
+                  <Input 
+                    placeholder="e.g., Arm Drone"
+                    value={newWidget.name || ''}
+                    onChange={(e) => setNewWidget(prev => ({ ...prev, name: e.target.value }))}
+                    data-testid="input-widget-name"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Type</Label>
+                  <Select 
+                    value={newWidget.type} 
+                    onValueChange={(v) => setNewWidget(prev => ({ ...prev, type: v as 'button' | 'display' }))}
+                  >
+                    <SelectTrigger data-testid="select-widget-type">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="button">Button</SelectItem>
+                      <SelectItem value="display">Display</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Target Page</Label>
+                  <Select 
+                    value={newWidget.targetPage} 
+                    onValueChange={(v) => setNewWidget(prev => ({ ...prev, targetPage: v }))}
+                  >
+                    <SelectTrigger data-testid="select-widget-page">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {tabs.filter(t => t.visible).map(tab => (
+                        <SelectItem key={tab.id} value={tab.id}>{tab.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Command</Label>
+                  <div className="flex gap-1">
+                    <Input 
+                      placeholder="mavlink_shell '...'"
+                      value={newWidget.command || ''}
+                      onChange={(e) => setNewWidget(prev => ({ ...prev, command: e.target.value }))}
+                      data-testid="input-widget-command"
+                    />
+                    <Button onClick={addCustomWidget} data-testid="button-add-widget">
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Widgets will appear as clickable buttons on the selected page. Clicking them will execute the terminal command.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

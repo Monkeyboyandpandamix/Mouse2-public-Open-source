@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Hand, ArrowUpCircle, ArrowDownCircle, Power, AlertOctagon, Navigation } from "lucide-react";
+import { Hand, ArrowUpCircle, ArrowDownCircle, Power, AlertOctagon, Navigation, Zap } from "lucide-react";
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -10,11 +10,49 @@ interface BaseLocation {
   name: string;
 }
 
-export function ControlDeck() {
+interface CustomWidget {
+  id: string;
+  name: string;
+  type: 'button' | 'display';
+  targetPage: string;
+  command?: string;
+  displayValue?: string;
+}
+
+interface ControlDeckProps {
+  activeTab?: string;
+}
+
+export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
   const [isArmed, setIsArmed] = useState(false);
   const [gripperOpen, setGripperOpen] = useState(false);
   const [baseLocation, setBaseLocation] = useState<BaseLocation | null>(null);
   const [isReturning, setIsReturning] = useState(false);
+  const [customWidgets, setCustomWidgets] = useState<CustomWidget[]>([]);
+
+  // Load custom widgets from localStorage
+  useEffect(() => {
+    const loadWidgets = () => {
+      const saved = localStorage.getItem('mouse_gui_widgets');
+      if (saved) {
+        try {
+          setCustomWidgets(JSON.parse(saved));
+        } catch {}
+      }
+    };
+    loadWidgets();
+    
+    // Listen for gui-config-changed events
+    const handleConfigChange = (e: CustomEvent) => {
+      if (e.detail?.widgets) {
+        setCustomWidgets(e.detail.widgets);
+      } else {
+        loadWidgets();
+      }
+    };
+    window.addEventListener('gui-config-changed' as any, handleConfigChange);
+    return () => window.removeEventListener('gui-config-changed' as any, handleConfigChange);
+  }, []);
 
   // Load base location from localStorage
   useEffect(() => {
@@ -37,6 +75,17 @@ export function ControlDeck() {
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
+
+  const executeWidgetCommand = (widget: CustomWidget) => {
+    if (widget.command) {
+      toast.success(`Executing: ${widget.command}`);
+      // In real implementation, this would send command to backend
+      window.dispatchEvent(new CustomEvent('execute-command', { detail: { command: widget.command } }));
+    }
+  };
+
+  // Filter widgets for current page
+  const pageWidgets = customWidgets.filter(w => w.targetPage === activeTab);
 
   const handleReturnToBase = () => {
     if (!baseLocation) {
@@ -144,6 +193,27 @@ export function ControlDeck() {
           <span className="font-bold tracking-wider text-[10px]">{gripperOpen ? "RELEASE" : "GRAB"}</span>
         </Button>
       </div>
+
+      {/* Custom Widgets */}
+      {pageWidgets.length > 0 && (
+        <div className="flex flex-col gap-1 sm:gap-2 min-w-0 shrink-0">
+          <span className="text-[8px] sm:text-[10px] font-mono text-muted-foreground uppercase tracking-widest">Custom</span>
+          <div className="flex gap-2 h-full">
+            {pageWidgets.map(widget => (
+              <Button
+                key={widget.id}
+                variant="outline"
+                className="h-full flex flex-col gap-1 px-3 border-2 border-purple-500/50 hover:bg-purple-500/20 hover:text-purple-400 min-w-[80px]"
+                onClick={() => executeWidgetCommand(widget)}
+                data-testid={`widget-button-${widget.id}`}
+              >
+                <Zap className="h-5 w-5 text-purple-400" />
+                <span className="text-[10px] font-mono truncate max-w-[60px]">{widget.name}</span>
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
 
     </div>
   );

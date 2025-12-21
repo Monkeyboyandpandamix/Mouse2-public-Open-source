@@ -171,8 +171,8 @@ export function UserAccessPanel() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('mouse_gcs_session');
     setSession({ user: null, isLoggedIn: false });
+    localStorage.removeItem('mouse_gcs_session');
     window.dispatchEvent(new CustomEvent('session-change', { detail: { user: null, isLoggedIn: false } }));
     toast.info("Logged out successfully");
   };

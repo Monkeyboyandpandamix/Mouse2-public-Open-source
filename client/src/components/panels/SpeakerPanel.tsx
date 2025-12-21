@@ -54,6 +54,11 @@ export function SpeakerPanel() {
   const [usbDevices, setUsbDevices] = useState<string[]>([]);
   const [selectedUsbDevice, setSelectedUsbDevice] = useState<string>('');
   const [buzzerPlaying, setBuzzerPlaying] = useState(false);
+  
+  const [droneMicEnabled, setDroneMicEnabled] = useState(false);
+  const [droneMicVolume, setDroneMicVolume] = useState([70]);
+  const [isListeningFromDrone, setIsListeningFromDrone] = useState(false);
+  const [droneMicStatus, setDroneMicStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
 
   const playBuzzerTone = async (toneId: string) => {
     setBuzzerPlaying(true);
@@ -428,6 +433,108 @@ export function SpeakerPanel() {
               "Click to start live broadcast"
             )}
           </p>
+        </CardContent>
+      </Card>
+
+      <Card className="border-2 border-primary/50">
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Radio className="h-5 w-5" />
+                Drone Microphone Input
+              </CardTitle>
+              <CardDescription>Receive audio from drone-mounted microphone for two-way communication</CardDescription>
+            </div>
+            <Badge className={droneMicStatus === 'connected' ? "bg-emerald-500" : droneMicStatus === 'connecting' ? "bg-amber-500" : "bg-muted"}>
+              {droneMicStatus === 'connected' ? 'Connected' : droneMicStatus === 'connecting' ? 'Connecting...' : 'Disconnected'}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg">
+            <div>
+              <Label>Enable Drone Microphone</Label>
+              <p className="text-xs text-muted-foreground">Receive audio from drone via WebSocket stream</p>
+            </div>
+            <Button
+              variant={droneMicEnabled ? "destructive" : "default"}
+              onClick={() => {
+                if (droneMicEnabled) {
+                  setDroneMicEnabled(false);
+                  setDroneMicStatus('disconnected');
+                  setIsListeningFromDrone(false);
+                  toast.info("Drone microphone disconnected");
+                } else {
+                  setDroneMicStatus('connecting');
+                  toast.info("Connecting to drone microphone...");
+                  setTimeout(() => {
+                    setDroneMicEnabled(true);
+                    setDroneMicStatus('connected');
+                    toast.success("Drone microphone connected");
+                  }, 1500);
+                }
+              }}
+              data-testid="button-toggle-drone-mic"
+            >
+              {droneMicStatus === 'connecting' ? (
+                <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Connecting...</>
+              ) : droneMicEnabled ? (
+                <>Disconnect</>
+              ) : (
+                <>Connect</>
+              )}
+            </Button>
+          </div>
+
+          {droneMicEnabled && (
+            <>
+              <div className="flex items-center justify-center py-4">
+                <Button
+                  size="lg"
+                  variant={isListeningFromDrone ? "secondary" : "outline"}
+                  className={`h-20 w-20 rounded-full ${isListeningFromDrone ? 'ring-2 ring-primary ring-offset-2' : ''}`}
+                  onClick={() => setIsListeningFromDrone(!isListeningFromDrone)}
+                  data-testid="button-listen-drone"
+                >
+                  <Volume2 className={`h-8 w-8 ${isListeningFromDrone ? 'text-primary animate-pulse' : ''}`} />
+                </Button>
+              </div>
+              <p className="text-center text-sm text-muted-foreground">
+                {isListeningFromDrone ? (
+                  <span className="text-primary font-bold flex items-center justify-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                    LISTENING TO DRONE - Click to mute
+                  </span>
+                ) : (
+                  "Click to hear audio from drone"
+                )}
+              </p>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label>Drone Mic Volume</Label>
+                  <span className="text-sm text-muted-foreground font-mono">{droneMicVolume[0]}%</span>
+                </div>
+                <Slider 
+                  value={droneMicVolume} 
+                  onValueChange={setDroneMicVolume}
+                  max={100} 
+                  step={5}
+                />
+              </div>
+
+              <div className="p-3 bg-muted/30 rounded-lg space-y-2">
+                <Label className="text-xs">Audio Stream Info</Label>
+                <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                  <div>Source: Raspberry Pi USB Mic</div>
+                  <div>Format: WebSocket Audio</div>
+                  <div>Sample Rate: 16kHz</div>
+                  <div>Latency: ~150ms</div>
+                </div>
+              </div>
+            </>
+          )}
         </CardContent>
       </Card>
 

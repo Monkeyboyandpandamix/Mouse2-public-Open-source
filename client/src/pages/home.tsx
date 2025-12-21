@@ -234,7 +234,7 @@ export default function Home() {
           {renderMainContent()}
           
           {/* Only show control deck on map view */}
-          {activeTab === "map" && <ControlDeck />}
+          {activeTab === "map" && <ControlDeck activeTab={activeTab} />}
         </main>
 
         {/* Right Side Telemetry Panel - show on map and tracking views */}

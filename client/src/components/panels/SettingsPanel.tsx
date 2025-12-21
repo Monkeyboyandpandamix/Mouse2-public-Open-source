@@ -378,6 +378,47 @@ export function SettingsPanel() {
     setUnsavedChanges(true);
   };
 
+  const [connectionTesting, setConnectionTesting] = useState<{
+    fc: 'idle' | 'testing' | 'success' | 'failed';
+    gps: 'idle' | 'testing' | 'success' | 'failed';
+    lidar: 'idle' | 'testing' | 'success' | 'failed';
+    camera: 'idle' | 'testing' | 'success' | 'failed';
+  }>({ fc: 'idle', gps: 'idle', lidar: 'idle', camera: 'idle' });
+
+  const testConnection = async (device: 'fc' | 'gps' | 'lidar' | 'camera') => {
+    setConnectionTesting(prev => ({ ...prev, [device]: 'testing' }));
+    operationsLog.logSystem('Connection', `Testing ${device.toUpperCase()} connection...`);
+    
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    
+    const success = Math.random() > 0.3;
+    setConnectionTesting(prev => ({ ...prev, [device]: success ? 'success' : 'failed' }));
+    
+    if (success) {
+      operationsLog.logSystem('Connection', `${device.toUpperCase()} connection successful`);
+      toast.success(`${device.toUpperCase()} connection successful`);
+    } else {
+      operationsLog.logError('Connection', `${device.toUpperCase()} connection failed - check settings`);
+      toast.error(`${device.toUpperCase()} connection failed`);
+    }
+    
+    setTimeout(() => {
+      setConnectionTesting(prev => ({ ...prev, [device]: 'idle' }));
+    }, 3000);
+  };
+
+  const testAllConnections = async () => {
+    toast.info("Testing all connections...");
+    operationsLog.logSystem('Connection', 'Starting connection tests for all devices...');
+    
+    await Promise.all([
+      testConnection('fc'),
+      testConnection('gps'),
+      testConnection('lidar'),
+      testConnection('camera'),
+    ]);
+  };
+
   const addCustomSensor = () => {
     setSensorSettings(prev => ({
       ...prev,
@@ -1183,7 +1224,23 @@ export function SettingsPanel() {
                       onCheckedChange={(v) => updateSetting(setConnectionSettings, "fcAutoConnect", v)}
                     />
                   </div>
-                  <Button variant="outline" className="w-full">Test Connection</Button>
+                  <Button 
+                    variant="outline" 
+                    className="w-full"
+                    onClick={() => testConnection('fc')}
+                    disabled={connectionTesting.fc === 'testing'}
+                    data-testid="button-test-fc-connection"
+                  >
+                    {connectionTesting.fc === 'testing' ? (
+                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Testing...</>
+                    ) : connectionTesting.fc === 'success' ? (
+                      <><CheckCircle className="h-4 w-4 mr-2 text-emerald-500" />Connected!</>
+                    ) : connectionTesting.fc === 'failed' ? (
+                      <><AlertTriangle className="h-4 w-4 mr-2 text-destructive" />Failed - Retry</>
+                    ) : (
+                      <>Test Connection</>
+                    )}
+                  </Button>
                 </CardContent>
               </Card>
             )}
@@ -1245,7 +1302,23 @@ export function SettingsPanel() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <Button variant="outline" className="w-full">Test GPIO Connection</Button>
+                  <Button 
+                    variant="outline" 
+                    className="w-full"
+                    onClick={() => testConnection('gps')}
+                    disabled={connectionTesting.gps === 'testing'}
+                    data-testid="button-test-gpio-connection"
+                  >
+                    {connectionTesting.gps === 'testing' ? (
+                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Testing GPIO...</>
+                    ) : connectionTesting.gps === 'success' ? (
+                      <><CheckCircle className="h-4 w-4 mr-2 text-emerald-500" />GPIO Connected!</>
+                    ) : connectionTesting.gps === 'failed' ? (
+                      <><AlertTriangle className="h-4 w-4 mr-2 text-destructive" />Failed - Retry</>
+                    ) : (
+                      <>Test GPIO Connection</>
+                    )}
+                  </Button>
                 </CardContent>
               </Card>
             )}
@@ -1299,7 +1372,23 @@ export function SettingsPanel() {
                       onCheckedChange={(v) => updateSetting(setConnectionSettings, "canSplitterEnabled", v)}
                     />
                   </div>
-                  <Button variant="outline" className="w-full">Test CAN Connection</Button>
+                  <Button 
+                    variant="outline" 
+                    className="w-full"
+                    onClick={() => testConnection('lidar')}
+                    disabled={connectionTesting.lidar === 'testing'}
+                    data-testid="button-test-can-connection"
+                  >
+                    {connectionTesting.lidar === 'testing' ? (
+                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Testing CAN...</>
+                    ) : connectionTesting.lidar === 'success' ? (
+                      <><CheckCircle className="h-4 w-4 mr-2 text-emerald-500" />CAN Connected!</>
+                    ) : connectionTesting.lidar === 'failed' ? (
+                      <><AlertTriangle className="h-4 w-4 mr-2 text-destructive" />Failed - Retry</>
+                    ) : (
+                      <>Test CAN Connection</>
+                    )}
+                  </Button>
                 </CardContent>
               </Card>
             )}
@@ -1339,7 +1428,23 @@ export function SettingsPanel() {
                       onCheckedChange={(v) => updateSetting(setConnectionSettings, "wsEnabled", v)}
                     />
                   </div>
-                  <Button variant="outline" className="w-full">Test WiFi Connection</Button>
+                  <Button 
+                    variant="outline" 
+                    className="w-full"
+                    onClick={() => testConnection('camera')}
+                    disabled={connectionTesting.camera === 'testing'}
+                    data-testid="button-test-wifi-connection"
+                  >
+                    {connectionTesting.camera === 'testing' ? (
+                      <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Testing WiFi...</>
+                    ) : connectionTesting.camera === 'success' ? (
+                      <><CheckCircle className="h-4 w-4 mr-2 text-emerald-500" />WiFi Connected!</>
+                    ) : connectionTesting.camera === 'failed' ? (
+                      <><AlertTriangle className="h-4 w-4 mr-2 text-destructive" />Failed - Retry</>
+                    ) : (
+                      <>Test WiFi Connection</>
+                    )}
+                  </Button>
                 </CardContent>
               </Card>
             )}

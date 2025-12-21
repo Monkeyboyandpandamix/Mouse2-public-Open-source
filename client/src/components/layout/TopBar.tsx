@@ -259,7 +259,7 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
         <Button 
           variant="destructive" 
           size="sm" 
-          className="ml-1 sm:ml-2 gap-1 sm:gap-2 font-bold animate-pulse hover:animate-none px-2 sm:px-3"
+          className="ml-1 gap-1 font-bold animate-pulse hover:animate-none px-2 h-8 text-xs shrink-0"
           onClick={() => {
             if (confirm("EMERGENCY LANDING: This will find a safe clearing and land immediately. Continue?")) {
               toast.error("EMERGENCY LANDING INITIATED - Finding safe landing zone...", { duration: 5000 });
@@ -267,9 +267,9 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           }}
           data-testid="button-emergency-land"
         >
-          <ChevronDown className="h-3 w-3 sm:h-4 sm:w-4" />
-          <span className="hidden sm:inline">EMERGENCY</span>
-          <span className="sm:hidden">SOS</span>
+          <ChevronDown className="h-3 w-3" />
+          <span className="hidden md:inline">EMERGENCY</span>
+          <span className="md:hidden">SOS</span>
         </Button>
       </div>
 

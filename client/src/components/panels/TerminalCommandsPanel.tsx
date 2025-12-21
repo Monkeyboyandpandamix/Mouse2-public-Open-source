@@ -35,13 +35,80 @@ interface SystemCommand {
   id: string;
   name: string;
   description: string;
-  category: 'arming' | 'flight' | 'navigation' | 'telemetry' | 'camera' | 'video' | 'system';
+  category: 'arming' | 'flight' | 'navigation' | 'telemetry' | 'camera' | 'video' | 'system' | 'payload';
   command: string;
   parameters?: { name: string; description: string; default: string }[];
   lastExecuted?: string;
 }
 
 const defaultCommands: SystemCommand[] = [
+  // Payload / Gripper Commands
+  {
+    id: "gripper_open",
+    name: "Open Gripper",
+    description: "Opens the gripper to release payload",
+    category: "payload",
+    command: "mavlink_shell 'servo set 9 2000'",
+  },
+  {
+    id: "gripper_close",
+    name: "Close Gripper",
+    description: "Closes the gripper to grab payload",
+    category: "payload",
+    command: "mavlink_shell 'servo set 9 1000'",
+  },
+  {
+    id: "gripper_toggle",
+    name: "Toggle Gripper",
+    description: "Toggles gripper between open and closed",
+    category: "payload",
+    command: "mavlink_shell 'servo toggle 9'",
+  },
+  {
+    id: "drop_payload",
+    name: "Drop Payload",
+    description: "Opens gripper and waits for payload release",
+    category: "payload",
+    command: "mavlink_shell 'servo set 9 2000' && sleep 2 && echo 'Payload released'",
+  },
+  {
+    id: "pickup_payload",
+    name: "Pickup Payload",
+    description: "Positions and closes gripper to grab payload",
+    category: "payload",
+    command: "mavlink_shell 'servo set 9 1000' && sleep 1 && echo 'Payload secured'",
+  },
+  // Object Avoidance Commands
+  {
+    id: "avoidance_enable",
+    name: "Enable Object Avoidance",
+    description: "Enables obstacle detection and avoidance system",
+    category: "navigation",
+    command: "mavlink_shell 'param set AVOID_ENABLE 1'",
+  },
+  {
+    id: "avoidance_disable",
+    name: "Disable Object Avoidance",
+    description: "Disables obstacle avoidance for manual control",
+    category: "navigation",
+    command: "mavlink_shell 'param set AVOID_ENABLE 0'",
+  },
+  {
+    id: "avoidance_distance",
+    name: "Set Avoidance Distance",
+    description: "Sets minimum distance for obstacle avoidance in meters",
+    category: "navigation",
+    command: "mavlink_shell 'param set AVOID_DIST_MAX ${distance}'",
+    parameters: [{ name: "distance", description: "Distance in meters", default: "5" }]
+  },
+  {
+    id: "avoidance_status",
+    name: "Get Avoidance Status",
+    description: "Shows current obstacle avoidance system status",
+    category: "navigation",
+    command: "mavlink_shell 'status proximity'",
+  },
+
   // Arming Commands
   {
     id: "arm_system",
