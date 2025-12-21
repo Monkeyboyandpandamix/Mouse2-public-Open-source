@@ -158,7 +158,35 @@ export function GUIConfigPanel() {
     localStorage.setItem('mouse_gui_tabs', JSON.stringify(tabs));
     localStorage.setItem('mouse_gui_panels', JSON.stringify(panels));
     localStorage.setItem('mouse_theme', theme);
-    toast.success("GUI settings saved");
+    
+    window.dispatchEvent(new CustomEvent('gui-config-changed', { 
+      detail: { tabs, panels, theme, immediate: true } 
+    }));
+    
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+      document.documentElement.classList.remove('light');
+    } else if (theme === 'light') {
+      document.documentElement.classList.remove('dark');
+      document.documentElement.classList.add('light');
+    }
+    
+    toast.success("GUI settings saved and applied");
+  };
+  
+  const applyNow = () => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+      document.documentElement.classList.remove('light');
+    } else if (theme === 'light') {
+      document.documentElement.classList.remove('dark');
+      document.documentElement.classList.add('light');
+    }
+    
+    window.dispatchEvent(new CustomEvent('gui-config-changed', { 
+      detail: { tabs, panels, theme, immediate: true } 
+    }));
+    toast.success("Changes applied immediately");
   };
 
   return (
@@ -176,6 +204,9 @@ export function GUIConfigPanel() {
             <Button variant="outline" onClick={resetToDefaults} data-testid="button-reset-gui">
               <RotateCcw className="h-4 w-4 mr-2" />
               Reset
+            </Button>
+            <Button variant="secondary" onClick={applyNow} data-testid="button-apply-gui">
+              Apply Now
             </Button>
             <Button onClick={saveSettings} data-testid="button-save-gui">
               <Save className="h-4 w-4 mr-2" />

@@ -44,6 +44,7 @@ interface RolePermissions {
 interface User {
   id: string;
   username: string;
+  fullName: string;
   password: string;
   role: 'admin' | 'operator' | 'viewer';
   createdAt: string;
@@ -84,6 +85,7 @@ const defaultUsers: User[] = [
   {
     id: "1",
     username: "admin",
+    fullName: "System Administrator",
     password: "admin123",
     role: "admin",
     createdAt: "2024-01-01T00:00:00Z",
@@ -93,6 +95,7 @@ const defaultUsers: User[] = [
   {
     id: "2",
     username: "operator1",
+    fullName: "Flight Operator",
     password: "operator123",
     role: "operator",
     createdAt: "2024-01-10T00:00:00Z",
@@ -102,6 +105,7 @@ const defaultUsers: User[] = [
   {
     id: "3",
     username: "viewer1",
+    fullName: "Mission Observer",
     password: "viewer123",
     role: "viewer",
     createdAt: "2024-01-15T00:00:00Z",
@@ -135,7 +139,7 @@ export function UserAccessPanel() {
   const [showEditUserDialog, setShowEditUserDialog] = useState(false);
   const [showResetPasswordDialog, setShowResetPasswordDialog] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
-  const [newUser, setNewUser] = useState({ username: "", password: "", confirmPassword: "", role: "operator" as const });
+  const [newUser, setNewUser] = useState({ username: "", fullName: "", password: "", confirmPassword: "", role: "operator" as const });
   const [editForm, setEditForm] = useState({ username: "", newPassword: "", confirmPassword: "" });
   const [activeTab, setActiveTab] = useState("users");
 
@@ -159,7 +163,7 @@ export function UserAccessPanel() {
       setUsers(prev => prev.map(u => 
         u.id === user.id ? { ...u, lastLogin: new Date().toISOString() } : u
       ));
-      toast.success(`Welcome back, ${user.username}!`);
+      toast.success(`Welcome back, ${user.fullName || user.username}!`);
       setLoginForm({ username: "", password: "" });
     } else {
       toast.error("Invalid credentials or account disabled");
@@ -167,7 +171,9 @@ export function UserAccessPanel() {
   };
 
   const handleLogout = () => {
+    localStorage.removeItem('mouse_gcs_session');
     setSession({ user: null, isLoggedIn: false });
+    window.dispatchEvent(new CustomEvent('session-change', { detail: { user: null, isLoggedIn: false } }));
     toast.info("Logged out successfully");
   };
 
@@ -192,6 +198,7 @@ export function UserAccessPanel() {
     const user: User = {
       id: Date.now().toString(),
       username: newUser.username,
+      fullName: newUser.fullName || newUser.username,
       password: newUser.password,
       role: newUser.role,
       createdAt: new Date().toISOString(),
@@ -200,7 +207,7 @@ export function UserAccessPanel() {
     };
     setUsers(prev => [...prev, user]);
     setShowNewUserDialog(false);
-    setNewUser({ username: "", password: "", confirmPassword: "", role: "operator" });
+    setNewUser({ username: "", fullName: "", password: "", confirmPassword: "", role: "operator" });
     toast.success("User created successfully");
   };
 
@@ -422,6 +429,15 @@ export function UserAccessPanel() {
                       />
                     </div>
                     <div className="space-y-2">
+                      <Label>Full Name</Label>
+                      <Input 
+                        value={newUser.fullName}
+                        onChange={(e) => setNewUser(prev => ({ ...prev, fullName: e.target.value }))}
+                        placeholder="Enter full name (e.g. John Smith)"
+                        data-testid="input-new-fullname"
+                      />
+                    </div>
+                    <div className="space-y-2">
                       <Label>Password</Label>
                       <Input 
                         type="password"
@@ -471,7 +487,7 @@ export function UserAccessPanel() {
             )}
           </div>
           <p className="text-xs text-muted-foreground">
-            Logged in as: <span className="text-primary font-medium">{session.user?.username}</span>
+            Logged in as: <span className="text-primary font-medium">{session.user?.fullName || session.user?.username}</span>
           </p>
         </div>
 
@@ -497,13 +513,13 @@ export function UserAccessPanel() {
                         </div>
                         <div>
                           <div className="flex items-center gap-2">
-                            <span className="font-medium text-sm">{user.username}</span>
+                            <span className="font-medium text-sm">{user.fullName || user.username}</span>
                             {user.id === session.user?.id && (
                               <Badge variant="outline" className="text-[10px]">You</Badge>
                             )}
                           </div>
                           <p className="text-[10px] text-muted-foreground">
-                            {user.lastLogin 
+                            @{user.username} · {user.lastLogin 
                               ? `Last: ${new Date(user.lastLogin).toLocaleDateString()}`
                               : "Never logged in"
                             }

@@ -24,7 +24,9 @@ import {
   Radio,
   Video,
   Settings,
-  Shield
+  Shield,
+  Plus,
+  Trash2
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
@@ -557,6 +559,13 @@ export function TerminalCommandsPanel() {
   const [editedCommand, setEditedCommand] = useState<SystemCommand | null>(null);
   const [executionLog, setExecutionLog] = useState<{ command: string; timestamp: string; status: string }[]>([]);
   const [activeCategory, setActiveCategory] = useState<string>('arming');
+  const [showAddCommand, setShowAddCommand] = useState(false);
+  const [newCommand, setNewCommand] = useState({
+    name: "",
+    description: "",
+    category: "system" as SystemCommand['category'],
+    command: ""
+  });
 
   useEffect(() => {
     localStorage.setItem('mouse_terminal_commands', JSON.stringify(commands));
@@ -594,6 +603,35 @@ export function TerminalCommandsPanel() {
     }
   };
 
+  const handleAddCommand = () => {
+    if (!newCommand.name.trim() || !newCommand.command.trim()) {
+      toast.error("Please enter a name and command");
+      return;
+    }
+    const cmd: SystemCommand = {
+      id: `custom_${Date.now()}`,
+      name: newCommand.name,
+      description: newCommand.description || "Custom command",
+      category: newCommand.category,
+      command: newCommand.command,
+    };
+    setCommands(prev => [...prev, cmd]);
+    setNewCommand({ name: "", description: "", category: "system", command: "" });
+    setShowAddCommand(false);
+    setActiveCategory(newCommand.category);
+    toast.success(`Command "${cmd.name}" added`);
+  };
+
+  const handleDeleteCommand = (id: string) => {
+    if (id.startsWith('custom_')) {
+      setCommands(prev => prev.filter(c => c.id !== id));
+      if (selectedCommand?.id === id) setSelectedCommand(null);
+      toast.success("Command deleted");
+    } else {
+      toast.error("Cannot delete built-in commands");
+    }
+  };
+
   const getCategoryIcon = (cat: string) => {
     switch (cat) {
       case 'arming': return <Shield className="h-4 w-4" />;
@@ -620,13 +658,63 @@ export function TerminalCommandsPanel() {
               <Terminal className="h-5 w-5 text-primary" />
               Terminal Commands
             </h3>
-            <Button size="sm" variant="outline" onClick={handleReset} data-testid="button-reset-commands">
-              <RefreshCw className="h-4 w-4" />
-            </Button>
+            <div className="flex gap-1">
+              <Button size="sm" variant="default" onClick={() => setShowAddCommand(true)} data-testid="button-add-command">
+                <Plus className="h-4 w-4" />
+              </Button>
+              <Button size="sm" variant="outline" onClick={handleReset} data-testid="button-reset-commands">
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
           <p className="text-xs text-muted-foreground">
             View and edit system commands for all drone operations
           </p>
+          
+          {showAddCommand && (
+            <div className="mt-3 p-3 bg-muted/30 rounded-lg space-y-2">
+              <Input 
+                placeholder="Command name"
+                value={newCommand.name}
+                onChange={(e) => setNewCommand(prev => ({ ...prev, name: e.target.value }))}
+                data-testid="input-new-command-name"
+              />
+              <Input 
+                placeholder="Description"
+                value={newCommand.description}
+                onChange={(e) => setNewCommand(prev => ({ ...prev, description: e.target.value }))}
+                data-testid="input-new-command-desc"
+              />
+              <Textarea 
+                placeholder="mavlink_shell 'your command here'"
+                value={newCommand.command}
+                onChange={(e) => setNewCommand(prev => ({ ...prev, command: e.target.value }))}
+                className="font-mono text-xs min-h-[60px]"
+                data-testid="textarea-new-command"
+              />
+              <div className="flex gap-2">
+                <select 
+                  className="flex-1 h-8 px-2 text-xs rounded bg-background border border-input"
+                  value={newCommand.category}
+                  onChange={(e) => setNewCommand(prev => ({ ...prev, category: e.target.value as SystemCommand['category'] }))}
+                >
+                  <option value="arming">Arming</option>
+                  <option value="flight">Flight</option>
+                  <option value="navigation">Navigation</option>
+                  <option value="telemetry">Telemetry</option>
+                  <option value="camera">Camera</option>
+                  <option value="video">Video</option>
+                  <option value="system">System</option>
+                </select>
+                <Button size="sm" variant="outline" onClick={() => setShowAddCommand(false)}>
+                  <X className="h-4 w-4" />
+                </Button>
+                <Button size="sm" onClick={handleAddCommand} data-testid="button-save-new-command">
+                  <Check className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Category Tabs */}
@@ -669,20 +757,38 @@ export function TerminalCommandsPanel() {
                 <CardContent className="p-3">
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium text-sm">{cmd.name}</div>
+                      <div className="font-medium text-sm flex items-center gap-1">
+                        {cmd.name}
+                        {cmd.id.startsWith('custom_') && (
+                          <Badge variant="outline" className="text-[8px] h-4">Custom</Badge>
+                        )}
+                      </div>
                       <p className="text-xs text-muted-foreground truncate mt-1">
                         {cmd.description}
                       </p>
                     </div>
-                    <Button 
-                      size="icon" 
-                      variant="ghost" 
-                      className="h-6 w-6 shrink-0"
-                      onClick={(e) => { e.stopPropagation(); handleExecute(cmd); }}
-                      data-testid={`button-execute-${cmd.id}`}
-                    >
-                      <Play className="h-3 w-3" />
-                    </Button>
+                    <div className="flex gap-1">
+                      {cmd.id.startsWith('custom_') && (
+                        <Button 
+                          size="icon" 
+                          variant="ghost" 
+                          className="h-6 w-6 shrink-0 text-destructive hover:text-destructive"
+                          onClick={(e) => { e.stopPropagation(); handleDeleteCommand(cmd.id); }}
+                          data-testid={`button-delete-${cmd.id}`}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      )}
+                      <Button 
+                        size="icon" 
+                        variant="ghost" 
+                        className="h-6 w-6 shrink-0"
+                        onClick={(e) => { e.stopPropagation(); handleExecute(cmd); }}
+                        data-testid={`button-execute-${cmd.id}`}
+                      >
+                        <Play className="h-3 w-3" />
+                      </Button>
+                    </div>
                   </div>
                   {cmd.lastExecuted && (
                     <p className="text-[10px] text-muted-foreground mt-2">

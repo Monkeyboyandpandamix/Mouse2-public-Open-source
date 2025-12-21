@@ -18,9 +18,14 @@ type LogSubscriber = (entries: LogEntry[]) => void;
 class OperationsLogService {
   private entries: LogEntry[] = [];
   private subscribers: Set<LogSubscriber> = new Set();
-  private isActive: boolean = false;
+  private isActive: boolean = true;
   private maxEntries: number = 500;
   private idCounter: number = 0;
+
+  constructor() {
+    this.isActive = true;
+    this.addEntry('system', 'Console', 'M.O.U.S.E. Ground Control Station initialized');
+  }
 
   // Activate logging (called when Operations tab opens)
   activate(): void {
@@ -30,10 +35,9 @@ class OperationsLogService {
 
   // Deactivate logging (called when Operations tab closes)
   deactivate(): void {
-    this.isActive = false;
-    // Keep only last 100 entries when inactive to save memory
-    if (this.entries.length > 100) {
-      this.entries = this.entries.slice(-100);
+    // Keep logging active but limit memory usage when tab is closed
+    if (this.entries.length > 200) {
+      this.entries = this.entries.slice(-200);
     }
   }
 
@@ -42,12 +46,8 @@ class OperationsLogService {
     return this.isActive;
   }
 
-  // Add a log entry
+  // Add a log entry - always capture all entries now
   addEntry(type: LogType, category: string, message: string, details?: any): void {
-    // Always capture errors, otherwise only capture when active
-    if (!this.isActive && type !== 'error') {
-      return;
-    }
 
     const entry: LogEntry = {
       id: `log_${++this.idCounter}_${Date.now()}`,
