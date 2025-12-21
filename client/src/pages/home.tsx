@@ -30,9 +30,34 @@ interface SystemError {
 export default function Home() {
   const [activeTab, setActiveTab] = useState("map");
   const [systemErrors, setSystemErrors] = useState<SystemError[]>([]);
+  
+  // Global session state - check if user is logged in
+  const [isLoggedIn, setIsLoggedIn] = useState(() => {
+    const saved = localStorage.getItem('mouse_gcs_session');
+    if (saved) {
+      try {
+        const session = JSON.parse(saved);
+        return session.isLoggedIn === true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  });
 
-  // Listen for system errors from various sources
+  // Listen for session changes (logout from TopBar or UserAccessPanel)
   useEffect(() => {
+    const handleSessionChange = (e: CustomEvent<{ isLoggedIn: boolean }>) => {
+      setIsLoggedIn(e.detail.isLoggedIn);
+    };
+    window.addEventListener('session-change' as any, handleSessionChange);
+    return () => window.removeEventListener('session-change' as any, handleSessionChange);
+  }, []);
+
+  // Listen for system errors from various sources (must be before conditional return)
+  useEffect(() => {
+    if (!isLoggedIn) return; // Only run when logged in
+    
     const handleError = (event: CustomEvent<SystemError>) => {
       setSystemErrors(prev => [...prev, event.detail]);
     };
@@ -58,7 +83,12 @@ export default function Home() {
       window.removeEventListener('system-error' as any, handleError);
       clearInterval(checkInterval);
     };
-  }, []);
+  }, [isLoggedIn]);
+
+  // If not logged in, show UserAccessPanel (which has the login form)
+  if (!isLoggedIn) {
+    return <UserAccessPanel />;
+  }
 
   const dismissError = (id: string) => {
     setSystemErrors(prev => prev.filter(e => e.id !== id));

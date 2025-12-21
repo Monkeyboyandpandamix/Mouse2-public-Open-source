@@ -391,15 +391,19 @@ export function SettingsPanel() {
     
     await new Promise(resolve => setTimeout(resolve, 1500));
     
-    const success = Math.random() > 0.3;
-    setConnectionTesting(prev => ({ ...prev, [device]: success ? 'success' : 'failed' }));
+    // In simulation mode, connections will fail since no real hardware is connected
+    // The test checks if we're in a development/simulated environment
+    const isSimulated = true; // No real hardware connected in web demo
     
-    if (success) {
+    if (isSimulated) {
+      setConnectionTesting(prev => ({ ...prev, [device]: 'failed' }));
+      operationsLog.logError('Connection', `${device.toUpperCase()} connection failed - no hardware connected (simulation mode)`);
+      toast.error(`${device.toUpperCase()} not connected - running in simulation mode`);
+    } else {
+      // Real hardware testing would go here
+      setConnectionTesting(prev => ({ ...prev, [device]: 'success' }));
       operationsLog.logSystem('Connection', `${device.toUpperCase()} connection successful`);
       toast.success(`${device.toUpperCase()} connection successful`);
-    } else {
-      operationsLog.logError('Connection', `${device.toUpperCase()} connection failed - check settings`);
-      toast.error(`${device.toUpperCase()} connection failed`);
     }
     
     setTimeout(() => {

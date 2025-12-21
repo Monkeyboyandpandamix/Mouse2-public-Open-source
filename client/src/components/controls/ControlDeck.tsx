@@ -101,6 +101,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
     }
     setIsReturning(true);
     toast.success(`Returning to base: ${baseLocation.name} (${baseLocation.lat.toFixed(4)}, ${baseLocation.lng.toFixed(4)})`);
+    window.dispatchEvent(new CustomEvent('flight-command', { detail: { command: 'rtl', target: baseLocation } }));
     setTimeout(() => setIsReturning(false), 3000);
   };
 
@@ -140,6 +141,10 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
             variant="secondary" 
             className="h-full flex flex-col gap-1 hover:bg-primary/20 hover:text-primary transition-colors p-2"
             disabled={!isArmed}
+            onClick={() => {
+              toast.success("Initiating takeoff sequence...");
+              window.dispatchEvent(new CustomEvent('flight-command', { detail: { command: 'takeoff' } }));
+            }}
             data-testid="button-takeoff"
           >
             <ArrowUpCircle className="h-5 w-5" />
@@ -165,6 +170,10 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
             variant="secondary" 
             className="h-full flex flex-col gap-1 hover:bg-primary/20 hover:text-primary transition-colors p-2"
             disabled={!isArmed}
+            onClick={() => {
+              toast.success("Initiating landing sequence...");
+              window.dispatchEvent(new CustomEvent('flight-command', { detail: { command: 'land' } }));
+            }}
             data-testid="button-land"
           >
             <ArrowDownCircle className="h-5 w-5" />
@@ -174,6 +183,14 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
           <Button 
             variant="destructive" 
             className="h-full flex flex-col gap-1 bg-destructive text-destructive-foreground hover:bg-destructive/90 animate-pulse p-2"
+            onClick={() => {
+              toast.error("EMERGENCY STOP ACTIVATED - Motors killed!", { duration: 5000 });
+              window.dispatchEvent(new CustomEvent('flight-command', { detail: { command: 'abort' } }));
+              // Force disarm
+              setIsArmed(false);
+              localStorage.setItem('mouse_drone_armed', JSON.stringify(false));
+              window.dispatchEvent(new CustomEvent('arm-state-changed', { detail: { armed: false } }));
+            }}
             data-testid="button-abort"
           >
             <AlertOctagon className="h-5 w-5" />

@@ -5,7 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ArrowUp, Navigation, Gauge, Thermometer, Zap, Activity, AlertTriangle } from "lucide-react";
 import { AttitudeIndicator } from "./AttitudeIndicator";
 import { GyroscopeIndicator } from "./GyroscopeIndicator";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 
 interface MotorData {
@@ -26,6 +26,39 @@ export function TelemetryPanel() {
   const [attitude, setAttitude] = useState({ pitch: 0, roll: 0, yaw: 0 });
   const [heading, setHeading] = useState(0);
   
+  // Flight state
+  const [altitude, setAltitude] = useState(0);
+  const [groundSpeed, setGroundSpeed] = useState(0);
+  const [flightMode, setFlightMode] = useState<'idle' | 'takeoff' | 'flying' | 'landing' | 'rtl'>('idle');
+  const [position, setPosition] = useState({ lat: 34.052235, lng: -118.243683 });
+  const [homePosition, setHomePosition] = useState({ lat: 34.052235, lng: -118.243683 });
+  const [distToHome, setDistToHome] = useState(0);
+  
+  // Use refs to avoid stale closures
+  const positionRef = useRef(position);
+  const homePositionRef = useRef(homePosition);
+  
+  // Keep refs in sync with state
+  useEffect(() => {
+    positionRef.current = position;
+  }, [position]);
+  
+  useEffect(() => {
+    homePositionRef.current = homePosition;
+  }, [homePosition]);
+  
+  // Calculate distance between two points in meters
+  const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number) => {
+    const R = 6371000; // Earth's radius in meters
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLng/2) * Math.sin(dLng/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  };
+  
   // Track drone arm state - only update telemetry when armed
   const [isArmed, setIsArmed] = useState(() => {
     const saved = localStorage.getItem('mouse_drone_armed');
@@ -38,12 +71,45 @@ export function TelemetryPanel() {
     };
     const handleArmStateChange = (e: CustomEvent<{ armed: boolean }>) => {
       setIsArmed(e.detail.armed);
+      if (!e.detail.armed) {
+        // Reset flight state when disarmed
+        setFlightMode('idle');
+        setAltitude(0);
+        setGroundSpeed(0);
+      }
+    };
+    const handleFlightCommand = (e: CustomEvent<{ command: string; target?: any }>) => {
+      const { command, target } = e.detail;
+      switch (command) {
+        case 'takeoff':
+          setFlightMode('takeoff');
+          // Set home position when taking off (use ref for current position)
+          setHomePosition({ ...positionRef.current });
+          break;
+        case 'land':
+          setFlightMode('landing');
+          break;
+        case 'rtl':
+          setFlightMode('rtl');
+          // Use target from RTL command if provided (base location)
+          if (target && target.lat && target.lng) {
+            setHomePosition({ lat: target.lat, lng: target.lng });
+          }
+          break;
+        case 'abort':
+          setFlightMode('idle');
+          setAltitude(0);
+          setGroundSpeed(0);
+          break;
+      }
     };
     window.addEventListener('motor-count-changed' as any, handleMotorCountChange);
     window.addEventListener('arm-state-changed' as any, handleArmStateChange);
+    window.addEventListener('flight-command' as any, handleFlightCommand);
     return () => {
       window.removeEventListener('motor-count-changed' as any, handleMotorCountChange);
       window.removeEventListener('arm-state-changed' as any, handleArmStateChange);
+      window.removeEventListener('flight-command' as any, handleFlightCommand);
     };
   }, []);
 
@@ -76,11 +142,92 @@ export function TelemetryPanel() {
       // Reset to idle values when disarmed
       setAttitude({ pitch: 0, roll: 0, yaw: 0 });
       setHeading(0);
+      setAltitude(0);
+      setGroundSpeed(0);
       setMotors(prev => prev.map(m => ({ ...m, rpm: 0, current: 0 })));
       return;
     }
     
     const interval = setInterval(() => {
+      // Update altitude based on flight mode
+      setAltitude(prev => {
+        switch (flightMode) {
+          case 'takeoff':
+            if (prev >= 50) {
+              setFlightMode('flying');
+              return 50;
+            }
+            return Math.min(50, prev + 2);
+          case 'landing':
+            if (prev <= 0) {
+              setFlightMode('idle');
+              return 0;
+            }
+            return Math.max(0, prev - 1.5);
+          case 'rtl':
+            // Maintain altitude during RTL, then descend when near home
+            if (prev <= 0) return 0;
+            return prev;
+          case 'flying':
+            return Math.max(0, Math.min(100, prev + (Math.random() - 0.5) * 2));
+          default:
+            return prev;
+        }
+      });
+      
+      // Update ground speed based on flight mode
+      setGroundSpeed(prev => {
+        switch (flightMode) {
+          case 'takeoff':
+            return Math.min(5, prev + 0.5);
+          case 'landing':
+            return Math.max(0, prev - 0.5);
+          case 'rtl':
+            return Math.min(15, Math.max(5, prev + (Math.random() - 0.5)));
+          case 'flying':
+            return Math.max(0, Math.min(20, prev + (Math.random() - 0.5) * 2));
+          default:
+            return Math.max(0, prev - 0.5);
+        }
+      });
+      
+      // Update position when flying or RTL
+      if (flightMode === 'flying' || flightMode === 'rtl' || flightMode === 'takeoff') {
+        setPosition(prev => {
+          if (flightMode === 'rtl') {
+            // Move toward home position (use ref for current home)
+            const home = homePositionRef.current;
+            const latDiff = home.lat - prev.lat;
+            const lngDiff = home.lng - prev.lng;
+            const dist = Math.sqrt(latDiff * latDiff + lngDiff * lngDiff);
+            
+            if (dist < 0.00001) {
+              // Close enough to home, start landing
+              setFlightMode('landing');
+              return prev;
+            }
+            
+            // Move 5% of the remaining distance each tick
+            const moveSpeed = 0.05;
+            return {
+              lat: prev.lat + latDiff * moveSpeed,
+              lng: prev.lng + lngDiff * moveSpeed
+            };
+          } else {
+            // Random movement during normal flight
+            return {
+              lat: prev.lat + (Math.random() - 0.5) * 0.00005,
+              lng: prev.lng + (Math.random() - 0.5) * 0.00005
+            };
+          }
+        });
+      }
+      
+      // Update distance to home using actual calculation (use refs for current values)
+      const currentPos = positionRef.current;
+      const homePos = homePositionRef.current;
+      setDistToHome(calculateDistance(currentPos.lat, currentPos.lng, homePos.lat, homePos.lng));
+      
       setAttitude(prev => ({
         pitch: prev.pitch + (Math.random() - 0.5) * 2,
         roll: prev.roll + (Math.random() - 0.5) * 2,
@@ -96,7 +243,7 @@ export function TelemetryPanel() {
       })));
     }, 100);
     return () => clearInterval(interval);
-  }, [isArmed]);
+  }, [isArmed, flightMode]);
 
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -166,16 +313,16 @@ export function TelemetryPanel() {
               <div className="space-y-1">
                 <span className="text-xs text-muted-foreground uppercase">Altitude (AGL)</span>
                 <div className="text-2xl font-mono font-bold text-primary flex items-baseline gap-1">
-                  45.2 <span className="text-sm text-muted-foreground">m</span>
+                  {altitude.toFixed(1)} <span className="text-sm text-muted-foreground">m</span>
                 </div>
-                <Progress value={45} className="h-1 bg-muted" />
+                <Progress value={Math.min((altitude / 100) * 100, 100)} className="h-1 bg-muted" />
               </div>
               <div className="space-y-1">
                 <span className="text-xs text-muted-foreground uppercase">Ground Speed</span>
                 <div className="text-2xl font-mono font-bold text-primary flex items-baseline gap-1">
-                  12.5 <span className="text-sm text-muted-foreground">m/s</span>
+                  {groundSpeed.toFixed(1)} <span className="text-sm text-muted-foreground">m/s</span>
                 </div>
-                <Progress value={60} className="h-1 bg-muted" />
+                <Progress value={Math.min((groundSpeed / 20) * 100, 100)} className="h-1 bg-muted" />
               </div>
             </div>
 
@@ -209,7 +356,7 @@ export function TelemetryPanel() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground uppercase">Dist. to Home</span>
-                <span className="font-mono text-foreground">142m</span>
+                <span className="font-mono text-foreground">{Math.round(distToHome)}m</span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground uppercase">Next Waypoint</span>
@@ -225,15 +372,15 @@ export function TelemetryPanel() {
               <div className="space-y-1 font-mono text-xs">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Lat:</span>
-                  <span className="text-foreground">34.052235°</span>
+                  <span className="text-foreground">{position.lat.toFixed(6)}°</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Lon:</span>
-                  <span className="text-foreground">-118.243683°</span>
+                  <span className="text-foreground">{position.lng.toFixed(6)}°</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">GPS Fix:</span>
-                  <span className="text-emerald-500">3D FIX</span>
+                  <span className={isArmed ? "text-emerald-500" : "text-muted-foreground"}>{isArmed ? "3D FIX" : "NO FIX"}</span>
                 </div>
               </div>
             </div>

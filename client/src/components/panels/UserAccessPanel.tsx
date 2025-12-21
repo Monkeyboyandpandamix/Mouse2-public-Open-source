@@ -156,18 +156,36 @@ export function UserAccessPanel() {
     window.dispatchEvent(new CustomEvent('session-change', { detail: session }));
   }, [session]);
 
+  const [loginError, setLoginError] = useState<string | null>(null);
+  
   const handleLogin = () => {
-    const user = users.find(u => u.username === loginForm.username && u.enabled);
-    if (user && loginForm.password === user.password) {
-      setSession({ user, isLoggedIn: true });
-      setUsers(prev => prev.map(u => 
-        u.id === user.id ? { ...u, lastLogin: new Date().toISOString() } : u
-      ));
-      toast.success(`Welcome back, ${user.fullName || user.username}!`);
-      setLoginForm({ username: "", password: "" });
-    } else {
-      toast.error("Invalid credentials or account disabled");
+    setLoginError(null);
+    const user = users.find(u => u.username === loginForm.username);
+    
+    if (!user) {
+      setLoginError("Invalid username or password");
+      toast.error("Invalid username or password");
+      return;
     }
+    
+    if (!user.enabled) {
+      setLoginError("This account has been disabled");
+      toast.error("This account has been disabled");
+      return;
+    }
+    
+    if (loginForm.password !== user.password) {
+      setLoginError("Invalid username or password");
+      toast.error("Invalid username or password");
+      return;
+    }
+    
+    setSession({ user, isLoggedIn: true });
+    setUsers(prev => prev.map(u => 
+      u.id === user.id ? { ...u, lastLogin: new Date().toISOString() } : u
+    ));
+    toast.success(`Welcome back, ${user.fullName || user.username}!`);
+    setLoginForm({ username: "", password: "" });
   };
 
   const handleLogout = () => {
@@ -383,6 +401,11 @@ export function UserAccessPanel() {
                 </Button>
               </div>
             </div>
+            {loginError && (
+              <div className="p-3 bg-destructive/10 border border-destructive/30 rounded text-destructive text-sm text-center">
+                {loginError}
+              </div>
+            )}
             <Button className="w-full" onClick={handleLogin} data-testid="button-login">
               <Key className="h-4 w-4 mr-2" />
               Login
