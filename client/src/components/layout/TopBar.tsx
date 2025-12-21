@@ -252,14 +252,14 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           </PopoverContent>
         </Popover>
         
-        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 px-3 font-mono">
-          MODE: STABILIZE
+        <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 px-2 sm:px-3 font-mono text-[10px] sm:text-xs hidden sm:flex">
+          <span className="hidden md:inline">MODE: </span>STAB
         </Badge>
 
         <Button 
           variant="destructive" 
           size="sm" 
-          className="ml-2 gap-2 font-bold animate-pulse hover:animate-none"
+          className="ml-1 sm:ml-2 gap-1 sm:gap-2 font-bold animate-pulse hover:animate-none px-2 sm:px-3"
           onClick={() => {
             if (confirm("EMERGENCY LANDING: This will find a safe clearing and land immediately. Continue?")) {
               toast.error("EMERGENCY LANDING INITIATED - Finding safe landing zone...", { duration: 5000 });
@@ -267,33 +267,34 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           }}
           data-testid="button-emergency-land"
         >
-          <ChevronDown className="h-4 w-4" />
-          EMERGENCY LAND
+          <ChevronDown className="h-3 w-3 sm:h-4 sm:w-4" />
+          <span className="hidden sm:inline">EMERGENCY</span>
+          <span className="sm:hidden">SOS</span>
         </Button>
       </div>
 
-      <div className="flex items-center gap-6">
+      <div className="flex items-center gap-2 sm:gap-4 lg:gap-6">
         {/* Telemetry Status Bar */}
-        <div className="flex items-center gap-4 text-sm font-mono text-muted-foreground">
-          <div className="flex items-center gap-2" title="GPS Satellites">
-            <Satellite className="h-4 w-4 text-primary" />
-            <span className="text-foreground">{diagnostics.gpsCount} SAT</span>
+        <div className="flex items-center gap-2 sm:gap-4 text-xs sm:text-sm font-mono text-muted-foreground">
+          <div className="flex items-center gap-1 sm:gap-2" title="GPS Satellites">
+            <Satellite className="h-3 w-3 sm:h-4 sm:w-4 text-primary" />
+            <span className="text-foreground hidden sm:inline">{diagnostics.gpsCount}</span>
           </div>
-          <div className="flex items-center gap-2" title="RC Signal Strength">
-            <Signal className="h-4 w-4 text-emerald-500" />
+          <div className="flex items-center gap-1 sm:gap-2 hidden md:flex" title="RC Signal Strength">
+            <Signal className="h-3 w-3 sm:h-4 sm:w-4 text-emerald-500" />
             <span className="text-foreground">{diagnostics.rcSignal}%</span>
           </div>
-          <div className="flex items-center gap-2" title="Telemetry Link Quality">
-            <Wifi className="h-4 w-4 text-emerald-500" />
+          <div className="flex items-center gap-1 sm:gap-2 hidden lg:flex" title="Telemetry Link Quality">
+            <Wifi className="h-3 w-3 sm:h-4 sm:w-4 text-emerald-500" />
             <span className="text-foreground">{diagnostics.telemetryLink}%</span>
           </div>
-          <div className="flex items-center gap-2" title="Drone Battery">
-            <Battery className="h-4 w-4 text-emerald-500" />
-            <span className="text-foreground">{diagnostics.batteryVoltage}V ({diagnostics.batteryPercent}%)</span>
+          <div className="flex items-center gap-1 sm:gap-2" title="Drone Battery">
+            <Battery className="h-3 w-3 sm:h-4 sm:w-4 text-emerald-500" />
+            <span className="text-foreground">{diagnostics.batteryPercent}%</span>
           </div>
         </div>
 
-        <div className="h-6 w-px bg-border" />
+        <div className="h-6 w-px bg-border hidden sm:block" />
 
         {/* Comms Panel */}
         <Popover>
@@ -330,25 +331,26 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           </PopoverContent>
         </Popover>
 
-        <div className="font-mono text-lg text-foreground tabular-nums">
+        <div className="font-mono text-sm sm:text-lg text-foreground tabular-nums hidden sm:block">
           {time.toLocaleTimeString([], { hour12: false })}
         </div>
         
         {session.isLoggedIn && (
-          <div className="flex items-center gap-2 border-l border-border pl-4">
-            <div className="flex items-center gap-2 text-sm">
-              <User className="h-4 w-4 text-primary" />
-              <span className="font-medium">{session.user?.username}</span>
-              <Badge variant="outline" className="text-[10px] capitalize">{session.user?.role}</Badge>
+          <div className="flex items-center gap-1 sm:gap-2 border-l border-border pl-2 sm:pl-4">
+            <div className="flex items-center gap-1 sm:gap-2 text-xs sm:text-sm">
+              <User className="h-3 w-3 sm:h-4 sm:w-4 text-primary" />
+              <span className="font-medium hidden md:inline">{session.user?.username}</span>
+              <Badge variant="outline" className="text-[8px] sm:text-[10px] capitalize hidden lg:flex">{session.user?.role}</Badge>
             </div>
             <Button 
               variant="ghost" 
               size="icon"
+              className="h-8 w-8 sm:h-9 sm:w-9"
               onClick={handleLogout}
               title="Log out"
               data-testid="button-logout-topbar"
             >
-              <LogOut className="h-4 w-4" />
+              <LogOut className="h-3 w-3 sm:h-4 sm:w-4" />
             </Button>
           </div>
         )}
@@ -356,10 +358,11 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
         <Button 
           variant="ghost" 
           size="icon"
+          className="h-8 w-8 sm:h-9 sm:w-9"
           onClick={onSettingsClick}
           data-testid="button-settings"
         >
-          <Settings className="h-5 w-5" />
+          <Settings className="h-4 w-4 sm:h-5 sm:w-5" />
         </Button>
       </div>
     </header>

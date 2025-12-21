@@ -93,45 +93,45 @@ export default function Home() {
         );
       case "feeds":
         return (
-          <div className="flex-1 relative bg-background p-6 overflow-auto">
-            <h2 className="text-2xl font-bold mb-4">Camera Feeds & 3D Mapping</h2>
-            <div className="grid grid-cols-2 gap-4">
+          <div className="flex-1 relative bg-background p-3 sm:p-6 overflow-auto">
+            <h2 className="text-xl sm:text-2xl font-bold mb-3 sm:mb-4">Camera Feeds & 3D Mapping</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
               <div className="bg-black rounded-lg border-2 border-primary/50 aspect-video flex items-center justify-center">
                 <div className="text-center text-muted-foreground">
-                  <p className="text-lg font-mono">GIMBAL CAM</p>
-                  <p className="text-xs">2K HD (2560x1440)</p>
+                  <p className="text-base sm:text-lg font-mono">GIMBAL CAM</p>
+                  <p className="text-[10px] sm:text-xs">2K HD (2560x1440)</p>
                 </div>
               </div>
               <div className="bg-black rounded-lg border-2 border-amber-500/50 aspect-video flex items-center justify-center">
                 <div className="text-center text-muted-foreground">
-                  <p className="text-lg font-mono">THERMAL</p>
-                  <p className="text-xs">384x288 IR</p>
+                  <p className="text-base sm:text-lg font-mono">THERMAL</p>
+                  <p className="text-[10px] sm:text-xs">384x288 IR</p>
                 </div>
               </div>
             </div>
             
             {/* 3D Mapping Section */}
-            <div className="mt-6 p-4 bg-card rounded-lg border border-border">
-              <h3 className="text-lg font-bold mb-3 flex items-center gap-2">
+            <div className="mt-4 sm:mt-6 p-3 sm:p-4 bg-card rounded-lg border border-border">
+              <h3 className="text-base sm:text-lg font-bold mb-2 sm:mb-3 flex items-center gap-2">
                 <span className="w-2 h-2 bg-primary rounded-full animate-pulse" />
                 3D Mapping / Photogrammetry
               </h3>
-              <div className="grid grid-cols-3 gap-4">
-                <div className="p-4 bg-muted/30 rounded-lg text-center">
-                  <p className="text-2xl font-bold text-primary">0</p>
-                  <p className="text-xs text-muted-foreground">Images Captured</p>
+              <div className="grid grid-cols-3 gap-2 sm:gap-4">
+                <div className="p-2 sm:p-4 bg-muted/30 rounded-lg text-center">
+                  <p className="text-lg sm:text-2xl font-bold text-primary">0</p>
+                  <p className="text-[10px] sm:text-xs text-muted-foreground">Images</p>
                 </div>
-                <div className="p-4 bg-muted/30 rounded-lg text-center">
-                  <p className="text-2xl font-bold text-amber-500">--</p>
-                  <p className="text-xs text-muted-foreground">Coverage %</p>
+                <div className="p-2 sm:p-4 bg-muted/30 rounded-lg text-center">
+                  <p className="text-lg sm:text-2xl font-bold text-amber-500">--</p>
+                  <p className="text-[10px] sm:text-xs text-muted-foreground">Coverage</p>
                 </div>
-                <div className="p-4 bg-muted/30 rounded-lg text-center">
-                  <p className="text-2xl font-bold text-emerald-500">Ready</p>
-                  <p className="text-xs text-muted-foreground">Status</p>
+                <div className="p-2 sm:p-4 bg-muted/30 rounded-lg text-center">
+                  <p className="text-lg sm:text-2xl font-bold text-emerald-500">Ready</p>
+                  <p className="text-[10px] sm:text-xs text-muted-foreground">Status</p>
                 </div>
               </div>
-              <div className="mt-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-500">
-                <strong>Note:</strong> For best 3D reconstruction, lock gimbal to nadir position. Gimbal movement during mapping can reduce quality.
+              <div className="mt-3 sm:mt-4 p-2 sm:p-3 bg-amber-500/10 border border-amber-500/30 rounded text-[10px] sm:text-xs text-amber-500">
+                <strong>Note:</strong> For best 3D reconstruction, lock gimbal to nadir position.
               </div>
             </div>
           </div>
@@ -194,7 +194,7 @@ export default function Home() {
       <div className="absolute inset-0 bg-grid-pattern opacity-20 pointer-events-none z-0" />
 
       {/* System Error Pop-ups */}
-      <div className="fixed top-16 right-4 z-[200] space-y-2 max-w-sm">
+      <div className="fixed top-16 right-2 sm:right-4 z-[200] space-y-2 max-w-[280px] sm:max-w-sm">
         {systemErrors.slice(-3).map((error) => (
           <Alert 
             key={error.id}
