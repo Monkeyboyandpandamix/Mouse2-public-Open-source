@@ -1,7 +1,7 @@
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { Search, Map as MapIcon, Layers, ZoomIn, ZoomOut, RotateCcw, Crosshair, Plane } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -156,6 +156,11 @@ export function MapInterface() {
   const [searchResult, setSearchResult] = useState<{lat: number; lon: number; name: string} | null>(null);
   const [showAdsb, setShowAdsb] = useState(true);
   const [aircraft, setAircraft] = useState<Aircraft[]>(simulatedAircraft);
+  
+  // ADS-B panel drag state (using top/left positioning)
+  const [adsbPosition, setAdsbPosition] = useState({ x: 16, y: 200 });
+  const [adsbDragging, setAdsbDragging] = useState(false);
+  const [adsbDragOffset, setAdsbDragOffset] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -208,6 +213,36 @@ export function MapInterface() {
       setIsSearching(false);
     }
   };
+
+  const handleAdsbMouseDown = (e: MouseEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setAdsbDragging(true);
+    setAdsbDragOffset({ x: e.clientX - adsbPosition.x, y: e.clientY - adsbPosition.y });
+  };
+
+  // Use window event listeners for drag tracking
+  useEffect(() => {
+    if (!adsbDragging) return;
+    
+    const handleMouseMove = (e: globalThis.MouseEvent) => {
+      const newX = Math.max(0, Math.min(window.innerWidth - 220, e.clientX - adsbDragOffset.x));
+      const newY = Math.max(0, Math.min(window.innerHeight - 100, e.clientY - adsbDragOffset.y));
+      setAdsbPosition({ x: newX, y: newY });
+    };
+    
+    const handleMouseUp = () => {
+      setAdsbDragging(false);
+    };
+    
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [adsbDragging, adsbDragOffset]);
 
   return (
     <div className="w-full h-full relative z-0 bg-background group">
@@ -361,19 +396,30 @@ export function MapInterface() {
         </div>
       </div>
 
-      {/* ADS-B Panel */}
-      <div className="absolute bottom-20 left-4 z-[400] bg-card/90 backdrop-blur rounded-lg border border-border p-3 shadow-lg min-w-[200px]">
-        <div className="flex items-center justify-between mb-2">
+      {/* ADS-B Panel - Draggable */}
+      <div 
+        className="absolute z-[400] bg-card/90 backdrop-blur rounded-lg border border-border shadow-lg min-w-[200px]"
+        style={{ left: adsbPosition.x, top: adsbPosition.y }}
+        data-testid="adsb-panel"
+      >
+        {/* Drag Handle - only this area triggers dragging */}
+        <div 
+          className={`flex items-center justify-between p-3 pb-2 select-none ${adsbDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+          onMouseDown={handleAdsbMouseDown}
+        >
           <div className="flex items-center gap-2">
             <Plane className="h-4 w-4 text-blue-500" />
             <span className="font-bold text-sm">ADS-B Traffic</span>
+            <span className="text-[10px] text-muted-foreground">(drag)</span>
           </div>
           <Switch 
             checked={showAdsb} 
             onCheckedChange={setShowAdsb}
             data-testid="switch-adsb-map"
+            onMouseDown={(e) => e.stopPropagation()}
           />
         </div>
+        <div className="px-3 pb-3">
         {showAdsb && (
           <div className="space-y-1.5 max-h-32 overflow-auto">
             {aircraft.map(ac => (
@@ -398,6 +444,7 @@ export function MapInterface() {
             ⚠️ TRAFFIC ALERT: {aircraft.filter(a => a.threat === 'high').length} nearby aircraft
           </div>
         )}
+        </div>
       </div>
 
       {/* Zoom Level Indicator */}
