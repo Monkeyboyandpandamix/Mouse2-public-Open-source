@@ -275,7 +275,11 @@ export function MissionPlanningPanel() {
                     ? "border-primary bg-primary/10" 
                     : "border-transparent hover:bg-muted/50"
                 }`}
-                onClick={() => setSelectedMission(mission.id)}
+                onClick={() => {
+                  setSelectedMission(mission.id);
+                  // Notify MapInterface of mission selection
+                  window.dispatchEvent(new CustomEvent('mission-selected', { detail: { missionId: mission.id } }));
+                }}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">

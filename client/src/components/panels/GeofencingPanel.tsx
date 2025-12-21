@@ -72,6 +72,8 @@ export function GeofencingPanel() {
 
   useEffect(() => {
     localStorage.setItem('mouse_geofence_zones', JSON.stringify(zones));
+    // Dispatch custom event for same-tab updates to MapInterface
+    window.dispatchEvent(new CustomEvent('geofence-updated'));
   }, [zones]);
 
   const handleSearch = async () => {

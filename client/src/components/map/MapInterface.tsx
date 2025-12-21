@@ -1,4 +1,4 @@
-import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, Polygon, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { useEffect, useState, type MouseEvent } from "react";
@@ -9,6 +9,32 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { useQuery } from "@tanstack/react-query";
+
+interface GeofenceZone {
+  id: string;
+  name: string;
+  type: "circle" | "polygon";
+  enabled: boolean;
+  action: "rtl" | "land" | "hover" | "warn";
+  center?: { lat: number; lng: number };
+  radius?: number;
+  points?: { lat: number; lng: number }[];
+  maxAltitude?: number;
+  minAltitude?: number;
+}
+
+interface Waypoint {
+  id: number;
+  missionId: number;
+  order: number;
+  latitude: number;
+  longitude: number;
+  altitude: number;
+  speed: number | null;
+  action: string | null;
+  hoverTime: number | null;
+}
 
 import icon from "leaflet/dist/images/marker-icon.png";
 import iconShadow from "leaflet/dist/images/marker-shadow.png";
@@ -161,6 +187,85 @@ export function MapInterface() {
   const [adsbPosition, setAdsbPosition] = useState({ x: 16, y: 200 });
   const [adsbDragging, setAdsbDragging] = useState(false);
   const [adsbDragOffset, setAdsbDragOffset] = useState({ x: 0, y: 0 });
+  
+  // Shared state for geofence zones and waypoints
+  const [geofenceZones, setGeofenceZones] = useState<GeofenceZone[]>([]);
+  const [selectedMissionId, setSelectedMissionId] = useState<number | null>(null);
+  
+  // Fetch waypoints for selected mission
+  const { data: missionWaypoints = [] } = useQuery<Waypoint[]>({
+    queryKey: ["/api/missions", selectedMissionId, "waypoints"],
+    queryFn: async () => {
+      if (!selectedMissionId) return [];
+      const res = await fetch(`/api/missions/${selectedMissionId}/waypoints`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!selectedMissionId,
+  });
+  
+  // Fetch all missions to get the first one as default
+  const { data: missions = [] } = useQuery<{ id: number; name: string }[]>({
+    queryKey: ["/api/missions"],
+    queryFn: async () => {
+      const res = await fetch("/api/missions");
+      if (!res.ok) return [];
+      return res.json();
+    },
+  });
+  
+  // Load geofence zones from localStorage and listen for updates
+  useEffect(() => {
+    const loadZones = () => {
+      const saved = localStorage.getItem('mouse_geofence_zones');
+      if (saved) {
+        try {
+          setGeofenceZones(JSON.parse(saved));
+        } catch (e) {
+          console.error('Failed to parse geofence zones:', e);
+        }
+      }
+    };
+    
+    loadZones();
+    
+    // Listen for geofence updates from GeofencingPanel
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'mouse_geofence_zones') {
+        loadZones();
+      }
+    };
+    
+    // Custom event for same-tab updates
+    const handleGeofenceUpdate = () => loadZones();
+    
+    window.addEventListener('storage', handleStorageChange);
+    window.addEventListener('geofence-updated', handleGeofenceUpdate);
+    
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('geofence-updated', handleGeofenceUpdate);
+    };
+  }, []);
+  
+  // Auto-select first mission if none selected (only once)
+  const [hasAutoSelected, setHasAutoSelected] = useState(false);
+  useEffect(() => {
+    if (missions.length > 0 && !selectedMissionId && !hasAutoSelected) {
+      setSelectedMissionId(missions[0].id);
+      setHasAutoSelected(true);
+    }
+  }, [missions, selectedMissionId, hasAutoSelected]);
+  
+  // Listen for mission selection changes from MissionPlanningPanel
+  useEffect(() => {
+    const handleMissionSelect = (e: CustomEvent<{ missionId: number }>) => {
+      setSelectedMissionId(e.detail.missionId);
+    };
+    
+    window.addEventListener('mission-selected' as any, handleMissionSelect);
+    return () => window.removeEventListener('mission-selected' as any, handleMissionSelect);
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -289,22 +394,84 @@ export function MapInterface() {
            <Popup>Home Point</Popup>
         </Marker>
 
-        {/* Waypoints */}
-        <Marker position={[34.0530, -118.2435]} icon={WaypointIcon(1)} />
-        <Marker position={[34.0528, -118.2425]} icon={WaypointIcon(2)} />
+        {/* Mission Waypoints */}
+        {missionWaypoints.map((wp, idx) => (
+          <Marker 
+            key={wp.id} 
+            position={[wp.latitude, wp.longitude]} 
+            icon={WaypointIcon(wp.order)}
+          >
+            <Popup>
+              <div className="font-mono text-sm">
+                <strong>Waypoint {wp.order}</strong><br/>
+                Alt: {wp.altitude}m | Speed: {wp.speed || 'Auto'} m/s<br/>
+                {wp.action && <span>Action: {wp.action}</span>}
+              </div>
+            </Popup>
+          </Marker>
+        ))}
 
-        {/* Flight Path */}
-        <Polyline 
-          positions={flightPath} 
-          pathOptions={{ color: 'hsl(190 90% 50%)', weight: 2, dashArray: '5, 10' }} 
-        />
+        {/* Mission Flight Path */}
+        {missionWaypoints.length > 0 && (
+          <Polyline 
+            positions={[[34.0520, -118.2435], ...missionWaypoints.map(wp => [wp.latitude, wp.longitude] as [number, number])]} 
+            pathOptions={{ color: 'hsl(190 90% 50%)', weight: 2, dashArray: '5, 10' }} 
+          />
+        )}
         
-        {/* Safe Zone / GeoFence */}
-        <Circle 
-          center={[34.0522, -118.2437]} 
-          pathOptions={{ color: 'hsl(0 85% 60%)', fillColor: 'hsl(0 85% 60%)', fillOpacity: 0.1, weight: 1, dashArray: '4' }} 
-          radius={200} 
-        />
+        {/* Geofence Zones */}
+        {geofenceZones.filter(z => z.enabled).map(zone => (
+          zone.type === 'circle' && zone.center && zone.radius ? (
+            <Circle 
+              key={zone.id}
+              center={[zone.center.lat, zone.center.lng]} 
+              pathOptions={{ 
+                color: zone.action === 'rtl' ? 'hsl(0 85% 60%)' : 
+                       zone.action === 'land' ? 'hsl(45 85% 60%)' : 
+                       zone.action === 'hover' ? 'hsl(200 85% 60%)' : 'hsl(280 85% 60%)',
+                fillColor: zone.action === 'rtl' ? 'hsl(0 85% 60%)' : 
+                           zone.action === 'land' ? 'hsl(45 85% 60%)' : 
+                           zone.action === 'hover' ? 'hsl(200 85% 60%)' : 'hsl(280 85% 60%)',
+                fillOpacity: 0.1, 
+                weight: 2, 
+                dashArray: '4' 
+              }} 
+              radius={zone.radius} 
+            >
+              <Popup>
+                <div className="font-mono text-sm">
+                  <strong>{zone.name}</strong><br/>
+                  Action: {zone.action.toUpperCase()}<br/>
+                  Radius: {zone.radius}m
+                </div>
+              </Popup>
+            </Circle>
+          ) : zone.type === 'polygon' && zone.points && zone.points.length >= 3 ? (
+            <Polygon
+              key={zone.id}
+              positions={zone.points.map(p => [p.lat, p.lng] as [number, number])}
+              pathOptions={{ 
+                color: zone.action === 'rtl' ? 'hsl(0 85% 60%)' : 
+                       zone.action === 'land' ? 'hsl(45 85% 60%)' : 
+                       zone.action === 'hover' ? 'hsl(200 85% 60%)' : 'hsl(280 85% 60%)',
+                fillColor: zone.action === 'rtl' ? 'hsl(0 85% 60%)' : 
+                           zone.action === 'land' ? 'hsl(45 85% 60%)' : 
+                           zone.action === 'hover' ? 'hsl(200 85% 60%)' : 'hsl(280 85% 60%)',
+                fillOpacity: 0.1, 
+                weight: 2, 
+                dashArray: '4' 
+              }}
+            >
+              <Popup>
+                <div className="font-mono text-sm">
+                  <strong>{zone.name}</strong><br/>
+                  Action: {zone.action.toUpperCase()}<br/>
+                  Points: {zone.points.length}
+                </div>
+              </Popup>
+            </Polygon>
+          ) : null
+        ))}
 
         {/* ADS-B Aircraft */}
         {showAdsb && aircraft.map(ac => (
