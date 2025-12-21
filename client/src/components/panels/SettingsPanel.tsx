@@ -42,7 +42,30 @@ export function SettingsPanel() {
     lidarEnabled: true,
     gpsCanId: "1",
     gpsEnabled: true,
-    customSensors: [] as { name: string; type: string; address: string }[],
+    customSensors: [] as { name: string; type: string; address: string; port: string }[],
+    // Orange Cube+ Ports
+    i2c1Enabled: true,
+    i2c2Enabled: true,
+    spi1Enabled: false,
+    spi2Enabled: false,
+    uart1Protocol: "mavlink",
+    uart2Protocol: "gps",
+    uart3Protocol: "none",
+    uart4Protocol: "none",
+    can1Enabled: true,
+    can2Enabled: true,
+    adc1Enabled: true,
+    adc2Enabled: false,
+    pwmOutputs: "8",
+    // Raspberry Pi GPIO
+    gpioSpeaker: "18",
+    gpioLed: "23",
+    gpioRelay: "24",
+    gpioButton: "25",
+    // USB Devices
+    usbCamera: "/dev/video0",
+    usbGps: "none",
+    usbRadio: "none",
   });
 
   const [inputSettings, setInputSettings] = useState({
@@ -147,6 +170,26 @@ export function SettingsPanel() {
       gpsCanId: "1",
       gpsEnabled: true,
       customSensors: [],
+      i2c1Enabled: true,
+      i2c2Enabled: true,
+      spi1Enabled: false,
+      spi2Enabled: false,
+      uart1Protocol: "mavlink",
+      uart2Protocol: "gps",
+      uart3Protocol: "none",
+      uart4Protocol: "none",
+      can1Enabled: true,
+      can2Enabled: true,
+      adc1Enabled: true,
+      adc2Enabled: false,
+      pwmOutputs: "8",
+      gpioSpeaker: "18",
+      gpioLed: "23",
+      gpioRelay: "24",
+      gpioButton: "25",
+      usbCamera: "/dev/video0",
+      usbGps: "none",
+      usbRadio: "none",
     });
     setInputSettings({
       rcProtocol: "sbus",
@@ -183,7 +226,7 @@ export function SettingsPanel() {
   const addCustomSensor = () => {
     setSensorSettings(prev => ({
       ...prev,
-      customSensors: [...prev.customSensors, { name: "", type: "i2c", address: "" }],
+      customSensors: [...prev.customSensors, { name: "", type: "i2c", address: "", port: "1" }],
     }));
     setUnsavedChanges(true);
   };
@@ -512,9 +555,286 @@ export function SettingsPanel() {
           </TabsContent>
 
           <TabsContent value="sensors" className="space-y-4 mt-4">
+            {/* Orange Cube+ Ports */}
             <Card>
               <CardHeader>
-                <CardTitle>LiDAR Sensor (I2C Port 2)</CardTitle>
+                <CardTitle>Orange Cube+ I/O Ports</CardTitle>
+                <CardDescription>Configure flight controller input/output ports</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-3 bg-muted/50 rounded-lg space-y-3">
+                    <h4 className="font-medium text-sm">I2C Buses</h4>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm">I2C 1 (External)</Label>
+                      <Switch 
+                        checked={sensorSettings.i2c1Enabled}
+                        onCheckedChange={(v) => updateSetting(setSensorSettings, "i2c1Enabled", v)}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm">I2C 2 (Internal)</Label>
+                      <Switch 
+                        checked={sensorSettings.i2c2Enabled}
+                        onCheckedChange={(v) => updateSetting(setSensorSettings, "i2c2Enabled", v)}
+                      />
+                    </div>
+                  </div>
+                  <div className="p-3 bg-muted/50 rounded-lg space-y-3">
+                    <h4 className="font-medium text-sm">SPI Buses</h4>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm">SPI 1 (External)</Label>
+                      <Switch 
+                        checked={sensorSettings.spi1Enabled}
+                        onCheckedChange={(v) => updateSetting(setSensorSettings, "spi1Enabled", v)}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm">SPI 2 (Internal)</Label>
+                      <Switch 
+                        checked={sensorSettings.spi2Enabled}
+                        onCheckedChange={(v) => updateSetting(setSensorSettings, "spi2Enabled", v)}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-3">
+                  <h4 className="font-medium text-sm">UART/Serial Ports</h4>
+                  <div className="grid grid-cols-2 gap-4">
+                    {["uart1", "uart2", "uart3", "uart4"].map((uart, idx) => (
+                      <div key={uart} className="space-y-2">
+                        <Label>TELEM{idx + 1} / UART{idx + 1}</Label>
+                        <Select 
+                          value={(sensorSettings as any)[`${uart}Protocol`]}
+                          onValueChange={(v) => updateSetting(setSensorSettings, `${uart}Protocol`, v)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">Disabled</SelectItem>
+                            <SelectItem value="mavlink">MAVLink</SelectItem>
+                            <SelectItem value="gps">GPS</SelectItem>
+                            <SelectItem value="rangefinder">Rangefinder</SelectItem>
+                            <SelectItem value="sbus">SBUS RC</SelectItem>
+                            <SelectItem value="frsky">FrSky Telemetry</SelectItem>
+                            <SelectItem value="esc">ESC Telemetry</SelectItem>
+                            <SelectItem value="lidar">LiDAR</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <Separator />
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-3 bg-muted/50 rounded-lg space-y-3">
+                    <h4 className="font-medium text-sm">CAN Buses</h4>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm">CAN 1</Label>
+                      <Switch 
+                        checked={sensorSettings.can1Enabled}
+                        onCheckedChange={(v) => updateSetting(setSensorSettings, "can1Enabled", v)}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm">CAN 2</Label>
+                      <Switch 
+                        checked={sensorSettings.can2Enabled}
+                        onCheckedChange={(v) => updateSetting(setSensorSettings, "can2Enabled", v)}
+                      />
+                    </div>
+                  </div>
+                  <div className="p-3 bg-muted/50 rounded-lg space-y-3">
+                    <h4 className="font-medium text-sm">ADC Inputs</h4>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm">ADC 1 (Battery)</Label>
+                      <Switch 
+                        checked={sensorSettings.adc1Enabled}
+                        onCheckedChange={(v) => updateSetting(setSensorSettings, "adc1Enabled", v)}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm">ADC 2 (Analog)</Label>
+                      <Switch 
+                        checked={sensorSettings.adc2Enabled}
+                        onCheckedChange={(v) => updateSetting(setSensorSettings, "adc2Enabled", v)}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>PWM Outputs (Main + Aux)</Label>
+                  <Select 
+                    value={sensorSettings.pwmOutputs}
+                    onValueChange={(v) => updateSetting(setSensorSettings, "pwmOutputs", v)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="4">4 outputs</SelectItem>
+                      <SelectItem value="6">6 outputs</SelectItem>
+                      <SelectItem value="8">8 outputs (standard)</SelectItem>
+                      <SelectItem value="14">14 outputs (with AUX)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Raspberry Pi GPIO */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Raspberry Pi GPIO</CardTitle>
+                <CardDescription>Configure GPIO pins for peripherals</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Speaker Output (PWM)</Label>
+                    <Select 
+                      value={sensorSettings.gpioSpeaker}
+                      onValueChange={(v) => updateSetting(setSensorSettings, "gpioSpeaker", v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="12">GPIO 12 (PWM0)</SelectItem>
+                        <SelectItem value="13">GPIO 13 (PWM1)</SelectItem>
+                        <SelectItem value="18">GPIO 18 (PWM0)</SelectItem>
+                        <SelectItem value="19">GPIO 19 (PWM1)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Status LED</Label>
+                    <Select 
+                      value={sensorSettings.gpioLed}
+                      onValueChange={(v) => updateSetting(setSensorSettings, "gpioLed", v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Disabled</SelectItem>
+                        <SelectItem value="22">GPIO 22</SelectItem>
+                        <SelectItem value="23">GPIO 23</SelectItem>
+                        <SelectItem value="27">GPIO 27</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Relay/Gripper Output</Label>
+                    <Select 
+                      value={sensorSettings.gpioRelay}
+                      onValueChange={(v) => updateSetting(setSensorSettings, "gpioRelay", v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Disabled</SelectItem>
+                        <SelectItem value="24">GPIO 24</SelectItem>
+                        <SelectItem value="25">GPIO 25</SelectItem>
+                        <SelectItem value="26">GPIO 26</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Button Input</Label>
+                    <Select 
+                      value={sensorSettings.gpioButton}
+                      onValueChange={(v) => updateSetting(setSensorSettings, "gpioButton", v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Disabled</SelectItem>
+                        <SelectItem value="5">GPIO 5</SelectItem>
+                        <SelectItem value="6">GPIO 6</SelectItem>
+                        <SelectItem value="25">GPIO 25</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* USB Devices */}
+            <Card>
+              <CardHeader>
+                <CardTitle>USB Devices</CardTitle>
+                <CardDescription>Configure USB-connected peripherals</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>USB Camera</Label>
+                    <Select 
+                      value={sensorSettings.usbCamera}
+                      onValueChange={(v) => updateSetting(setSensorSettings, "usbCamera", v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        <SelectItem value="/dev/video0">/dev/video0</SelectItem>
+                        <SelectItem value="/dev/video1">/dev/video1</SelectItem>
+                        <SelectItem value="/dev/video2">/dev/video2</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>USB GPS</Label>
+                    <Select 
+                      value={sensorSettings.usbGps}
+                      onValueChange={(v) => updateSetting(setSensorSettings, "usbGps", v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        <SelectItem value="/dev/ttyUSB0">/dev/ttyUSB0</SelectItem>
+                        <SelectItem value="/dev/ttyUSB1">/dev/ttyUSB1</SelectItem>
+                        <SelectItem value="/dev/ttyACM0">/dev/ttyACM0</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>USB Radio (SiK)</Label>
+                    <Select 
+                      value={sensorSettings.usbRadio}
+                      onValueChange={(v) => updateSetting(setSensorSettings, "usbRadio", v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        <SelectItem value="/dev/ttyUSB0">/dev/ttyUSB0</SelectItem>
+                        <SelectItem value="/dev/ttyUSB1">/dev/ttyUSB1</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Sensors */}
+            <Card>
+              <CardHeader>
+                <CardTitle>LiDAR Sensor</CardTitle>
                 <CardDescription>Precision distance and obstacle detection</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -551,8 +871,8 @@ export function SettingsPanel() {
 
             <Card>
               <CardHeader>
-                <CardTitle>HERE3+ GPS/Compass (CAN 2)</CardTitle>
-                <CardDescription>Navigation and positioning system</CardDescription>
+                <CardTitle>HERE3+ GPS/Compass</CardTitle>
+                <CardDescription>Navigation and positioning via CAN</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
@@ -575,12 +895,13 @@ export function SettingsPanel() {
               </CardContent>
             </Card>
 
+            {/* Custom Sensors */}
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <div>
-                    <CardTitle>Additional Sensors</CardTitle>
-                    <CardDescription>Custom sensor configurations</CardDescription>
+                    <CardTitle>Custom Sensors</CardTitle>
+                    <CardDescription>Add additional sensors with any connection type</CardDescription>
                   </div>
                   <Button variant="outline" size="sm" onClick={addCustomSensor}>
                     <Plus className="h-4 w-4 mr-2" />
@@ -609,7 +930,7 @@ export function SettingsPanel() {
                           placeholder="e.g., Rangefinder"
                         />
                       </div>
-                      <div className="w-32 space-y-2">
+                      <div className="w-28 space-y-2">
                         <Label>Type</Label>
                         <Select
                           value={sensor.type}
@@ -629,10 +950,26 @@ export function SettingsPanel() {
                             <SelectItem value="uart">UART</SelectItem>
                             <SelectItem value="gpio">GPIO</SelectItem>
                             <SelectItem value="can">CAN</SelectItem>
+                            <SelectItem value="usb">USB</SelectItem>
+                            <SelectItem value="adc">ADC</SelectItem>
+                            <SelectItem value="pwm">PWM</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
-                      <div className="w-32 space-y-2">
+                      <div className="w-20 space-y-2">
+                        <Label>Port</Label>
+                        <Input
+                          value={sensor.port}
+                          onChange={(e) => {
+                            const updated = [...sensorSettings.customSensors];
+                            updated[index].port = e.target.value;
+                            setSensorSettings(prev => ({ ...prev, customSensors: updated }));
+                            setUnsavedChanges(true);
+                          }}
+                          placeholder="1"
+                        />
+                      </div>
+                      <div className="w-24 space-y-2">
                         <Label>Address</Label>
                         <Input
                           value={sensor.address}
