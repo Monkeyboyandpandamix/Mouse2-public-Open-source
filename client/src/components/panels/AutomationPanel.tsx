@@ -83,6 +83,7 @@ export function AutomationPanel() {
   const [selectedScript, setSelectedScript] = useState<AutomationScript | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedScript, setEditedScript] = useState<AutomationScript | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const handleCreateNew = () => {
     const newScript: AutomationScript = {
@@ -115,12 +116,18 @@ async function run() {
   };
 
   const handleDeleteScript = (id: string) => {
-    setScripts(prev => prev.filter(s => s.id !== id));
-    if (selectedScript?.id === id) {
-      setSelectedScript(null);
-      setEditedScript(null);
+    if (deleteConfirmId === id) {
+      setScripts(prev => prev.filter(s => s.id !== id));
+      if (selectedScript?.id === id) {
+        setSelectedScript(null);
+        setEditedScript(null);
+      }
+      setDeleteConfirmId(null);
+      toast.success("Script deleted");
+    } else {
+      setDeleteConfirmId(id);
+      setTimeout(() => setDeleteConfirmId(null), 3000);
     }
-    toast.success("Script deleted");
   };
 
   const handleToggleScript = (id: string, enabled: boolean) => {
@@ -224,12 +231,17 @@ async function run() {
                       </Button>
                       <Button 
                         size="icon" 
-                        variant="ghost" 
-                        className="h-6 w-6 text-red-500"
+                        variant={deleteConfirmId === script.id ? "destructive" : "ghost"}
+                        className={`h-6 w-6 ${deleteConfirmId === script.id ? '' : 'text-red-500'}`}
                         onClick={(e) => { e.stopPropagation(); handleDeleteScript(script.id); }}
+                        title={deleteConfirmId === script.id ? "Click again to confirm delete" : "Delete script"}
                         data-testid={`button-delete-script-${script.id}`}
                       >
-                        <Trash2 className="h-3 w-3" />
+                        {deleteConfirmId === script.id ? (
+                          <span className="text-[10px] font-bold">?</span>
+                        ) : (
+                          <Trash2 className="h-3 w-3" />
+                        )}
                       </Button>
                     </div>
                   </div>

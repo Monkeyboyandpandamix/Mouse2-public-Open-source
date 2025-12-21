@@ -7,7 +7,8 @@ import {
   Settings, 
   FileText,
   Code,
-  Users
+  Users,
+  Terminal
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
     { id: "feeds", icon: Video, label: "Camera Feeds" },
     { id: "logs", icon: FileText, label: "Flight Logs" },
     { id: "scripts", icon: Code, label: "Automation" },
+    { id: "terminal", icon: Terminal, label: "Commands" },
     { id: "users", icon: Users, label: "User Access" },
     { id: "settings", icon: Settings, label: "Settings" },
   ];

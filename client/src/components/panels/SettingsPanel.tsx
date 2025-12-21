@@ -225,6 +225,7 @@ export function SettingsPanel() {
     gimbal: "Skydroid C12 2K (2560x1440 HD + 384x288 Thermal)",
     motors: "Mad Motors XP6S Arms (x4)",
     pdb: "Matek PDB-HEX X Class 12S (6-60V, 5A, 264A sense)",
+    motorCount: "4",
   });
 
   const [editingHardware, setEditingHardware] = useState(false);
@@ -240,6 +241,8 @@ export function SettingsPanel() {
 
   const saveHardwareConfig = () => {
     localStorage.setItem('mouse_hardware_config', JSON.stringify(hardwareConfig));
+    localStorage.setItem('mouse_motor_count', hardwareConfig.motorCount);
+    window.dispatchEvent(new CustomEvent('motor-count-changed', { detail: parseInt(hardwareConfig.motorCount) }));
     setEditingHardware(false);
     toast.success("Hardware configuration saved");
   };
@@ -584,6 +587,26 @@ export function SettingsPanel() {
                       ) : (
                         <p className="font-medium text-sm">{hardwareConfig.motors}</p>
                       )}
+                    </div>
+                    <div className="p-3 bg-primary/10 rounded-lg border border-primary/30">
+                      <Label className="text-xs text-muted-foreground">Motor Count</Label>
+                      <Select 
+                        value={hardwareConfig.motorCount}
+                        onValueChange={(v) => setHardwareConfig(prev => ({ ...prev, motorCount: v }))}
+                        disabled={!editingHardware}
+                      >
+                        <SelectTrigger className="mt-1" data-testid="select-motor-count">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="4">4 Motors (Quadcopter)</SelectItem>
+                          <SelectItem value="5">5 Motors (Pentacopter)</SelectItem>
+                          <SelectItem value="6">6 Motors (Hexacopter)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[10px] text-muted-foreground mt-1">
+                        Telemetry will display controls for selected motor count
+                      </p>
                     </div>
                   </div>
                 </div>

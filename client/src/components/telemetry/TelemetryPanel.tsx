@@ -2,38 +2,50 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowUp, Navigation, Gauge, Thermometer, Zap, Activity } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { ArrowUp, Navigation, Gauge, Thermometer, Zap, Activity, AlertTriangle } from "lucide-react";
 import { AttitudeIndicator } from "./AttitudeIndicator";
 import { GyroscopeIndicator } from "./GyroscopeIndicator";
 import { useState, useEffect } from "react";
+import { Badge } from "@/components/ui/badge";
 
-interface MotorTelemetry {
-  motor1Rpm: number;
-  motor2Rpm: number;
-  motor3Rpm: number;
-  motor4Rpm: number;
-  motor1Temp: number;
-  motor2Temp: number;
-  motor3Temp: number;
-  motor4Temp: number;
-  motor1Current: number;
-  motor2Current: number;
-  motor3Current: number;
-  motor4Current: number;
-  escTemp: number;
+interface MotorData {
+  rpm: number;
+  temp: number;
+  current: number;
+  status: 'ok' | 'warning' | 'error';
 }
 
 export function TelemetryPanel() {
-  const { data: motorTelemetry } = useQuery<MotorTelemetry[]>({
-    queryKey: ["/api/motor-telemetry/recent"],
-    refetchInterval: 1000,
+  const [motorCount, setMotorCount] = useState(() => {
+    const saved = localStorage.getItem('mouse_motor_count');
+    return saved ? parseInt(saved) : 4;
   });
 
-  const latestMotor = motorTelemetry?.[0];
+  const [motors, setMotors] = useState<MotorData[]>([]);
 
   const [attitude, setAttitude] = useState({ pitch: -2, roll: 0, yaw: 0 });
   const [heading, setHeading] = useState(315);
+
+  useEffect(() => {
+    const handleMotorCountChange = (e: CustomEvent) => {
+      setMotorCount(e.detail);
+    };
+    window.addEventListener('motor-count-changed' as any, handleMotorCountChange);
+    return () => window.removeEventListener('motor-count-changed' as any, handleMotorCountChange);
+  }, []);
+
+  useEffect(() => {
+    const newMotors: MotorData[] = [];
+    for (let i = 0; i < motorCount; i++) {
+      newMotors.push({
+        rpm: 3200 + Math.random() * 400 + i * 50,
+        temp: 42 + Math.random() * 8 + i * 2,
+        current: 7.5 + Math.random() * 2 + i * 0.3,
+        status: 'ok'
+      });
+    }
+    setMotors(newMotors);
+  }, [motorCount]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -43,6 +55,13 @@ export function TelemetryPanel() {
         yaw: (prev.yaw + 0.5) % 360,
       }));
       setHeading(prev => (prev + 0.2) % 360);
+      setMotors(prev => prev.map(m => ({
+        ...m,
+        rpm: m.rpm + (Math.random() - 0.5) * 100,
+        temp: Math.max(35, Math.min(70, m.temp + (Math.random() - 0.5) * 0.5)),
+        current: Math.max(5, Math.min(15, m.current + (Math.random() - 0.5) * 0.2)),
+        status: m.temp > 60 ? 'warning' : m.temp > 70 ? 'error' : 'ok'
+      })));
     }, 100);
     return () => clearInterval(interval);
   }, []);
@@ -156,28 +175,35 @@ export function TelemetryPanel() {
           </TabsContent>
 
           <TabsContent value="motors" className="flex-1 overflow-y-auto px-4 mt-2 space-y-4">
+            <div className="flex items-center justify-between mb-2">
+              <Badge variant="outline" className="text-primary border-primary/30">
+                {motorCount} Motors Configured
+              </Badge>
+            </div>
+
             <div className="space-y-3">
               <span className="text-xs text-muted-foreground uppercase font-bold flex items-center gap-2">
                 <Zap className="h-3 w-3" /> Motor RPM
               </span>
               
-              {[1, 2, 3, 4].map((motor) => {
-                const rpm = latestMotor?.[`motor${motor}Rpm` as keyof MotorTelemetry] ?? (3200 + motor * 100);
-                return (
-                  <div key={motor} className="space-y-1">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-muted-foreground">Motor {motor}</span>
-                      <span className="font-mono text-primary">{rpm} RPM</span>
-                    </div>
-                    <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-primary" 
-                        style={{ width: `${Math.min((Number(rpm) / 5000) * 100, 100)}%` }}
-                      />
-                    </div>
+              {motors.map((motor, idx) => (
+                <div key={idx} className="space-y-1" data-testid={`motor-rpm-${idx + 1}`}>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground flex items-center gap-1">
+                      Motor {idx + 1}
+                      {motor.status === 'warning' && <AlertTriangle className="h-3 w-3 text-amber-500" />}
+                      {motor.status === 'error' && <AlertTriangle className="h-3 w-3 text-red-500" />}
+                    </span>
+                    <span className="font-mono text-primary">{Math.round(motor.rpm)} RPM</span>
                   </div>
-                );
-              })}
+                  <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-primary" 
+                      style={{ width: `${Math.min((motor.rpm / 5000) * 100, 100)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
 
             <Separator />
@@ -187,23 +213,22 @@ export function TelemetryPanel() {
                 <Thermometer className="h-3 w-3" /> Motor Temps
               </span>
               
-              {[1, 2, 3, 4].map((motor) => {
-                const temp = latestMotor?.[`motor${motor}Temp` as keyof MotorTelemetry] ?? (45 + motor);
-                return (
-                  <div key={motor} className="space-y-1">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-muted-foreground">Motor {motor}</span>
-                      <span className="font-mono text-amber-500">{temp}°C</span>
-                    </div>
-                    <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-amber-500" 
-                        style={{ width: `${Math.min((Number(temp) / 80) * 100, 100)}%` }}
-                      />
-                    </div>
+              {motors.map((motor, idx) => (
+                <div key={idx} className="space-y-1" data-testid={`motor-temp-${idx + 1}`}>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Motor {idx + 1}</span>
+                    <span className={`font-mono ${motor.temp > 60 ? 'text-red-500' : motor.temp > 50 ? 'text-amber-500' : 'text-amber-400'}`}>
+                      {motor.temp.toFixed(1)}°C
+                    </span>
                   </div>
-                );
-              })}
+                  <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full ${motor.temp > 60 ? 'bg-red-500' : motor.temp > 50 ? 'bg-amber-500' : 'bg-amber-400'}`}
+                      style={{ width: `${Math.min((motor.temp / 80) * 100, 100)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
 
             <Separator />
@@ -213,23 +238,20 @@ export function TelemetryPanel() {
                 <Activity className="h-3 w-3" /> Current Draw
               </span>
               
-              {[1, 2, 3, 4].map((motor) => {
-                const current = latestMotor?.[`motor${motor}Current` as keyof MotorTelemetry] ?? (8 + motor * 0.5);
-                return (
-                  <div key={motor} className="space-y-1">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-muted-foreground">Motor {motor}</span>
-                      <span className="font-mono text-emerald-500">{current}A</span>
-                    </div>
-                    <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-emerald-500" 
-                        style={{ width: `${Math.min((Number(current) / 20) * 100, 100)}%` }}
-                      />
-                    </div>
+              {motors.map((motor, idx) => (
+                <div key={idx} className="space-y-1" data-testid={`motor-current-${idx + 1}`}>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Motor {idx + 1}</span>
+                    <span className="font-mono text-emerald-500">{motor.current.toFixed(1)}A</span>
                   </div>
-                );
-              })}
+                  <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-emerald-500" 
+                      style={{ width: `${Math.min((motor.current / 20) * 100, 100)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
           </TabsContent>
 
@@ -264,7 +286,7 @@ export function TelemetryPanel() {
                   <span className="text-muted-foreground flex items-center gap-1">
                     <Thermometer className="h-3 w-3" /> ESC Temp
                   </span>
-                  <span className="font-mono text-amber-500">{latestMotor?.escTemp ?? 48}°C</span>
+                  <span className="font-mono text-amber-500">48°C</span>
                 </div>
                 <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
                   <div className="h-full bg-amber-500 w-[48%]" />

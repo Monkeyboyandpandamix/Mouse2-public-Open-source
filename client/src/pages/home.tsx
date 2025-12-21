@@ -11,6 +11,7 @@ import { TrackingPanel } from "@/components/panels/TrackingPanel";
 import { SpeakerPanel } from "@/components/panels/SpeakerPanel";
 import { FlightLogsPanel } from "@/components/panels/FlightLogsPanel";
 import { AutomationPanel } from "@/components/panels/AutomationPanel";
+import { TerminalCommandsPanel } from "@/components/panels/TerminalCommandsPanel";
 import { UserAccessPanel } from "@/components/panels/UserAccessPanel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, X, Wifi, Battery, Satellite } from "lucide-react";
@@ -143,6 +144,12 @@ export default function Home() {
         return (
           <div className="flex-1 relative overflow-hidden">
             <AutomationPanel />
+          </div>
+        );
+      case "terminal":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <TerminalCommandsPanel />
           </div>
         );
       case "users":
