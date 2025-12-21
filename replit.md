@@ -45,6 +45,11 @@ Preferred communication style: Simple, everyday language.
 - Base location configuration in Settings for RTL functionality
 - Auto system diagnostics with manual override in top bar
 - Operations console with lazy loading and bounded log buffer
+- User authentication with role-based access (admin, operator, viewer)
+- Automation scripts panel for custom flight automation with triggers (takeoff, landing, waypoint, battery low, GPS lost, disconnect)
+- GPS-denied navigation failsafe using visual odometry, dead reckoning, and flight path history
+- Autonomous mission completion on ground control disconnect with configurable RTL/hover/land actions
+- Flight log management with delete functionality and confirmation dialogs
 
 ### Hardware Configuration
 - **Companion Computer**: Raspberry Pi 5 (16GB) running Trixie 13.2
