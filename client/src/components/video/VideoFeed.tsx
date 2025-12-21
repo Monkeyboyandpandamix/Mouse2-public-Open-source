@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { Maximize2, Minimize2, Eye, EyeOff, Flame, ZoomIn, ZoomOut, RotateCcw, Move, Camera, Video, Download } from "lucide-react";
+import { Maximize2, Minimize2, Eye, EyeOff, Flame, ZoomIn, ZoomOut, RotateCcw, Move, Camera, Video, Download, Laptop } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { toast } from "sonner";
@@ -10,13 +10,57 @@ import fpvImg from "@assets/generated_images/fpv_drone_view_forward_facing_with_
 export function VideoFeed() {
   const [isMain, setIsMain] = useState(false);
   const [visible, setVisible] = useState(true);
-  const [activeCam, setActiveCam] = useState<'gimbal' | 'thermal' | 'fpv'>('gimbal');
+  const [activeCam, setActiveCam] = useState<'gimbal' | 'thermal' | 'fpv' | 'webcam'>('gimbal');
   const [thermalMode, setThermalMode] = useState(false);
   const [zoom, setZoom] = useState([1]);
   const [showControls, setShowControls] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [panX, setPanX] = useState(0);
   const [panY, setPanY] = useState(0);
+  const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
+  const [webcamError, setWebcamError] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (activeCam === 'webcam') {
+      startWebcam();
+    } else {
+      stopWebcam();
+    }
+    return () => stopWebcam();
+  }, [activeCam]);
+
+  useEffect(() => {
+    if (videoRef.current && webcamStream) {
+      videoRef.current.srcObject = webcamStream;
+    }
+  }, [webcamStream]);
+
+  const startWebcam = async () => {
+    try {
+      setWebcamError(null);
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+          facingMode: 'environment'
+        } 
+      });
+      setWebcamStream(stream);
+      toast.success("Laptop camera connected");
+    } catch (err: any) {
+      console.error("Webcam error:", err);
+      setWebcamError(err.message || "Failed to access camera");
+      toast.error("Could not access camera. Check permissions.");
+    }
+  };
+
+  const stopWebcam = () => {
+    if (webcamStream) {
+      webcamStream.getTracks().forEach(track => track.stop());
+      setWebcamStream(null);
+    }
+  };
 
   const handleZoomIn = () => {
     setZoom([Math.min(zoom[0] + 0.5, 5)]);
@@ -66,7 +110,11 @@ export function VideoFeed() {
       <div className="absolute top-0 left-0 right-0 h-8 bg-black/60 backdrop-blur flex items-center justify-between px-2 z-10">
         <div className="text-xs font-mono text-primary flex items-center gap-2">
           <span className={cn("w-2 h-2 rounded-full", isRecording ? "bg-red-500 animate-pulse" : "bg-red-500")} />
-          {isRecording ? "REC" : "LIVE"}: {activeCam === 'gimbal' ? (thermalMode ? 'THERMAL' : 'GIMBAL') : activeCam === 'thermal' ? 'THERMAL' : 'FPV'}
+          {isRecording ? "REC" : "LIVE"}: {
+            activeCam === 'gimbal' ? (thermalMode ? 'THERMAL' : 'GIMBAL') : 
+            activeCam === 'thermal' ? 'THERMAL' : 
+            activeCam === 'webcam' ? 'LAPTOP CAM' : 'FPV'
+          }
           {zoom[0] > 1 && <span className="text-amber-500">{zoom[0].toFixed(1)}x</span>}
         </div>
         <div className="flex gap-1">
@@ -74,11 +122,20 @@ export function VideoFeed() {
             onClick={() => {
               if (activeCam === 'gimbal') setActiveCam('thermal');
               else if (activeCam === 'thermal') setActiveCam('fpv');
+              else if (activeCam === 'fpv') setActiveCam('webcam');
               else setActiveCam('gimbal');
             }} 
             className="p-1 hover:text-white text-muted-foreground text-[10px] uppercase border border-white/20 rounded px-2"
+            title="Switch Camera (Gimbal/Thermal/FPV/Laptop)"
           >
             CAM
+          </button>
+          <button 
+            onClick={() => setActiveCam('webcam')} 
+            className={cn("p-1 hover:text-white text-muted-foreground", activeCam === 'webcam' && "text-primary")}
+            title="Laptop Camera (Test Mode)"
+          >
+            <Laptop className="h-3 w-3" />
           </button>
           <button 
             onClick={() => setThermalMode(!thermalMode)} 
@@ -104,15 +161,50 @@ export function VideoFeed() {
             transformOrigin: 'center center',
             transition: 'transform 0.2s ease-out',
           }}
+          className="w-full h-full"
         >
-          <img 
-            src={activeCam === 'fpv' ? fpvImg : aerialImg} 
-            alt="Drone Feed" 
-            className={cn(
-              "w-full h-full object-cover",
-              thermalMode ? "opacity-90 hue-rotate-[280deg] saturate-[200%]" : "opacity-90"
-            )}
-          />
+          {activeCam === 'webcam' ? (
+            webcamStream ? (
+              <video 
+                ref={videoRef}
+                autoPlay 
+                playsInline 
+                muted
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center text-muted-foreground">
+                {webcamError ? (
+                  <div className="text-center p-4">
+                    <Laptop className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p className="text-sm">{webcamError}</p>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      className="mt-2"
+                      onClick={startWebcam}
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="text-center">
+                    <Laptop className="h-8 w-8 mx-auto mb-2 animate-pulse" />
+                    <p className="text-sm">Connecting to camera...</p>
+                  </div>
+                )}
+              </div>
+            )
+          ) : (
+            <img 
+              src={activeCam === 'fpv' ? fpvImg : aerialImg} 
+              alt="Drone Feed" 
+              className={cn(
+                "w-full h-full object-cover",
+                thermalMode ? "opacity-90 hue-rotate-[280deg] saturate-[200%]" : "opacity-90"
+              )}
+            />
+          )}
         </div>
          
         {/* HUD Overlay */}

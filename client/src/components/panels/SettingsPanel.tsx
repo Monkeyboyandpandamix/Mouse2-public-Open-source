@@ -11,7 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useState, useEffect, useRef } from "react";
-import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cable, Upload, AlertTriangle, CheckCircle, RefreshCw } from "lucide-react";
+import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cable, Upload, AlertTriangle, CheckCircle, RefreshCw, Cloud, Database, ExternalLink, Cpu, Radio } from "lucide-react";
 
 export function SettingsPanel() {
   const queryClient = useQueryClient();
@@ -93,6 +93,65 @@ export function SettingsPanel() {
     syncPort: "8080",
     encryptionEnabled: true,
   });
+
+  const [backupStatus, setBackupStatus] = useState<{
+    connected: boolean;
+    spreadsheetUrl?: string;
+    lastSync?: string;
+    syncing: boolean;
+  }>({ connected: false, syncing: false });
+
+  const checkBackupStatus = async () => {
+    try {
+      const res = await fetch('/api/backup/google-sheets/status');
+      const data = await res.json();
+      setBackupStatus(prev => ({ ...prev, ...data }));
+    } catch (error) {
+      console.error('Failed to check backup status:', error);
+    }
+  };
+
+  const triggerBackup = async () => {
+    setBackupStatus(prev => ({ ...prev, syncing: true }));
+    try {
+      const res = await fetch('/api/backup/google-sheets', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setBackupStatus(prev => ({ 
+          ...prev, 
+          connected: true,
+          spreadsheetUrl: data.spreadsheetUrl,
+          lastSync: new Date().toISOString(),
+          syncing: false 
+        }));
+        toast.success(`Backup complete! Synced: ${data.syncedTables.join(', ')}`);
+      } else {
+        throw new Error(data.error);
+      }
+    } catch (error: any) {
+      toast.error('Backup failed: ' + (error.message || 'Unknown error'));
+      setBackupStatus(prev => ({ ...prev, syncing: false }));
+    }
+  };
+
+  useEffect(() => {
+    checkBackupStatus();
+  }, []);
+
+  const HARDWARE_PRESETS = {
+    current: {
+      name: "Current Configuration",
+      description: "Your M.O.U.S.E drone setup",
+      specs: {
+        companion: "Raspberry Pi 5 (16GB) - Trixie 13.2",
+        fc: "Orange Cube+ with ADSB Carrier Board",
+        gps: "Here3+ GPS Module",
+        lidar: "LW20/HA Lidar",
+        gimbal: "Skydroid C12 2K (2560x1440 HD + 384x288 Thermal)",
+        motors: "Mad Motors XP6S Arms (x4)",
+      }
+    }
+  };
 
   const { data: savedConnectionSettings } = useQuery({
     queryKey: ["/api/settings/connection"],
@@ -295,14 +354,264 @@ export function SettingsPanel() {
         </div>
 
         <Tabs defaultValue="connections" className="w-full">
-          <TabsList className="grid w-full grid-cols-6">
+          <TabsList className="grid w-full grid-cols-7">
+            <TabsTrigger value="hardware">Hardware</TabsTrigger>
             <TabsTrigger value="connections">Connections</TabsTrigger>
             <TabsTrigger value="sensors">Sensors</TabsTrigger>
             <TabsTrigger value="input">Input</TabsTrigger>
             <TabsTrigger value="camera">Camera</TabsTrigger>
             <TabsTrigger value="network">Network</TabsTrigger>
-            <TabsTrigger value="firmware">Firmware</TabsTrigger>
+            <TabsTrigger value="backup">Backup</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="hardware" className="space-y-4 mt-4">
+            <Card className="border-2 border-primary/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Cpu className="h-5 w-5" />
+                  Hardware Configuration
+                </CardTitle>
+                <CardDescription>Your M.O.U.S.E drone hardware specifications</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-3">
+                    <div className="p-3 bg-muted/30 rounded-lg">
+                      <Label className="text-xs text-muted-foreground">Companion Computer</Label>
+                      <p className="font-medium text-sm">{HARDWARE_PRESETS.current.specs.companion}</p>
+                    </div>
+                    <div className="p-3 bg-muted/30 rounded-lg">
+                      <Label className="text-xs text-muted-foreground">Flight Controller</Label>
+                      <p className="font-medium text-sm">{HARDWARE_PRESETS.current.specs.fc}</p>
+                    </div>
+                    <div className="p-3 bg-muted/30 rounded-lg">
+                      <Label className="text-xs text-muted-foreground">GPS Module</Label>
+                      <p className="font-medium text-sm">{HARDWARE_PRESETS.current.specs.gps}</p>
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    <div className="p-3 bg-muted/30 rounded-lg">
+                      <Label className="text-xs text-muted-foreground">Lidar Sensor</Label>
+                      <p className="font-medium text-sm">{HARDWARE_PRESETS.current.specs.lidar}</p>
+                    </div>
+                    <div className="p-3 bg-muted/30 rounded-lg">
+                      <Label className="text-xs text-muted-foreground">Camera/Gimbal</Label>
+                      <p className="font-medium text-sm">{HARDWARE_PRESETS.current.specs.gimbal}</p>
+                    </div>
+                    <div className="p-3 bg-muted/30 rounded-lg">
+                      <Label className="text-xs text-muted-foreground">Propulsion</Label>
+                      <p className="font-medium text-sm">{HARDWARE_PRESETS.current.specs.motors}</p>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Skydroid C12 Gimbal Settings</CardTitle>
+                <CardDescription>2K HD Camera (2560x1440) + Thermal Imaging (384x288)</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>Primary Camera</Label>
+                    <Select defaultValue="2k">
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="2k">2K HD (2560x1440)</SelectItem>
+                        <SelectItem value="1080p">1080p (1920x1080)</SelectItem>
+                        <SelectItem value="720p">720p (1280x720)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Thermal Resolution</Label>
+                    <Select defaultValue="384x288">
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="384x288">384x288 (Full)</SelectItem>
+                        <SelectItem value="256x192">256x192</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Gimbal Lens</Label>
+                    <Input defaultValue="7mm" disabled className="bg-muted" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>LW20/HA Lidar Configuration</CardTitle>
+                <CardDescription>High-accuracy laser altimeter settings</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>I2C Address</Label>
+                    <Input 
+                      value={sensorSettings.lidarAddress}
+                      onChange={(e) => updateSetting(setSensorSettings, "lidarAddress", e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Update Rate (Hz)</Label>
+                    <Select 
+                      value={sensorSettings.lidarRate}
+                      onValueChange={(v) => updateSetting(setSensorSettings, "lidarRate", v)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1">1 Hz</SelectItem>
+                        <SelectItem value="5">5 Hz</SelectItem>
+                        <SelectItem value="10">10 Hz (Default)</SelectItem>
+                        <SelectItem value="20">20 Hz</SelectItem>
+                        <SelectItem value="50">50 Hz (Max)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-end">
+                    <div className="flex items-center gap-2">
+                      <Switch 
+                        checked={sensorSettings.lidarEnabled}
+                        onCheckedChange={(v) => updateSetting(setSensorSettings, "lidarEnabled", v)}
+                      />
+                      <Label>Enabled</Label>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Here3+ GPS Configuration</CardTitle>
+                <CardDescription>CAN-connected GPS with compass</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>CAN Node ID</Label>
+                    <Input 
+                      value={sensorSettings.gpsCanId}
+                      onChange={(e) => updateSetting(setSensorSettings, "gpsCanId", e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Connection</Label>
+                    <Input defaultValue="CAN1" disabled className="bg-muted" />
+                  </div>
+                  <div className="flex items-end">
+                    <div className="flex items-center gap-2">
+                      <Switch 
+                        checked={sensorSettings.gpsEnabled}
+                        onCheckedChange={(v) => updateSetting(setSensorSettings, "gpsEnabled", v)}
+                      />
+                      <Label>Enabled</Label>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="backup" className="space-y-4 mt-4">
+            <Card className="border-2 border-primary/50">
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Cloud className="h-5 w-5" />
+                      Google Sheets Backup
+                    </CardTitle>
+                    <CardDescription>Automatically backup all data to Google Sheets</CardDescription>
+                  </div>
+                  <Badge className={backupStatus.connected ? "bg-emerald-500" : "bg-amber-500"}>
+                    {backupStatus.connected ? "Connected" : "Not Connected"}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="p-4 bg-muted/30 rounded-lg space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-medium">M.O.U.S.E GCS Backup</p>
+                      <p className="text-sm text-muted-foreground">
+                        Backs up missions, waypoints, flight logs, and settings
+                      </p>
+                    </div>
+                    <Button 
+                      onClick={triggerBackup}
+                      disabled={backupStatus.syncing}
+                    >
+                      {backupStatus.syncing ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Syncing...
+                        </>
+                      ) : (
+                        <>
+                          <Cloud className="h-4 w-4 mr-2" />
+                          Backup Now
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                  
+                  {backupStatus.spreadsheetUrl && (
+                    <div className="flex items-center gap-2 pt-2 border-t border-border">
+                      <Database className="h-4 w-4 text-muted-foreground" />
+                      <a 
+                        href={backupStatus.spreadsheetUrl} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline text-sm flex items-center gap-1"
+                      >
+                        Open Spreadsheet <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                  )}
+                  
+                  {backupStatus.lastSync && (
+                    <p className="text-xs text-muted-foreground">
+                      Last backup: {new Date(backupStatus.lastSync).toLocaleString()}
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Data Included in Backup:</Label>
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <CheckCircle className="h-4 w-4 text-emerald-500" />
+                      Missions & Waypoints
+                    </div>
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <CheckCircle className="h-4 w-4 text-emerald-500" />
+                      Flight Sessions
+                    </div>
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <CheckCircle className="h-4 w-4 text-emerald-500" />
+                      Telemetry Logs
+                    </div>
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <CheckCircle className="h-4 w-4 text-emerald-500" />
+                      System Settings
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
 
           <TabsContent value="connections" className="space-y-4 mt-4">
             <Card>

@@ -12,6 +12,7 @@ import {
   insertCameraSettingsSchema,
 } from "@shared/schema";
 import { ZodError } from "zod";
+import { syncDataToSheets, getOrCreateBackupSpreadsheet, getSpreadsheetUrl } from "./googleSheets";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -264,6 +265,114 @@ export async function registerRoutes(
       res.json(settings);
     } catch (error) {
       res.status(500).json({ error: "Failed to update camera settings" });
+    }
+  });
+
+  // Geocoding API (proxy for Nominatim with proper headers)
+  app.get("/api/geocode", async (req, res) => {
+    try {
+      const query = req.query.q as string;
+      if (!query) {
+        return res.status(400).json({ error: "Query parameter 'q' is required" });
+      }
+
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`,
+        {
+          headers: {
+            'User-Agent': 'MOUSE-GCS/1.0 (Ground Control Station)',
+            'Accept': 'application/json',
+          },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Nominatim returned ${response.status}`);
+      }
+
+      const results = await response.json();
+      res.json(results);
+    } catch (error) {
+      console.error("Geocoding error:", error);
+      res.status(500).json({ error: "Failed to geocode address" });
+    }
+  });
+
+  // Reverse Geocoding API
+  app.get("/api/reverse-geocode", async (req, res) => {
+    try {
+      const lat = req.query.lat as string;
+      const lon = req.query.lon as string;
+      
+      if (!lat || !lon) {
+        return res.status(400).json({ error: "lat and lon parameters are required" });
+      }
+
+      const response = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
+        {
+          headers: {
+            'User-Agent': 'MOUSE-GCS/1.0 (Ground Control Station)',
+            'Accept': 'application/json',
+          },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Nominatim returned ${response.status}`);
+      }
+
+      const result = await response.json();
+      res.json(result);
+    } catch (error) {
+      console.error("Reverse geocoding error:", error);
+      res.status(500).json({ error: "Failed to reverse geocode" });
+    }
+  });
+
+  // Google Sheets Backup API
+  app.post("/api/backup/google-sheets", async (req, res) => {
+    try {
+      const missions = await storage.getAllMissions();
+      const waypoints: any[] = [];
+      for (const mission of missions) {
+        const missionWaypoints = await storage.getWaypointsByMission(mission.id);
+        waypoints.push(...missionWaypoints);
+      }
+      const flightLogs = await storage.getRecentFlightLogs(1000);
+      
+      const result = await syncDataToSheets({
+        missions,
+        waypoints,
+        flightLogs,
+      });
+
+      res.json({
+        success: true,
+        spreadsheetUrl: getSpreadsheetUrl(result.spreadsheetId),
+        syncedTables: result.syncedTables,
+      });
+    } catch (error: any) {
+      console.error("Google Sheets backup error:", error);
+      res.status(500).json({ 
+        error: "Failed to backup to Google Sheets",
+        message: error.message 
+      });
+    }
+  });
+
+  app.get("/api/backup/google-sheets/status", async (req, res) => {
+    try {
+      const spreadsheetId = await getOrCreateBackupSpreadsheet();
+      res.json({
+        connected: true,
+        spreadsheetUrl: getSpreadsheetUrl(spreadsheetId),
+      });
+    } catch (error: any) {
+      res.json({
+        connected: false,
+        error: error.message,
+      });
     }
   });
 

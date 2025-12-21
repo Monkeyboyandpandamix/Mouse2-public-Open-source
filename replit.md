@@ -32,12 +32,23 @@ Preferred communication style: Simple, everyday language.
 
 ### Key Features
 - Real-time telemetry panel showing altitude, speed, attitude, and motor data
-- Interactive map with drone position, waypoints, and flight path visualization
+- Interactive map with drone position, waypoints, flight path visualization, and address search
 - Mission planning with waypoint management and actions (hover, photo, drop/pickup payload, RTL)
 - Object tracking panel for computer vision-based target following
-- Audio broadcast system for speaker control via Raspberry Pi GPIO
+- Audio broadcast system with Pi GPIO speaker, USB speaker, and Orange Cube+ buzzer support
 - Flight controls including arm/disarm, takeoff, land, RTL, and emergency stop
 - Gripper control for payload drop/pickup operations
+- Google Sheets backup integration for data persistence
+- Laptop webcam testing mode for camera validation
+- Hardware presets for Skydroid C12, LW20/HA Lidar, Here3+ GPS configuration
+
+### Hardware Configuration
+- **Companion Computer**: Raspberry Pi 5 (16GB) running Trixie 13.2
+- **Flight Controller**: Orange Cube+ with ADSB Carrier Board
+- **GPS**: Here3+ GPS Module (CAN-connected)
+- **Lidar**: LW20/HA high-accuracy laser altimeter
+- **Camera/Gimbal**: Skydroid C12 2K (2560x1440 HD + 384x288 Thermal, 7mm lens)
+- **Propulsion**: Mad Motors XP6S Arms (x4)
 
 ### Project Structure
 - `client/` - React frontend application

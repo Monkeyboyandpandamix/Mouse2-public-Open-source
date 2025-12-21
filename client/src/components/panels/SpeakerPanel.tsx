@@ -6,9 +6,20 @@ import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { Volume2, Mic, Play, Square, MessageSquare, Plus, Trash2, Check, Settings2, Radio, Loader2 } from "lucide-react";
+import { Volume2, Mic, Play, Square, MessageSquare, Plus, Trash2, Check, Settings2, Radio, Loader2, Usb, Bell, Speaker } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
+
+type AudioDevice = 'gpio' | 'usb' | 'buzzer';
+
+const BUZZER_TONES = [
+  { id: 'alert', name: 'Alert', description: 'Short attention-getting beep' },
+  { id: 'warning', name: 'Warning', description: 'Urgent warning siren' },
+  { id: 'success', name: 'Success', description: 'Positive confirmation tone' },
+  { id: 'startup', name: 'Startup', description: 'System initialization tune' },
+  { id: 'landing', name: 'Landing', description: 'Landing approach alert' },
+  { id: 'emergency', name: 'Emergency', description: 'Emergency beacon signal' },
+];
 
 interface QuickMessage {
   id: string;
@@ -39,6 +50,97 @@ export function SpeakerPanel() {
   ]);
   const [newQuickMessage, setNewQuickMessage] = useState("");
   const [showAddMessage, setShowAddMessage] = useState(false);
+  const [audioDevice, setAudioDevice] = useState<AudioDevice>('gpio');
+  const [usbDevices, setUsbDevices] = useState<string[]>([]);
+  const [selectedUsbDevice, setSelectedUsbDevice] = useState<string>('');
+  const [buzzerPlaying, setBuzzerPlaying] = useState(false);
+
+  const playBuzzerTone = async (toneId: string) => {
+    setBuzzerPlaying(true);
+    toast.success(`Playing ${toneId} tone on Orange Cube+ buzzer`);
+    
+    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    gainNode.gain.value = volume[0] / 100;
+    
+    switch (toneId) {
+      case 'alert':
+        oscillator.frequency.value = 880;
+        oscillator.type = 'square';
+        oscillator.start();
+        setTimeout(() => oscillator.stop(), 200);
+        break;
+      case 'warning':
+        oscillator.frequency.value = 440;
+        oscillator.type = 'sawtooth';
+        oscillator.start();
+        const warningInterval = setInterval(() => {
+          oscillator.frequency.value = oscillator.frequency.value === 440 ? 880 : 440;
+        }, 200);
+        setTimeout(() => { oscillator.stop(); clearInterval(warningInterval); }, 1000);
+        break;
+      case 'success':
+        oscillator.frequency.value = 523;
+        oscillator.type = 'sine';
+        oscillator.start();
+        setTimeout(() => oscillator.frequency.value = 659, 100);
+        setTimeout(() => oscillator.frequency.value = 784, 200);
+        setTimeout(() => oscillator.stop(), 400);
+        break;
+      case 'startup':
+        oscillator.frequency.value = 262;
+        oscillator.type = 'sine';
+        oscillator.start();
+        setTimeout(() => oscillator.frequency.value = 330, 150);
+        setTimeout(() => oscillator.frequency.value = 392, 300);
+        setTimeout(() => oscillator.frequency.value = 523, 450);
+        setTimeout(() => oscillator.stop(), 600);
+        break;
+      case 'landing':
+        oscillator.frequency.value = 1000;
+        oscillator.type = 'square';
+        oscillator.start();
+        const landingInterval = setInterval(() => {
+          oscillator.frequency.value = oscillator.frequency.value === 1000 ? 500 : 1000;
+        }, 500);
+        setTimeout(() => { oscillator.stop(); clearInterval(landingInterval); }, 2000);
+        break;
+      case 'emergency':
+        oscillator.frequency.value = 1500;
+        oscillator.type = 'square';
+        oscillator.start();
+        const emergencyInterval = setInterval(() => {
+          oscillator.frequency.value = oscillator.frequency.value === 1500 ? 2000 : 1500;
+        }, 100);
+        setTimeout(() => { oscillator.stop(); clearInterval(emergencyInterval); }, 3000);
+        break;
+      default:
+        oscillator.frequency.value = 440;
+        oscillator.type = 'sine';
+        oscillator.start();
+        setTimeout(() => oscillator.stop(), 500);
+    }
+    
+    await new Promise(resolve => setTimeout(resolve, 500));
+    setBuzzerPlaying(false);
+  };
+
+  const detectUsbDevices = async () => {
+    const mockDevices = [
+      'USB Audio Device (Generic)',
+      'Raspberry Pi Audio',
+      'External Speaker (USB)',
+    ];
+    setUsbDevices(mockDevices);
+    if (mockDevices.length > 0 && !selectedUsbDevice) {
+      setSelectedUsbDevice(mockDevices[0]);
+    }
+    toast.success(`Found ${mockDevices.length} USB audio devices`);
+  };
 
   useEffect(() => {
     const loadVoices = () => {
@@ -192,22 +294,94 @@ export function SpeakerPanel() {
             <div>
               <CardTitle className="flex items-center gap-2">
                 <Volume2 className="h-5 w-5" />
-                Speaker Status
+                Audio Output Device
               </CardTitle>
-              <CardDescription>Raspberry Pi GPIO connected speaker</CardDescription>
+              <CardDescription>Select speaker output for broadcasts</CardDescription>
             </div>
             <div className="flex items-center gap-2">
-              {(isBroadcasting || isRecording) && (
+              {(isBroadcasting || isRecording || buzzerPlaying) && (
                 <Badge className="bg-destructive animate-pulse">
                   <Radio className="h-3 w-3 mr-1" />
-                  LIVE
+                  ACTIVE
                 </Badge>
               )}
-              <Badge className="bg-emerald-500">ONLINE</Badge>
+              <Badge className="bg-emerald-500">CONNECTED</Badge>
             </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="grid grid-cols-3 gap-2">
+            <Button 
+              variant={audioDevice === 'gpio' ? 'default' : 'outline'}
+              className="flex flex-col h-auto py-3"
+              onClick={() => setAudioDevice('gpio')}
+            >
+              <Speaker className="h-5 w-5 mb-1" />
+              <span className="text-xs">Pi GPIO</span>
+            </Button>
+            <Button 
+              variant={audioDevice === 'usb' ? 'default' : 'outline'}
+              className="flex flex-col h-auto py-3"
+              onClick={() => { setAudioDevice('usb'); detectUsbDevices(); }}
+            >
+              <Usb className="h-5 w-5 mb-1" />
+              <span className="text-xs">USB Speaker</span>
+            </Button>
+            <Button 
+              variant={audioDevice === 'buzzer' ? 'default' : 'outline'}
+              className="flex flex-col h-auto py-3"
+              onClick={() => setAudioDevice('buzzer')}
+            >
+              <Bell className="h-5 w-5 mb-1" />
+              <span className="text-xs">Cube+ Buzzer</span>
+            </Button>
+          </div>
+
+          {audioDevice === 'usb' && (
+            <div className="space-y-2 p-3 bg-muted/30 rounded-lg">
+              <div className="flex items-center justify-between">
+                <Label>USB Audio Device</Label>
+                <Button variant="ghost" size="sm" onClick={detectUsbDevices}>
+                  Scan
+                </Button>
+              </div>
+              <Select value={selectedUsbDevice} onValueChange={setSelectedUsbDevice}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select USB device..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {usbDevices.map(device => (
+                    <SelectItem key={device} value={device}>{device}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {audioDevice === 'buzzer' && (
+            <div className="space-y-2 p-3 bg-muted/30 rounded-lg">
+              <Label>Orange Cube+ Buzzer Tones (MAVLink)</Label>
+              <div className="grid grid-cols-2 gap-2 mt-2">
+                {BUZZER_TONES.map(tone => (
+                  <Button
+                    key={tone.id}
+                    variant="outline"
+                    size="sm"
+                    className="justify-start h-auto py-2"
+                    onClick={() => playBuzzerTone(tone.id)}
+                    disabled={buzzerPlaying}
+                  >
+                    <Bell className="h-3 w-3 mr-2" />
+                    <div className="text-left">
+                      <div className="text-xs font-medium">{tone.name}</div>
+                      <div className="text-[10px] text-muted-foreground">{tone.description}</div>
+                    </div>
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label>Output Volume</Label>

@@ -93,6 +93,18 @@ function ZoomControls() {
   );
 }
 
+function MapCenterUpdater({ searchResult }: { searchResult: {lat: number; lon: number; name: string} | null }) {
+  const map = useMap();
+  
+  useEffect(() => {
+    if (searchResult) {
+      map.setView([searchResult.lat, searchResult.lon], 17);
+    }
+  }, [searchResult, map]);
+  
+  return null;
+}
+
 export function MapInterface() {
   const position: [number, number] = [34.0522, -118.2437];
   const flightPath: [number, number][] = [
@@ -105,6 +117,7 @@ export function MapInterface() {
   const [mapType, setMapType] = useState<'dark' | 'satellite' | 'street'>('dark');
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
+  const [searchResult, setSearchResult] = useState<{lat: number; lon: number; name: string} | null>(null);
 
   const getTileUrl = () => {
     switch(mapType) {
@@ -123,18 +136,24 @@ export function MapInterface() {
     
     setIsSearching(true);
     try {
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=1`
-      );
+      const response = await fetch(`/api/geocode?q=${encodeURIComponent(searchQuery)}`);
+      
+      if (!response.ok) {
+        throw new Error("Geocoding request failed");
+      }
+      
       const results = await response.json();
       
       if (results.length > 0) {
+        const lat = parseFloat(results[0].lat);
+        const lon = parseFloat(results[0].lon);
+        setSearchResult({ lat, lon, name: results[0].display_name });
         toast.success(`Found: ${results[0].display_name.substring(0, 50)}...`);
       } else {
         toast.error("Location not found");
       }
     } catch (error) {
-      toast.error("Search failed");
+      toast.error("Search failed - please try again");
     } finally {
       setIsSearching(false);
     }
@@ -155,6 +174,19 @@ export function MapInterface() {
         />
         
         <ZoomControls />
+        <MapCenterUpdater searchResult={searchResult} />
+        
+        {/* Search Result Marker */}
+        {searchResult && (
+          <Marker position={[searchResult.lat, searchResult.lon]}>
+            <Popup>
+              <div className="text-sm max-w-xs">
+                <strong>Search Result</strong><br/>
+                {searchResult.name}
+              </div>
+            </Popup>
+          </Marker>
+        )}
         
         {/* Drone Position */}
         <Marker position={position} icon={DroneIcon}>
