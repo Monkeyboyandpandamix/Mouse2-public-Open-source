@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type MouseEvent } from "react";
 import { cn } from "@/lib/utils";
 import { Maximize2, Minimize2, Eye, EyeOff, Flame, ZoomIn, ZoomOut, RotateCcw, Camera, Video, Laptop, Settings2, Crosshair } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -49,6 +49,9 @@ export function VideoFeed() {
   const [isRecording, setIsRecording] = useState(false);
   const [panX, setPanX] = useState(0);
   const [panY, setPanY] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [showPlaceholder, setShowPlaceholder] = useState(true);
   const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
   const [webcamError, setWebcamError] = useState<string | null>(null);
   const [isDetecting, setIsDetecting] = useState(false);
@@ -270,6 +273,27 @@ export function VideoFeed() {
     setPanY(0);
   };
 
+  const handleMouseDown = (e: MouseEvent<HTMLDivElement>) => {
+    if (zoom[0] > 1) {
+      setIsDragging(true);
+      setDragStart({ x: e.clientX - panX, y: e.clientY - panY });
+    }
+  };
+
+  const handleMouseMove = (e: MouseEvent<HTMLDivElement>) => {
+    if (isDragging && zoom[0] > 1) {
+      const maxPan = (zoom[0] - 1) * 100;
+      const newPanX = Math.max(-maxPan, Math.min(maxPan, e.clientX - dragStart.x));
+      const newPanY = Math.max(-maxPan, Math.min(maxPan, e.clientY - dragStart.y));
+      setPanX(newPanX);
+      setPanY(newPanY);
+    }
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
   const handleSnapshot = () => {
     toast.success("Snapshot captured and saved");
   };
@@ -417,14 +441,20 @@ export function VideoFeed() {
       </div>
 
       {/* Content */}
-      <div className="relative w-full h-full bg-slate-900 overflow-hidden">
+      <div 
+        className={cn("relative w-full h-full bg-slate-900 overflow-hidden", zoom[0] > 1 && "cursor-grab", isDragging && "cursor-grabbing")}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+      >
         <div
           style={{
-            transform: `scale(${zoom[0]}) translate(${panX}px, ${panY}px)`,
+            transform: `scale(${zoom[0]}) translate(${panX / zoom[0]}px, ${panY / zoom[0]}px)`,
             transformOrigin: 'center center',
-            transition: 'transform 0.2s ease-out',
+            transition: isDragging ? 'none' : 'transform 0.2s ease-out',
           }}
-          className="w-full h-full"
+          className="w-full h-full select-none"
         >
           {activeCam === 'webcam' ? (
             webcamStream ? (
@@ -512,14 +542,44 @@ export function VideoFeed() {
                 </div>
               </div>
             </div>
+          ) : showPlaceholder ? (
+            <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+              <div className="text-center">
+                <div className="relative mb-4">
+                  <div className="w-24 h-24 rounded-full border-4 border-primary/30 mx-auto flex items-center justify-center">
+                    <Video className="h-10 w-10 text-primary/50" />
+                  </div>
+                  <div className="absolute inset-0 w-24 h-24 rounded-full border-4 border-t-primary mx-auto animate-spin" style={{ animationDuration: '3s' }} />
+                </div>
+                <p className="text-sm font-medium text-white/80">{
+                  activeCam === 'gimbal' ? (thermalMode ? 'THERMAL CAMERA' : 'GIMBAL CAMERA') :
+                  activeCam === 'thermal' ? 'THERMAL CAMERA' : 'FPV CAMERA'
+                }</p>
+                <p className="text-xs text-muted-foreground mt-1">Awaiting video feed connection</p>
+                <p className="text-[10px] text-muted-foreground mt-3">
+                  Configure RTSP stream in camera settings<br/>
+                  or use Laptop Camera for testing
+                </p>
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  className="mt-4"
+                  onClick={() => setShowPlaceholder(false)}
+                  data-testid="button-show-demo"
+                >
+                  Show Demo View
+                </Button>
+              </div>
+            </div>
           ) : (
             <img 
               src={activeCam === 'fpv' ? fpvImg : aerialImg} 
               alt="Drone Feed" 
               className={cn(
-                "w-full h-full object-cover",
+                "w-full h-full object-cover pointer-events-none",
                 thermalMode ? "opacity-90 hue-rotate-[280deg] saturate-[200%]" : "opacity-90"
               )}
+              draggable={false}
             />
           )}
         </div>
@@ -535,10 +595,10 @@ export function VideoFeed() {
             <div className="absolute top-1/2 left-4 w-12 h-px bg-white/50" />
             <div className="absolute top-1/2 right-4 w-12 h-px bg-white/50" />
              
-            {/* Object Detection Box - only show for gimbal/thermal modes, not webcam which has real detection */}
-            {activeCam !== 'fpv' && activeCam !== 'webcam' && activeCam !== 'stream' && !thermalMode && (
+            {/* Object Detection Box - only show in demo mode */}
+            {activeCam !== 'fpv' && activeCam !== 'webcam' && activeCam !== 'stream' && !thermalMode && !showPlaceholder && (
               <div className="absolute top-1/3 left-1/4 w-24 h-24 border-2 border-amber-500 rounded-sm">
-                <div className="absolute -top-4 left-0 bg-amber-500 text-black text-[10px] px-1 font-bold">VEHICLE 98%</div>
+                <div className="absolute -top-4 left-0 bg-amber-500 text-black text-[10px] px-1 font-bold">DEMO OBJ</div>
               </div>
             )}
              
