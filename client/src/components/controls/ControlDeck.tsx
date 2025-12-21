@@ -1,19 +1,8 @@
 import { Button } from "@/components/ui/button";
-import { Hand, ArrowUpCircle, ArrowDownCircle, Home, Power, AlertOctagon, MapPin, Navigation } from "lucide-react";
+import { Hand, ArrowUpCircle, ArrowDownCircle, Power, AlertOctagon, Navigation } from "lucide-react";
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 
 interface BaseLocation {
   lat: number;
@@ -25,10 +14,6 @@ export function ControlDeck() {
   const [isArmed, setIsArmed] = useState(false);
   const [gripperOpen, setGripperOpen] = useState(false);
   const [baseLocation, setBaseLocation] = useState<BaseLocation | null>(null);
-  const [showBaseDialog, setShowBaseDialog] = useState(false);
-  const [baseLat, setBaseLat] = useState("");
-  const [baseLng, setBaseLng] = useState("");
-  const [baseName, setBaseName] = useState("");
   const [isReturning, setIsReturning] = useState(false);
 
   // Load base location from localStorage
@@ -39,38 +24,23 @@ export function ControlDeck() {
         setBaseLocation(JSON.parse(saved));
       } catch {}
     }
+    
+    // Listen for storage changes (when settings updates base location)
+    const handleStorageChange = () => {
+      const saved = localStorage.getItem('mouse_base_location');
+      if (saved) {
+        try {
+          setBaseLocation(JSON.parse(saved));
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
-
-  const saveBaseLocation = () => {
-    const lat = parseFloat(baseLat);
-    const lng = parseFloat(baseLng);
-    if (isNaN(lat) || isNaN(lng)) {
-      toast.error("Please enter valid coordinates");
-      return;
-    }
-    const newBase = { lat, lng, name: baseName || "Home Base" };
-    setBaseLocation(newBase);
-    localStorage.setItem('mouse_base_location', JSON.stringify(newBase));
-    toast.success(`Base location set: ${newBase.name}`);
-    setShowBaseDialog(false);
-  };
-
-  const useCurrentLocation = () => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setBaseLat(pos.coords.latitude.toFixed(6));
-          setBaseLng(pos.coords.longitude.toFixed(6));
-          toast.success("Current location captured");
-        },
-        () => toast.error("Could not get current location")
-      );
-    }
-  };
 
   const handleReturnToBase = () => {
     if (!baseLocation) {
-      toast.error("No base location set. Click 'Set Base' first.");
+      toast.error("No base location set. Configure in Settings.");
       return;
     }
     if (!isArmed) {
@@ -79,7 +49,6 @@ export function ControlDeck() {
     }
     setIsReturning(true);
     toast.success(`Returning to base: ${baseLocation.name} (${baseLocation.lat.toFixed(4)}, ${baseLocation.lng.toFixed(4)})`);
-    // In real implementation, this would send MAVLink RTL command
     setTimeout(() => setIsReturning(false), 3000);
   };
 
@@ -125,6 +94,7 @@ export function ControlDeck() {
             )}
             disabled={!isArmed || !baseLocation}
             onClick={handleReturnToBase}
+            title={baseLocation ? `Return to: ${baseLocation.name}` : "Configure base in Settings"}
           >
             <Navigation className={cn("h-6 w-6", isReturning && "animate-pulse")} />
             <span className="text-xs font-mono">RTL</span>
@@ -132,81 +102,6 @@ export function ControlDeck() {
               <span className="text-[8px] text-muted-foreground truncate max-w-full">{baseLocation.name}</span>
             )}
           </Button>
-
-          <Dialog open={showBaseDialog} onOpenChange={setShowBaseDialog}>
-            <DialogTrigger asChild>
-              <Button 
-                variant="secondary" 
-                className={cn(
-                  "h-full flex flex-col gap-1 transition-colors",
-                  baseLocation ? "border-emerald-500/50 hover:bg-emerald-500/20" : "hover:bg-primary/20"
-                )}
-              >
-                <MapPin className={cn("h-6 w-6", baseLocation && "text-emerald-500")} />
-                <span className="text-xs font-mono">SET BASE</span>
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Set Base Location</DialogTitle>
-                <DialogDescription>
-                  Configure the home/base location for Return-to-Base (RTL) functionality.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4 py-4">
-                <div className="space-y-2">
-                  <Label>Base Name</Label>
-                  <Input 
-                    placeholder="Home Base"
-                    value={baseName}
-                    onChange={(e) => setBaseName(e.target.value)}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Latitude</Label>
-                    <Input 
-                      placeholder="37.7749"
-                      value={baseLat}
-                      onChange={(e) => setBaseLat(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Longitude</Label>
-                    <Input 
-                      placeholder="-122.4194"
-                      value={baseLng}
-                      onChange={(e) => setBaseLng(e.target.value)}
-                    />
-                  </div>
-                </div>
-                <Button 
-                  variant="outline" 
-                  className="w-full"
-                  onClick={useCurrentLocation}
-                >
-                  <MapPin className="h-4 w-4 mr-2" />
-                  Use Current Location
-                </Button>
-                {baseLocation && (
-                  <div className="p-3 bg-muted/50 rounded-lg text-sm">
-                    <p className="font-medium">Current Base: {baseLocation.name}</p>
-                    <p className="text-muted-foreground text-xs">
-                      {baseLocation.lat.toFixed(6)}, {baseLocation.lng.toFixed(6)}
-                    </p>
-                  </div>
-                )}
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setShowBaseDialog(false)}>
-                  Cancel
-                </Button>
-                <Button onClick={saveBaseLocation}>
-                  Save Base Location
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
           
           <Button 
             variant="secondary" 

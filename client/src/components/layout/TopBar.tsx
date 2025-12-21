@@ -7,10 +7,11 @@ import {
   Satellite, 
   Gamepad2,
   AlertTriangle,
-  Menu,
   Settings,
   MessageSquare,
-  Mic
+  Mic,
+  CheckCircle,
+  XCircle
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import {
@@ -19,13 +20,59 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 
 interface TopBarProps {
   onSettingsClick?: () => void;
 }
 
+interface SystemDiagnostics {
+  gpsConnected: boolean;
+  gpsCount: number;
+  rcSignal: number;
+  telemetryLink: number;
+  batteryVoltage: number;
+  batteryPercent: number;
+  fcConnected: boolean;
+  lidarConnected: boolean;
+  cameraConnected: boolean;
+}
+
 export function TopBar({ onSettingsClick }: TopBarProps) {
   const [time, setTime] = useState(new Date());
+  const [manualOverride, setManualOverride] = useState(false);
+  const [manualReady, setManualReady] = useState(true);
+  
+  // Simulated diagnostics - in real implementation, would come from WebSocket
+  const [diagnostics, setDiagnostics] = useState<SystemDiagnostics>({
+    gpsConnected: true,
+    gpsCount: 12,
+    rcSignal: 98,
+    telemetryLink: 100,
+    batteryVoltage: 24.2,
+    batteryPercent: 85,
+    fcConnected: true,
+    lidarConnected: true,
+    cameraConnected: true
+  });
+
+  // Calculate auto system status based on diagnostics
+  const calculateSystemStatus = (): { ready: boolean; issues: string[] } => {
+    const issues: string[] = [];
+    
+    if (!diagnostics.fcConnected) issues.push("Flight controller disconnected");
+    if (!diagnostics.gpsConnected || diagnostics.gpsCount < 6) issues.push("GPS signal weak");
+    if (diagnostics.rcSignal < 50) issues.push("RC signal low");
+    if (diagnostics.telemetryLink < 50) issues.push("Telemetry link weak");
+    if (diagnostics.batteryPercent < 20) issues.push("Battery critical");
+    if (!diagnostics.lidarConnected) issues.push("Lidar disconnected");
+    
+    return { ready: issues.length === 0, issues };
+  };
+
+  const systemStatus = calculateSystemStatus();
+  const isReady = manualOverride ? manualReady : systemStatus.ready;
 
   useEffect(() => {
     const timer = setInterval(() => setTime(new Date()), 1000);
@@ -42,9 +89,137 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           </h1>
         </div>
         <div className="h-6 w-px bg-border mx-2" />
-        <Badge variant="outline" className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 px-3 font-mono">
-          SYSTEM READY
-        </Badge>
+        
+        {/* System Ready Status with Popover for manual override */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <Badge 
+              variant="outline" 
+              className={`cursor-pointer px-3 font-mono ${
+                isReady 
+                  ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" 
+                  : "bg-amber-500/10 text-amber-500 border-amber-500/20"
+              }`}
+              data-testid="badge-system-status"
+            >
+              {isReady ? (
+                <>
+                  <CheckCircle className="h-3 w-3 mr-1" />
+                  SYSTEM READY
+                </>
+              ) : (
+                <>
+                  <AlertTriangle className="h-3 w-3 mr-1" />
+                  CHECK SYSTEM
+                </>
+              )}
+              {manualOverride && <span className="ml-1 text-[10px]">(M)</span>}
+            </Badge>
+          </PopoverTrigger>
+          <PopoverContent className="w-72 p-3" align="start">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm font-bold">System Diagnostics</Label>
+                <div className="flex items-center gap-2">
+                  <Label className="text-xs text-muted-foreground">Manual</Label>
+                  <Switch 
+                    checked={manualOverride}
+                    onCheckedChange={setManualOverride}
+                  />
+                </div>
+              </div>
+              
+              {manualOverride && (
+                <div className="p-2 bg-amber-500/10 rounded border border-amber-500/30 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span>Force System Status:</span>
+                    <div className="flex items-center gap-2">
+                      <Button 
+                        size="sm" 
+                        variant={manualReady ? "default" : "outline"}
+                        className="h-6 text-xs px-2"
+                        onClick={() => setManualReady(true)}
+                      >
+                        Ready
+                      </Button>
+                      <Button 
+                        size="sm" 
+                        variant={!manualReady ? "destructive" : "outline"}
+                        className="h-6 text-xs px-2"
+                        onClick={() => setManualReady(false)}
+                      >
+                        Not Ready
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              
+              <div className="space-y-2 text-xs">
+                <div className="flex items-center justify-between">
+                  <span>Flight Controller</span>
+                  {diagnostics.fcConnected ? (
+                    <CheckCircle className="h-3 w-3 text-emerald-500" />
+                  ) : (
+                    <XCircle className="h-3 w-3 text-destructive" />
+                  )}
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>GPS ({diagnostics.gpsCount} sats)</span>
+                  {diagnostics.gpsConnected && diagnostics.gpsCount >= 6 ? (
+                    <CheckCircle className="h-3 w-3 text-emerald-500" />
+                  ) : (
+                    <XCircle className="h-3 w-3 text-destructive" />
+                  )}
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>RC Signal ({diagnostics.rcSignal}%)</span>
+                  {diagnostics.rcSignal >= 50 ? (
+                    <CheckCircle className="h-3 w-3 text-emerald-500" />
+                  ) : (
+                    <XCircle className="h-3 w-3 text-destructive" />
+                  )}
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Telemetry ({diagnostics.telemetryLink}%)</span>
+                  {diagnostics.telemetryLink >= 50 ? (
+                    <CheckCircle className="h-3 w-3 text-emerald-500" />
+                  ) : (
+                    <XCircle className="h-3 w-3 text-destructive" />
+                  )}
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Battery ({diagnostics.batteryPercent}%)</span>
+                  {diagnostics.batteryPercent >= 20 ? (
+                    <CheckCircle className="h-3 w-3 text-emerald-500" />
+                  ) : (
+                    <XCircle className="h-3 w-3 text-destructive" />
+                  )}
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>Lidar</span>
+                  {diagnostics.lidarConnected ? (
+                    <CheckCircle className="h-3 w-3 text-emerald-500" />
+                  ) : (
+                    <XCircle className="h-3 w-3 text-destructive" />
+                  )}
+                </div>
+              </div>
+              
+              {!systemStatus.ready && !manualOverride && (
+                <div className="p-2 bg-destructive/10 rounded text-xs text-destructive">
+                  <p className="font-bold mb-1">Issues detected:</p>
+                  <ul className="list-disc list-inside">
+                    {systemStatus.issues.map((issue, i) => (
+                      <li key={i}>{issue}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </PopoverContent>
+        </Popover>
+        
         <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 px-3 font-mono">
           MODE: STABILIZE
         </Badge>
@@ -55,19 +230,19 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
         <div className="flex items-center gap-4 text-sm font-mono text-muted-foreground">
           <div className="flex items-center gap-2" title="GPS Satellites">
             <Satellite className="h-4 w-4 text-primary" />
-            <span className="text-foreground">12 SAT</span>
+            <span className="text-foreground">{diagnostics.gpsCount} SAT</span>
           </div>
           <div className="flex items-center gap-2" title="RC Signal Strength">
             <Signal className="h-4 w-4 text-emerald-500" />
-            <span className="text-foreground">98%</span>
+            <span className="text-foreground">{diagnostics.rcSignal}%</span>
           </div>
           <div className="flex items-center gap-2" title="Telemetry Link Quality">
             <Wifi className="h-4 w-4 text-emerald-500" />
-            <span className="text-foreground">100%</span>
+            <span className="text-foreground">{diagnostics.telemetryLink}%</span>
           </div>
           <div className="flex items-center gap-2" title="Drone Battery">
             <Battery className="h-4 w-4 text-emerald-500" />
-            <span className="text-foreground">24.2V (85%)</span>
+            <span className="text-foreground">{diagnostics.batteryVoltage}V ({diagnostics.batteryPercent}%)</span>
           </div>
         </div>
 

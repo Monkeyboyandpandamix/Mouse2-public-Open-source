@@ -11,7 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useState, useEffect, useRef } from "react";
-import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cable, Upload, AlertTriangle, CheckCircle, RefreshCw, Cloud, Database, ExternalLink, Cpu, Radio, Terminal, HardDrive } from "lucide-react";
+import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cable, Upload, AlertTriangle, CheckCircle, RefreshCw, Cloud, Database, ExternalLink, Cpu, Radio, Terminal, HardDrive, MapPin, Home } from "lucide-react";
 import { operationsLog, LogEntry, LogType } from "@/lib/operationsLog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
@@ -116,6 +116,58 @@ export function SettingsPanel() {
     error?: string;
   }>({ connected: false });
   const [driveFiles, setDriveFiles] = useState<any[]>([]);
+
+  // Base Location settings
+  const [baseLocation, setBaseLocation] = useState<{lat: string, lng: string, name: string}>({
+    lat: "", lng: "", name: ""
+  });
+  const [savedBaseLocation, setSavedBaseLocation] = useState<{lat: number, lng: number, name: string} | null>(null);
+
+  // Load base location from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem('mouse_base_location');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setSavedBaseLocation(parsed);
+        setBaseLocation({
+          lat: parsed.lat.toString(),
+          lng: parsed.lng.toString(),
+          name: parsed.name
+        });
+      } catch {}
+    }
+  }, []);
+
+  const saveBaseLocationSetting = () => {
+    const lat = parseFloat(baseLocation.lat);
+    const lng = parseFloat(baseLocation.lng);
+    if (isNaN(lat) || isNaN(lng)) {
+      toast.error("Please enter valid coordinates");
+      return;
+    }
+    const newBase = { lat, lng, name: baseLocation.name || "Home Base" };
+    setSavedBaseLocation(newBase);
+    localStorage.setItem('mouse_base_location', JSON.stringify(newBase));
+    window.dispatchEvent(new Event('storage'));
+    toast.success(`Base location saved: ${newBase.name}`);
+  };
+
+  const useCurrentLocationForBase = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setBaseLocation(prev => ({
+            ...prev,
+            lat: pos.coords.latitude.toFixed(6),
+            lng: pos.coords.longitude.toFixed(6)
+          }));
+          toast.success("Current location captured");
+        },
+        () => toast.error("Could not get current location")
+      );
+    }
+  };
 
   const checkBackupStatus = async () => {
     try {
@@ -1734,6 +1786,69 @@ export function SettingsPanel() {
           </TabsContent>
 
           <TabsContent value="network" className="space-y-4 mt-4">
+            <Card className="border-2 border-primary/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Home className="h-5 w-5" />
+                  Base Location (RTL)
+                </CardTitle>
+                <CardDescription>Set the home/base location for Return-to-Base functionality</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Base Name</Label>
+                  <Input 
+                    placeholder="Home Base"
+                    value={baseLocation.name}
+                    onChange={(e) => setBaseLocation(prev => ({ ...prev, name: e.target.value }))}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Latitude</Label>
+                    <Input 
+                      placeholder="37.7749"
+                      value={baseLocation.lat}
+                      onChange={(e) => setBaseLocation(prev => ({ ...prev, lat: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Longitude</Label>
+                    <Input 
+                      placeholder="-122.4194"
+                      value={baseLocation.lng}
+                      onChange={(e) => setBaseLocation(prev => ({ ...prev, lng: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline" 
+                    className="flex-1"
+                    onClick={useCurrentLocationForBase}
+                  >
+                    <MapPin className="h-4 w-4 mr-2" />
+                    Use Current Location
+                  </Button>
+                  <Button onClick={saveBaseLocationSetting}>
+                    <Save className="h-4 w-4 mr-2" />
+                    Save Base
+                  </Button>
+                </div>
+                {savedBaseLocation && (
+                  <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-lg text-sm">
+                    <div className="flex items-center gap-2 text-emerald-500">
+                      <CheckCircle className="h-4 w-4" />
+                      <span className="font-medium">Saved: {savedBaseLocation.name}</span>
+                    </div>
+                    <p className="text-muted-foreground text-xs mt-1">
+                      {savedBaseLocation.lat.toFixed(6)}, {savedBaseLocation.lng.toFixed(6)}
+                    </p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
             <Card>
               <CardHeader>
                 <CardTitle>Multi-Device Sync</CardTitle>

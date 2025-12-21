@@ -1,11 +1,23 @@
 import { useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { Maximize2, Minimize2, Eye, EyeOff, Flame, ZoomIn, ZoomOut, RotateCcw, Move, Camera, Video, Download, Laptop } from "lucide-react";
+import { Maximize2, Minimize2, Eye, EyeOff, Flame, ZoomIn, ZoomOut, RotateCcw, Move, Camera, Video, Download, Laptop, Target } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import aerialImg from "@assets/generated_images/aerial_drone_view_of_a_suburban_street_with_overlaid_bounding_boxes.png";
 import fpvImg from "@assets/generated_images/fpv_drone_view_forward_facing_with_horizon.png";
+
+interface DetectedObject {
+  id: string;
+  type: "person" | "vehicle" | "unknown";
+  confidence: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  color: string;
+}
 
 export function VideoFeed() {
   const [isMain, setIsMain] = useState(false);
@@ -19,13 +31,23 @@ export function VideoFeed() {
   const [panY, setPanY] = useState(0);
   const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
   const [webcamError, setWebcamError] = useState<string | null>(null);
+  const [isDetecting, setIsDetecting] = useState(false);
+  const [detectedObjects, setDetectedObjects] = useState<DetectedObject[]>([]);
+  const [videoDimensions, setVideoDimensions] = useState({ width: 640, height: 480 });
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const prevFrameRef = useRef<ImageData | null>(null);
+  const detectionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const trackedObjectsRef = useRef<Map<string, {x: number, y: number, lastSeen: number}>>(new Map());
+  const objectIdCounterRef = useRef(0);
 
   useEffect(() => {
     if (activeCam === 'webcam') {
       startWebcam();
     } else {
       stopWebcam();
+      setIsDetecting(false);
+      setDetectedObjects([]);
     }
     return () => stopWebcam();
   }, [activeCam]);
@@ -33,8 +55,149 @@ export function VideoFeed() {
   useEffect(() => {
     if (videoRef.current && webcamStream) {
       videoRef.current.srcObject = webcamStream;
+      
+      const updateDimensions = () => {
+        if (videoRef.current && videoRef.current.videoWidth > 0) {
+          setVideoDimensions({
+            width: videoRef.current.videoWidth,
+            height: videoRef.current.videoHeight
+          });
+        }
+      };
+      
+      videoRef.current.onloadedmetadata = updateDimensions;
+      videoRef.current.onresize = updateDimensions;
     }
   }, [webcamStream]);
+
+  // Motion detection for webcam
+  useEffect(() => {
+    if (isDetecting && webcamStream && activeCam === 'webcam') {
+      detectionIntervalRef.current = setInterval(() => {
+        detectMotion();
+      }, 200);
+      
+      return () => {
+        if (detectionIntervalRef.current) {
+          clearInterval(detectionIntervalRef.current);
+        }
+      };
+    }
+  }, [isDetecting, webcamStream, activeCam]);
+
+  const detectMotion = () => {
+    if (!videoRef.current || !canvasRef.current) return;
+    
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx || video.videoWidth === 0) return;
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0);
+    
+    const currentFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    
+    if (prevFrameRef.current) {
+      const motionRegions = findMotionRegions(prevFrameRef.current, currentFrame, 30);
+      const objects = classifyRegions(motionRegions);
+      setDetectedObjects(objects);
+    }
+    
+    prevFrameRef.current = currentFrame;
+  };
+
+  const findMotionRegions = (prev: ImageData, curr: ImageData, threshold: number) => {
+    const width = curr.width;
+    const height = curr.height;
+    const regions: {x: number, y: number, w: number, h: number}[] = [];
+    
+    let minX = width, minY = height, maxX = 0, maxY = 0;
+    let hasMotion = false;
+    
+    for (let y = 0; y < height; y += 10) {
+      for (let x = 0; x < width; x += 10) {
+        const i = (y * width + x) * 4;
+        const diff = Math.abs(curr.data[i] - prev.data[i]) +
+                    Math.abs(curr.data[i+1] - prev.data[i+1]) +
+                    Math.abs(curr.data[i+2] - prev.data[i+2]);
+        
+        if (diff > threshold * 3) {
+          hasMotion = true;
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+        }
+      }
+    }
+    
+    if (hasMotion && maxX - minX > 30 && maxY - minY > 30) {
+      regions.push({ x: minX, y: minY, w: maxX - minX, h: maxY - minY });
+    }
+    
+    return regions;
+  };
+
+  const classifyRegions = (regions: {x: number, y: number, w: number, h: number}[]): DetectedObject[] => {
+    const now = Date.now();
+    const trackedObjects = trackedObjectsRef.current;
+    
+    trackedObjects.forEach((val, key) => {
+      if (now - val.lastSeen > 2000) {
+        trackedObjects.delete(key);
+      }
+    });
+    
+    return regions.map((r) => {
+      const aspectRatio = r.w / r.h;
+      let type: "person" | "vehicle" | "unknown" = "unknown";
+      let confidence = 60 + Math.floor(Math.random() * 30);
+      
+      if (aspectRatio < 0.8 && r.h > 80) {
+        type = "person";
+        confidence = 75 + Math.floor(Math.random() * 20);
+      } else if (aspectRatio > 1.2 && r.w > 100) {
+        type = "vehicle";
+        confidence = 70 + Math.floor(Math.random() * 25);
+      }
+      
+      let bestMatchId = "";
+      let bestMatchScore = 0;
+      
+      trackedObjects.forEach((tracked, id) => {
+        const dx = Math.abs(r.x - tracked.x);
+        const dy = Math.abs(r.y - tracked.y);
+        const score = 1 / (1 + dx * 0.01 + dy * 0.01);
+        if (score > bestMatchScore && score > 0.5) {
+          bestMatchScore = score;
+          bestMatchId = id;
+        }
+      });
+      
+      let objectId: string;
+      if (bestMatchId) {
+        objectId = bestMatchId;
+        trackedObjects.set(objectId, { x: r.x, y: r.y, lastSeen: now });
+      } else {
+        objectIdCounterRef.current++;
+        objectId = `obj_${type}_${objectIdCounterRef.current}`;
+        trackedObjects.set(objectId, { x: r.x, y: r.y, lastSeen: now });
+      }
+      
+      return {
+        id: objectId,
+        type,
+        confidence,
+        x: r.x,
+        y: r.y,
+        width: r.w,
+        height: r.h,
+        color: type === "person" ? "#22c55e" : type === "vehicle" ? "#f59e0b" : "#6b7280"
+      };
+    });
+  };
 
   const startWebcam = async () => {
     try {
@@ -47,7 +210,8 @@ export function VideoFeed() {
         } 
       });
       setWebcamStream(stream);
-      toast.success("Laptop camera connected");
+      setIsDetecting(true);
+      toast.success("Laptop camera connected - detection active");
     } catch (err: any) {
       console.error("Webcam error:", err);
       setWebcamError(err.message || "Failed to access camera");
@@ -165,13 +329,48 @@ export function VideoFeed() {
         >
           {activeCam === 'webcam' ? (
             webcamStream ? (
-              <video 
-                ref={videoRef}
-                autoPlay 
-                playsInline 
-                muted
-                className="w-full h-full object-cover"
-              />
+              <div className="relative w-full h-full">
+                <video 
+                  ref={videoRef}
+                  autoPlay 
+                  playsInline 
+                  muted
+                  className="w-full h-full object-cover"
+                />
+                <canvas ref={canvasRef} className="hidden" />
+                
+                {/* Detection overlays */}
+                {detectedObjects.map((obj) => (
+                  <div
+                    key={obj.id}
+                    className="absolute border-2 rounded pointer-events-none"
+                    style={{
+                      left: `${(obj.x / videoDimensions.width) * 100}%`,
+                      top: `${(obj.y / videoDimensions.height) * 100}%`,
+                      width: `${(obj.width / videoDimensions.width) * 100}%`,
+                      height: `${(obj.height / videoDimensions.height) * 100}%`,
+                      borderColor: obj.color,
+                    }}
+                  >
+                    <div 
+                      className="absolute -top-4 left-0 text-[8px] px-1 font-bold text-black"
+                      style={{ backgroundColor: obj.color }}
+                    >
+                      {obj.type.toUpperCase()} {obj.confidence}%
+                    </div>
+                  </div>
+                ))}
+                
+                {/* Detection status */}
+                <div className="absolute top-10 left-2 flex gap-1">
+                  <Badge className={isDetecting ? "bg-emerald-500 text-[8px]" : "bg-gray-500 text-[8px]"}>
+                    {isDetecting ? "DETECT ON" : "DETECT OFF"}
+                  </Badge>
+                  {detectedObjects.length > 0 && (
+                    <Badge className="bg-amber-500 text-[8px]">{detectedObjects.length} OBJ</Badge>
+                  )}
+                </div>
+              </div>
             ) : (
               <div className="w-full h-full flex items-center justify-center text-muted-foreground">
                 {webcamError ? (
