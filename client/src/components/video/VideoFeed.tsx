@@ -417,8 +417,8 @@ export function VideoFeed() {
             <div className="absolute top-1/2 left-4 w-12 h-px bg-white/50" />
             <div className="absolute top-1/2 right-4 w-12 h-px bg-white/50" />
              
-            {/* Object Detection Box */}
-            {activeCam !== 'fpv' && !thermalMode && (
+            {/* Object Detection Box - only show for gimbal/thermal modes, not webcam which has real detection */}
+            {activeCam !== 'fpv' && activeCam !== 'webcam' && !thermalMode && (
               <div className="absolute top-1/3 left-1/4 w-24 h-24 border-2 border-amber-500 rounded-sm">
                 <div className="absolute -top-4 left-0 bg-amber-500 text-black text-[10px] px-1 font-bold">VEHICLE 98%</div>
               </div>

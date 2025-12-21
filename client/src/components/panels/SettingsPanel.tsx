@@ -217,19 +217,31 @@ export function SettingsPanel() {
     }
   };
 
-  const HARDWARE_PRESETS = {
-    current: {
-      name: "Current Configuration",
-      description: "Your M.O.U.S.E drone setup",
-      specs: {
-        companion: "Raspberry Pi 5 (16GB) - Trixie 13.2",
-        fc: "Orange Cube+ with ADSB Carrier Board",
-        gps: "Here3+ GPS Module",
-        lidar: "LW20/HA Lidar",
-        gimbal: "Skydroid C12 2K (2560x1440 HD + 384x288 Thermal)",
-        motors: "Mad Motors XP6S Arms (x4)",
-      }
+  const [hardwareConfig, setHardwareConfig] = useState({
+    companion: "Raspberry Pi 5 (16GB) - Trixie 13.2",
+    fc: "Orange Cube+ with ADSB Carrier Board",
+    gps: "Here3+ GPS Module",
+    lidar: "LW20/HA Lidar",
+    gimbal: "Skydroid C12 2K (2560x1440 HD + 384x288 Thermal)",
+    motors: "Mad Motors XP6S Arms (x4)",
+    pdb: "Matek PDB-HEX X Class 12S (6-60V, 5A, 264A sense)",
+  });
+
+  const [editingHardware, setEditingHardware] = useState(false);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('mouse_hardware_config');
+    if (saved) {
+      try {
+        setHardwareConfig(JSON.parse(saved));
+      } catch {}
     }
+  }, []);
+
+  const saveHardwareConfig = () => {
+    localStorage.setItem('mouse_hardware_config', JSON.stringify(hardwareConfig));
+    setEditingHardware(false);
+    toast.success("Hardware configuration saved");
   };
 
   const { data: savedConnectionSettings } = useQuery({
@@ -458,40 +470,119 @@ export function SettingsPanel() {
           <TabsContent value="hardware" className="space-y-4 mt-4">
             <Card className="border-2 border-primary/50">
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Cpu className="h-5 w-5" />
-                  Hardware Configuration
-                </CardTitle>
-                <CardDescription>Your M.O.U.S.E drone hardware specifications</CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      <Cpu className="h-5 w-5" />
+                      Hardware Configuration
+                    </CardTitle>
+                    <CardDescription>Your M.O.U.S.E drone hardware specifications (editable for future upgrades)</CardDescription>
+                  </div>
+                  <Button 
+                    variant={editingHardware ? "default" : "outline"} 
+                    size="sm"
+                    onClick={() => editingHardware ? saveHardwareConfig() : setEditingHardware(true)}
+                    data-testid="button-edit-hardware"
+                  >
+                    {editingHardware ? <><Save className="h-4 w-4 mr-2" />Save</> : "Edit"}
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-3">
                     <div className="p-3 bg-muted/30 rounded-lg">
                       <Label className="text-xs text-muted-foreground">Companion Computer</Label>
-                      <p className="font-medium text-sm">{HARDWARE_PRESETS.current.specs.companion}</p>
+                      {editingHardware ? (
+                        <Input 
+                          value={hardwareConfig.companion}
+                          onChange={(e) => setHardwareConfig(prev => ({ ...prev, companion: e.target.value }))}
+                          className="mt-1"
+                          data-testid="input-hardware-companion"
+                        />
+                      ) : (
+                        <p className="font-medium text-sm">{hardwareConfig.companion}</p>
+                      )}
                     </div>
                     <div className="p-3 bg-muted/30 rounded-lg">
                       <Label className="text-xs text-muted-foreground">Flight Controller</Label>
-                      <p className="font-medium text-sm">{HARDWARE_PRESETS.current.specs.fc}</p>
+                      {editingHardware ? (
+                        <Input 
+                          value={hardwareConfig.fc}
+                          onChange={(e) => setHardwareConfig(prev => ({ ...prev, fc: e.target.value }))}
+                          className="mt-1"
+                          data-testid="input-hardware-fc"
+                        />
+                      ) : (
+                        <p className="font-medium text-sm">{hardwareConfig.fc}</p>
+                      )}
                     </div>
                     <div className="p-3 bg-muted/30 rounded-lg">
                       <Label className="text-xs text-muted-foreground">GPS Module</Label>
-                      <p className="font-medium text-sm">{HARDWARE_PRESETS.current.specs.gps}</p>
+                      {editingHardware ? (
+                        <Input 
+                          value={hardwareConfig.gps}
+                          onChange={(e) => setHardwareConfig(prev => ({ ...prev, gps: e.target.value }))}
+                          className="mt-1"
+                          data-testid="input-hardware-gps"
+                        />
+                      ) : (
+                        <p className="font-medium text-sm">{hardwareConfig.gps}</p>
+                      )}
+                    </div>
+                    <div className="p-3 bg-muted/30 rounded-lg">
+                      <Label className="text-xs text-muted-foreground">Power Distribution Board</Label>
+                      {editingHardware ? (
+                        <Input 
+                          value={hardwareConfig.pdb}
+                          onChange={(e) => setHardwareConfig(prev => ({ ...prev, pdb: e.target.value }))}
+                          className="mt-1"
+                          data-testid="input-hardware-pdb"
+                        />
+                      ) : (
+                        <p className="font-medium text-sm">{hardwareConfig.pdb}</p>
+                      )}
                     </div>
                   </div>
                   <div className="space-y-3">
                     <div className="p-3 bg-muted/30 rounded-lg">
                       <Label className="text-xs text-muted-foreground">Lidar Sensor</Label>
-                      <p className="font-medium text-sm">{HARDWARE_PRESETS.current.specs.lidar}</p>
+                      {editingHardware ? (
+                        <Input 
+                          value={hardwareConfig.lidar}
+                          onChange={(e) => setHardwareConfig(prev => ({ ...prev, lidar: e.target.value }))}
+                          className="mt-1"
+                          data-testid="input-hardware-lidar"
+                        />
+                      ) : (
+                        <p className="font-medium text-sm">{hardwareConfig.lidar}</p>
+                      )}
                     </div>
                     <div className="p-3 bg-muted/30 rounded-lg">
                       <Label className="text-xs text-muted-foreground">Camera/Gimbal</Label>
-                      <p className="font-medium text-sm">{HARDWARE_PRESETS.current.specs.gimbal}</p>
+                      {editingHardware ? (
+                        <Input 
+                          value={hardwareConfig.gimbal}
+                          onChange={(e) => setHardwareConfig(prev => ({ ...prev, gimbal: e.target.value }))}
+                          className="mt-1"
+                          data-testid="input-hardware-gimbal"
+                        />
+                      ) : (
+                        <p className="font-medium text-sm">{hardwareConfig.gimbal}</p>
+                      )}
                     </div>
                     <div className="p-3 bg-muted/30 rounded-lg">
                       <Label className="text-xs text-muted-foreground">Propulsion</Label>
-                      <p className="font-medium text-sm">{HARDWARE_PRESETS.current.specs.motors}</p>
+                      {editingHardware ? (
+                        <Input 
+                          value={hardwareConfig.motors}
+                          onChange={(e) => setHardwareConfig(prev => ({ ...prev, motors: e.target.value }))}
+                          className="mt-1"
+                          data-testid="input-hardware-motors"
+                        />
+                      ) : (
+                        <p className="font-medium text-sm">{hardwareConfig.motors}</p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -679,6 +770,60 @@ export function SettingsPanel() {
                   )}
                 </div>
 
+                <Card className="border-emerald-500/50">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <RefreshCw className="h-4 w-4 text-emerald-500" />
+                      Real-Time Flight Backup
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <Label>Auto-backup during flight</Label>
+                        <p className="text-xs text-muted-foreground">Sync telemetry & data every second while armed</p>
+                      </div>
+                      <Switch defaultChecked />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <Label>Backup footage to Drive</Label>
+                        <p className="text-xs text-muted-foreground">Auto-upload video clips during flight</p>
+                      </div>
+                      <Switch defaultChecked />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label className="text-xs">Backup Interval</Label>
+                        <Select defaultValue="1">
+                          <SelectTrigger className="h-8">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="1">Every 1 second</SelectItem>
+                            <SelectItem value="5">Every 5 seconds</SelectItem>
+                            <SelectItem value="10">Every 10 seconds</SelectItem>
+                            <SelectItem value="30">Every 30 seconds</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label className="text-xs">Video Chunk Size</Label>
+                        <Select defaultValue="30">
+                          <SelectTrigger className="h-8">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="10">10 second clips</SelectItem>
+                            <SelectItem value="30">30 second clips</SelectItem>
+                            <SelectItem value="60">1 minute clips</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
                 <div className="space-y-2">
                   <Label>Data Included in Backup:</Label>
                   <div className="grid grid-cols-2 gap-2 text-sm">
@@ -697,6 +842,14 @@ export function SettingsPanel() {
                     <div className="flex items-center gap-2 text-muted-foreground">
                       <CheckCircle className="h-4 w-4 text-emerald-500" />
                       System Settings
+                    </div>
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <CheckCircle className="h-4 w-4 text-emerald-500" />
+                      Video Footage (Drive)
+                    </div>
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <CheckCircle className="h-4 w-4 text-emerald-500" />
+                      Object Detection Logs
                     </div>
                   </div>
                 </div>
@@ -1780,6 +1933,69 @@ export function SettingsPanel() {
                       <SelectItem value="lava">Lava</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-amber-500/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5 text-amber-500" />
+                  3D Mapping (Photogrammetry)
+                </CardTitle>
+                <CardDescription>Generate 3D terrain maps from aerial footage. Note: Gimbal movement may affect quality.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-sm">
+                  <p className="text-amber-500 font-medium">Important:</p>
+                  <p className="text-muted-foreground text-xs mt-1">
+                    For best results, lock gimbal to nadir (straight down) position during mapping flights. 
+                    Gimbal movement during capture can reduce 3D reconstruction quality.
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Capture Mode</Label>
+                    <Select defaultValue="interval">
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="interval">Timed Interval (2s)</SelectItem>
+                        <SelectItem value="distance">Distance-Based (10m)</SelectItem>
+                        <SelectItem value="overlap">80% Overlap</SelectItem>
+                        <SelectItem value="manual">Manual Trigger</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Output Format</Label>
+                    <Select defaultValue="ortho">
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="ortho">Orthomosaic</SelectItem>
+                        <SelectItem value="dem">Digital Elevation Model</SelectItem>
+                        <SelectItem value="3dmodel">3D Point Cloud</SelectItem>
+                        <SelectItem value="all">All Formats</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Lock Gimbal During Mapping</Label>
+                    <p className="text-xs text-muted-foreground">Prevents gimbal movement for consistent captures</p>
+                  </div>
+                  <Switch defaultChecked />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Auto-process on Landing</Label>
+                    <p className="text-xs text-muted-foreground">Begin 3D reconstruction when flight ends</p>
+                  </div>
+                  <Switch />
                 </div>
               </CardContent>
             </Card>
