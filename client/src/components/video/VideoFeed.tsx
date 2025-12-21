@@ -1,12 +1,23 @@
 import { useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { Maximize2, Minimize2, Eye, EyeOff, Flame, ZoomIn, ZoomOut, RotateCcw, Move, Camera, Video, Download, Laptop, Target } from "lucide-react";
+import { Maximize2, Minimize2, Eye, EyeOff, Flame, ZoomIn, ZoomOut, RotateCcw, Camera, Video, Laptop, Settings2, Crosshair } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import aerialImg from "@assets/generated_images/aerial_drone_view_of_a_suburban_street_with_overlaid_bounding_boxes.png";
 import fpvImg from "@assets/generated_images/fpv_drone_view_forward_facing_with_horizon.png";
+
+interface CameraConfig {
+  model: string;
+  resolution: string;
+  thermalResolution: string;
+  lens: string;
+  streamUrl: string;
+  streamEnabled: boolean;
+}
 
 interface DetectedObject {
   id: string;
@@ -19,10 +30,19 @@ interface DetectedObject {
   color: string;
 }
 
+const defaultCameraConfig: CameraConfig = {
+  model: "Skydroid C12",
+  resolution: "2K HD (2560x1440)",
+  thermalResolution: "384x288",
+  lens: "7mm",
+  streamUrl: "",
+  streamEnabled: false
+};
+
 export function VideoFeed() {
   const [isMain, setIsMain] = useState(false);
   const [visible, setVisible] = useState(true);
-  const [activeCam, setActiveCam] = useState<'gimbal' | 'thermal' | 'fpv' | 'webcam'>('gimbal');
+  const [activeCam, setActiveCam] = useState<'gimbal' | 'thermal' | 'fpv' | 'webcam' | 'stream'>('gimbal');
   const [thermalMode, setThermalMode] = useState(false);
   const [zoom, setZoom] = useState([1]);
   const [showControls, setShowControls] = useState(false);
@@ -34,12 +54,22 @@ export function VideoFeed() {
   const [isDetecting, setIsDetecting] = useState(false);
   const [detectedObjects, setDetectedObjects] = useState<DetectedObject[]>([]);
   const [videoDimensions, setVideoDimensions] = useState({ width: 640, height: 480 });
+  const [cameraConfig, setCameraConfig] = useState<CameraConfig>(() => {
+    const saved = localStorage.getItem('mouse_camera_config');
+    return saved ? JSON.parse(saved) : defaultCameraConfig;
+  });
+  const [showConfigDialog, setShowConfigDialog] = useState(false);
+  const [streamUrl, setStreamUrl] = useState(cameraConfig.streamUrl);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const prevFrameRef = useRef<ImageData | null>(null);
   const detectionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const trackedObjectsRef = useRef<Map<string, {x: number, y: number, lastSeen: number}>>(new Map());
   const objectIdCounterRef = useRef(0);
+  
+  useEffect(() => {
+    localStorage.setItem('mouse_camera_config', JSON.stringify(cameraConfig));
+  }, [cameraConfig]);
 
   useEffect(() => {
     if (activeCam === 'webcam') {
@@ -275,22 +305,24 @@ export function VideoFeed() {
         <div className="text-xs font-mono text-primary flex items-center gap-2">
           <span className={cn("w-2 h-2 rounded-full", isRecording ? "bg-red-500 animate-pulse" : "bg-red-500")} />
           {isRecording ? "REC" : "LIVE"}: {
-            activeCam === 'gimbal' ? (thermalMode ? 'THERMAL' : 'GIMBAL') : 
-            activeCam === 'thermal' ? 'THERMAL' : 
-            activeCam === 'webcam' ? 'LAPTOP CAM' : 'FPV'
+            activeCam === 'gimbal' ? (thermalMode ? 'THERMAL' : cameraConfig.model) : 
+            activeCam === 'thermal' ? `THERMAL ${cameraConfig.thermalResolution}` : 
+            activeCam === 'webcam' ? 'LAPTOP CAM' : 
+            activeCam === 'stream' ? 'RTSP STREAM' : 'FPV'
           }
           {zoom[0] > 1 && <span className="text-amber-500">{zoom[0].toFixed(1)}x</span>}
         </div>
         <div className="flex gap-1">
           <button 
             onClick={() => {
-              if (activeCam === 'gimbal') setActiveCam('thermal');
-              else if (activeCam === 'thermal') setActiveCam('fpv');
-              else if (activeCam === 'fpv') setActiveCam('webcam');
-              else setActiveCam('gimbal');
+              const cams: typeof activeCam[] = ['gimbal', 'thermal', 'fpv', 'webcam'];
+              if (cameraConfig.streamUrl) cams.push('stream');
+              const idx = cams.indexOf(activeCam);
+              setActiveCam(cams[(idx + 1) % cams.length]);
             }} 
             className="p-1 hover:text-white text-muted-foreground text-[10px] uppercase border border-white/20 rounded px-2"
-            title="Switch Camera (Gimbal/Thermal/FPV/Laptop)"
+            title="Switch Camera"
+            data-testid="button-switch-cam"
           >
             CAM
           </button>
@@ -298,6 +330,7 @@ export function VideoFeed() {
             onClick={() => setActiveCam('webcam')} 
             className={cn("p-1 hover:text-white text-muted-foreground", activeCam === 'webcam' && "text-primary")}
             title="Laptop Camera (Test Mode)"
+            data-testid="button-laptop-cam"
           >
             <Laptop className="h-3 w-3" />
           </button>
@@ -305,13 +338,77 @@ export function VideoFeed() {
             onClick={() => setThermalMode(!thermalMode)} 
             className={cn("p-1 hover:text-white text-muted-foreground", thermalMode && "text-amber-500")}
             title="Toggle Thermal"
+            data-testid="button-thermal-mode"
           >
             <Flame className="h-3 w-3" />
           </button>
-          <button onClick={() => setIsMain(!isMain)} className="p-1 hover:text-white text-muted-foreground">
+          <Dialog open={showConfigDialog} onOpenChange={setShowConfigDialog}>
+            <DialogTrigger asChild>
+              <button 
+                className="p-1 hover:text-white text-muted-foreground"
+                title="Camera Settings"
+                data-testid="button-camera-settings"
+              >
+                <Settings2 className="h-3 w-3" />
+              </button>
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-md bg-slate-900 border-slate-700">
+              <DialogHeader>
+                <DialogTitle className="text-primary">Camera Configuration</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="p-3 bg-slate-800 rounded-lg space-y-2">
+                  <div className="text-sm font-medium text-white">{cameraConfig.model}</div>
+                  <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                    <div>HD Resolution: {cameraConfig.resolution}</div>
+                    <div>Thermal: {cameraConfig.thermalResolution}</div>
+                    <div>Lens: {cameraConfig.lens}</div>
+                    <div>Dual Sensor: Yes</div>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>RTSP Stream URL (Optional)</Label>
+                  <Input 
+                    placeholder="rtsp://192.168.1.100:8554/stream"
+                    value={streamUrl}
+                    onChange={(e) => setStreamUrl(e.target.value)}
+                    className="bg-slate-800 border-slate-600"
+                    data-testid="input-stream-url"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Enter the RTSP stream URL from your drone's camera to view live feed
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline" 
+                    className="flex-1"
+                    onClick={() => {
+                      setCameraConfig(prev => ({ ...prev, streamUrl, streamEnabled: !!streamUrl }));
+                      if (streamUrl) {
+                        toast.success("Stream URL configured");
+                        setActiveCam('stream');
+                      }
+                      setShowConfigDialog(false);
+                    }}
+                    data-testid="button-save-stream"
+                  >
+                    Save & Connect
+                  </Button>
+                  <Button 
+                    variant="ghost"
+                    onClick={() => setShowConfigDialog(false)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+          <button onClick={() => setIsMain(!isMain)} className="p-1 hover:text-white text-muted-foreground" data-testid="button-toggle-size">
             {isMain ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
           </button>
-          <button onClick={() => setVisible(false)} className="p-1 hover:text-white text-muted-foreground">
+          <button onClick={() => setVisible(false)} className="p-1 hover:text-white text-muted-foreground" data-testid="button-hide-feed">
             <EyeOff className="h-3 w-3" />
           </button>
         </div>
@@ -394,6 +491,25 @@ export function VideoFeed() {
                 )}
               </div>
             )
+          ) : activeCam === 'stream' && cameraConfig.streamUrl ? (
+            <div className="relative w-full h-full">
+              <div className="w-full h-full flex items-center justify-center text-muted-foreground bg-slate-800">
+                <div className="text-center p-4">
+                  <Crosshair className="h-12 w-12 mx-auto mb-3 text-primary animate-pulse" />
+                  <p className="text-sm font-medium text-white">RTSP Stream Mode</p>
+                  <p className="text-xs mt-1">{cameraConfig.streamUrl}</p>
+                  <p className="text-[10px] text-muted-foreground mt-2">
+                    RTSP streams require native browser support or a media server.<br/>
+                    Configure VLC or GStreamer on the Pi to transcode to HLS/WebRTC.
+                  </p>
+                  <div className="mt-3 p-2 bg-slate-900 rounded text-[10px] font-mono text-left">
+                    <div className="text-emerald-400"># Pi Terminal Command:</div>
+                    <div className="text-white">ffmpeg -i {cameraConfig.streamUrl} \</div>
+                    <div className="text-white pl-4">-c:v libx264 -f hls /tmp/stream.m3u8</div>
+                  </div>
+                </div>
+              </div>
+            </div>
           ) : (
             <img 
               src={activeCam === 'fpv' ? fpvImg : aerialImg} 
@@ -418,7 +534,7 @@ export function VideoFeed() {
             <div className="absolute top-1/2 right-4 w-12 h-px bg-white/50" />
              
             {/* Object Detection Box - only show for gimbal/thermal modes, not webcam which has real detection */}
-            {activeCam !== 'fpv' && activeCam !== 'webcam' && !thermalMode && (
+            {activeCam !== 'fpv' && activeCam !== 'webcam' && activeCam !== 'stream' && !thermalMode && (
               <div className="absolute top-1/3 left-1/4 w-24 h-24 border-2 border-amber-500 rounded-sm">
                 <div className="absolute -top-4 left-0 bg-amber-500 text-black text-[10px] px-1 font-bold">VEHICLE 98%</div>
               </div>
@@ -428,6 +544,24 @@ export function VideoFeed() {
             {thermalMode && (
               <div className="absolute top-1/4 right-1/4 w-16 h-20 border-2 border-amber-500 rounded-sm animate-pulse">
                 <div className="absolute -top-4 left-0 bg-amber-500 text-black text-[10px] px-1 font-bold">HEAT: 36.5°C</div>
+              </div>
+            )}
+            
+            {/* Telemetry HUD - Bottom Left */}
+            {activeCam !== 'webcam' && activeCam !== 'stream' && (
+              <div className="absolute bottom-8 left-2 text-[9px] font-mono text-white/80 space-y-0.5">
+                <div>ALT: 42.3m AGL</div>
+                <div>SPD: 8.2 m/s</div>
+                <div>HDG: 247°</div>
+              </div>
+            )}
+            
+            {/* Camera Info - Bottom Right */}
+            {activeCam !== 'webcam' && activeCam !== 'stream' && (
+              <div className="absolute bottom-8 right-2 text-[9px] font-mono text-white/80 text-right space-y-0.5">
+                <div>{cameraConfig.model}</div>
+                <div>{thermalMode ? cameraConfig.thermalResolution : cameraConfig.resolution}</div>
+                <div>LENS: {cameraConfig.lens}</div>
               </div>
             )}
           </div>
