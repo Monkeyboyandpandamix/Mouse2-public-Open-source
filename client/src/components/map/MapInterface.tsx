@@ -2,9 +2,12 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, useMap } from
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { useEffect, useState } from "react";
-import { Search, Map as MapIcon, Layers, ZoomIn, ZoomOut, RotateCcw, Crosshair } from "lucide-react";
+import { Search, Map as MapIcon, Layers, ZoomIn, ZoomOut, RotateCcw, Crosshair, Plane } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 
 import icon from "leaflet/dist/images/marker-icon.png";
@@ -42,6 +45,39 @@ const WaypointIcon = (num: number) => L.divIcon({
   iconSize: [24, 24],
   iconAnchor: [12, 12],
 });
+
+const AircraftIcon = (heading: number, threat: 'low' | 'medium' | 'high') => {
+  const color = threat === 'high' ? '#ef4444' : threat === 'medium' ? '#f59e0b' : '#3b82f6';
+  return L.divIcon({
+    className: "bg-transparent",
+    html: `<div class="relative flex items-center justify-center w-8 h-8" style="transform: rotate(${heading}deg)">
+            <svg viewBox="0 0 24 24" fill="${color}" class="w-6 h-6 drop-shadow-lg">
+              <path d="M12 2L4 12h4v6h8v-6h4L12 2z"/>
+            </svg>
+          </div>`,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+  });
+};
+
+interface Aircraft {
+  id: string;
+  callsign: string;
+  lat: number;
+  lon: number;
+  altitude: number;
+  speed: number;
+  heading: number;
+  threat: 'low' | 'medium' | 'high';
+  verticalRate: number;
+}
+
+const simulatedAircraft: Aircraft[] = [
+  { id: "UAL123", callsign: "UAL123", lat: 34.0650, lon: -118.2300, altitude: 3500, speed: 250, heading: 180, threat: 'low', verticalRate: -500 },
+  { id: "SWA456", callsign: "SWA456", lat: 34.0400, lon: -118.2600, altitude: 2800, speed: 180, heading: 45, threat: 'medium', verticalRate: 0 },
+  { id: "N789AB", callsign: "N789AB", lat: 34.0550, lon: -118.2380, altitude: 800, speed: 95, heading: 270, threat: 'high', verticalRate: -200 },
+  { id: "DAL789", callsign: "DAL789", lat: 34.0800, lon: -118.2100, altitude: 5200, speed: 300, heading: 135, threat: 'low', verticalRate: 1000 },
+];
 
 function ZoomControls() {
   const map = useMap();
@@ -118,6 +154,20 @@ export function MapInterface() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [searchResult, setSearchResult] = useState<{lat: number; lon: number; name: string} | null>(null);
+  const [showAdsb, setShowAdsb] = useState(true);
+  const [aircraft, setAircraft] = useState<Aircraft[]>(simulatedAircraft);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setAircraft(prev => prev.map(ac => ({
+        ...ac,
+        lat: ac.lat + (Math.sin(ac.heading * Math.PI / 180) * 0.0001),
+        lon: ac.lon + (Math.cos(ac.heading * Math.PI / 180) * 0.0001),
+        altitude: ac.altitude + (ac.verticalRate / 60),
+      })));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const getTileUrl = () => {
     switch(mapType) {
@@ -220,6 +270,40 @@ export function MapInterface() {
           pathOptions={{ color: 'hsl(0 85% 60%)', fillColor: 'hsl(0 85% 60%)', fillOpacity: 0.1, weight: 1, dashArray: '4' }} 
           radius={200} 
         />
+
+        {/* ADS-B Aircraft */}
+        {showAdsb && aircraft.map(ac => (
+          <Marker 
+            key={ac.id} 
+            position={[ac.lat, ac.lon]} 
+            icon={AircraftIcon(ac.heading, ac.threat)}
+          >
+            <Popup>
+              <div className="font-mono text-sm space-y-1 min-w-[180px]">
+                <div className="flex items-center justify-between border-b pb-1 mb-1">
+                  <strong className="text-base">{ac.callsign}</strong>
+                  <span className={`px-2 py-0.5 rounded text-xs font-bold ${
+                    ac.threat === 'high' ? 'bg-red-500 text-white' : 
+                    ac.threat === 'medium' ? 'bg-amber-500 text-black' : 
+                    'bg-blue-500 text-white'
+                  }`}>
+                    {ac.threat.toUpperCase()}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-4 text-xs">
+                  <span className="text-gray-500">Altitude:</span>
+                  <span>{Math.round(ac.altitude)} ft</span>
+                  <span className="text-gray-500">Speed:</span>
+                  <span>{ac.speed} kts</span>
+                  <span className="text-gray-500">Heading:</span>
+                  <span>{ac.heading}°</span>
+                  <span className="text-gray-500">V/S:</span>
+                  <span>{ac.verticalRate > 0 ? '+' : ''}{ac.verticalRate} fpm</span>
+                </div>
+              </div>
+            </Popup>
+          </Marker>
+        ))}
       </MapContainer>
 
       {/* Search Bar Overlay */}
@@ -275,6 +359,45 @@ export function MapInterface() {
              <MapIcon className="w-3 h-3 mr-2" /> Street
            </Button>
         </div>
+      </div>
+
+      {/* ADS-B Panel */}
+      <div className="absolute bottom-20 left-4 z-[400] bg-card/90 backdrop-blur rounded-lg border border-border p-3 shadow-lg min-w-[200px]">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <Plane className="h-4 w-4 text-blue-500" />
+            <span className="font-bold text-sm">ADS-B Traffic</span>
+          </div>
+          <Switch 
+            checked={showAdsb} 
+            onCheckedChange={setShowAdsb}
+            data-testid="switch-adsb-map"
+          />
+        </div>
+        {showAdsb && (
+          <div className="space-y-1.5 max-h-32 overflow-auto">
+            {aircraft.map(ac => (
+              <div 
+                key={ac.id} 
+                className={`flex items-center justify-between text-xs p-1.5 rounded ${
+                  ac.threat === 'high' ? 'bg-red-500/20 text-red-400' : 
+                  ac.threat === 'medium' ? 'bg-amber-500/20 text-amber-400' : 
+                  'bg-blue-500/10 text-blue-400'
+                }`}
+                data-testid={`adsb-aircraft-${ac.id}`}
+              >
+                <span className="font-mono font-bold">{ac.callsign}</span>
+                <span>{Math.round(ac.altitude)}ft</span>
+                <span>{ac.speed}kts</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {showAdsb && aircraft.filter(a => a.threat === 'high').length > 0 && (
+          <div className="mt-2 p-2 bg-red-500/20 rounded text-xs text-red-400 font-bold animate-pulse">
+            ⚠️ TRAFFIC ALERT: {aircraft.filter(a => a.threat === 'high').length} nearby aircraft
+          </div>
+        )}
       </div>
 
       {/* Zoom Level Indicator */}

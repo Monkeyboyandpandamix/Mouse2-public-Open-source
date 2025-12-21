@@ -2130,8 +2130,179 @@ export function SettingsPanel() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Low Battery Threshold (%)</Label>
+                  <Label>Low Battery RTL Threshold (%)</Label>
                   <Input type="number" defaultValue="20" min="10" max="50" />
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-2 border-red-600/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5 text-red-500" />
+                  Critical Battery Emergency Landing
+                </CardTitle>
+                <CardDescription>Automatic emergency landing when battery is critically low</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-sm">
+                  <p className="text-red-500 font-medium">Critical Safety System</p>
+                  <p className="text-muted-foreground text-xs mt-1">
+                    When battery drops below 5%, the drone will automatically identify a safe landing zone 
+                    using camera AI (avoiding roads, highways, and obstacles) and perform a controlled descent.
+                    User can override this action if needed.
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Enable Critical Battery Auto-Land</Label>
+                    <p className="text-xs text-muted-foreground">Automatically land when battery is below threshold</p>
+                  </div>
+                  <Switch defaultChecked data-testid="switch-critical-battery-land" />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Critical Battery Threshold (%)</Label>
+                  <Input type="number" defaultValue="5" min="3" max="15" data-testid="input-critical-battery" />
+                  <p className="text-xs text-muted-foreground">Below this level, drone will begin emergency landing</p>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Camera-Based Clearing Detection</Label>
+                    <p className="text-xs text-muted-foreground">Use AI to identify safe landing zones automatically</p>
+                  </div>
+                  <Switch defaultChecked data-testid="switch-clearing-detection" />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Avoid Areas (AI Detection)</Label>
+                  <div className="grid grid-cols-2 gap-2 mt-2">
+                    <div className="flex items-center space-x-2">
+                      <Switch defaultChecked data-testid="switch-avoid-roads" />
+                      <Label className="text-sm">Roads & Highways</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Switch defaultChecked data-testid="switch-avoid-water" />
+                      <Label className="text-sm">Water Bodies</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Switch defaultChecked data-testid="switch-avoid-crowds" />
+                      <Label className="text-sm">Crowds/People</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Switch defaultChecked data-testid="switch-avoid-vehicles" />
+                      <Label className="text-sm">Vehicles</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Switch defaultChecked data-testid="switch-avoid-buildings" />
+                      <Label className="text-sm">Buildings</Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Switch defaultChecked data-testid="switch-avoid-powerlines" />
+                      <Label className="text-sm">Power Lines</Label>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Allow User Override</Label>
+                    <p className="text-xs text-muted-foreground">Let operator cancel emergency landing if safe to do so</p>
+                  </div>
+                  <Switch defaultChecked data-testid="switch-emergency-override" />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Override Confirmation Time (sec)</Label>
+                  <Input type="number" defaultValue="5" min="3" max="30" data-testid="input-override-time" />
+                  <p className="text-xs text-muted-foreground">Time window to cancel before landing begins</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Descent Rate (m/s)</Label>
+                    <Input type="number" defaultValue="1.5" min="0.5" max="5" step="0.5" data-testid="input-descent-rate" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Min Clearing Size (m)</Label>
+                    <Input type="number" defaultValue="10" min="5" max="50" data-testid="input-clearing-size" />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="border-2 border-blue-500/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Radio className="h-5 w-5 text-blue-500" />
+                  ADS-B Integration
+                </CardTitle>
+                <CardDescription>Aircraft collision avoidance using ADSB Carrier Board with uAvionix receiver</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg text-sm">
+                  <p className="text-blue-500 font-medium">Aircraft Detection System</p>
+                  <p className="text-muted-foreground text-xs mt-1">
+                    The Orange Cube+ ADSB Carrier Board with uAvionix receiver picks up ADS-B signals from nearby aircraft,
+                    providing position, altitude, and speed data. This information is used to prevent collisions during
+                    all flight modes including emergency protocols.
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Enable ADS-B Tracking</Label>
+                    <p className="text-xs text-muted-foreground">Display nearby aircraft on map</p>
+                  </div>
+                  <Switch defaultChecked data-testid="switch-adsb-enabled" />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Collision Avoidance</Label>
+                    <p className="text-xs text-muted-foreground">Automatically avoid aircraft during RTL and emergencies</p>
+                  </div>
+                  <Switch defaultChecked data-testid="switch-adsb-avoidance" />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Detection Range (km)</Label>
+                    <Input type="number" defaultValue="20" min="5" max="50" data-testid="input-adsb-range" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Alert Distance (m)</Label>
+                    <Input type="number" defaultValue="500" min="100" max="2000" />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Vertical Separation (m)</Label>
+                    <Input type="number" defaultValue="150" min="50" max="500" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Horizontal Separation (m)</Label>
+                    <Input type="number" defaultValue="300" min="100" max="1000" />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Audio Alerts</Label>
+                    <p className="text-xs text-muted-foreground">Play warning sounds when aircraft detected</p>
+                  </div>
+                  <Switch defaultChecked />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Include in Emergency Protocols</Label>
+                    <p className="text-xs text-muted-foreground">RTL and emergency landing check for aircraft</p>
+                  </div>
+                  <Switch defaultChecked />
                 </div>
               </CardContent>
             </Card>

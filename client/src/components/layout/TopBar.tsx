@@ -13,7 +13,9 @@ import {
   CheckCircle,
   XCircle,
   LogOut,
-  User
+  User,
+  Plane,
+  ChevronDown
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import {
@@ -251,6 +253,21 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
         <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 px-3 font-mono">
           MODE: STABILIZE
         </Badge>
+
+        <Button 
+          variant="destructive" 
+          size="sm" 
+          className="ml-2 gap-2 font-bold animate-pulse hover:animate-none"
+          onClick={() => {
+            if (confirm("EMERGENCY LANDING: This will find a safe clearing and land immediately. Continue?")) {
+              toast.error("EMERGENCY LANDING INITIATED - Finding safe landing zone...", { duration: 5000 });
+            }
+          }}
+          data-testid="button-emergency-land"
+        >
+          <ChevronDown className="h-4 w-4" />
+          EMERGENCY LAND
+        </Button>
       </div>
 
       <div className="flex items-center gap-6">
