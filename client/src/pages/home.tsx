@@ -9,6 +9,7 @@ import { SettingsPanel } from "@/components/panels/SettingsPanel";
 import { MissionPlanningPanel } from "@/components/panels/MissionPlanningPanel";
 import { TrackingPanel } from "@/components/panels/TrackingPanel";
 import { SpeakerPanel } from "@/components/panels/SpeakerPanel";
+import { FlightLogsPanel } from "@/components/panels/FlightLogsPanel";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState("map");
@@ -52,9 +53,8 @@ export default function Home() {
         );
       case "logs":
         return (
-          <div className="flex-1 relative overflow-hidden bg-background p-6">
-            <h2 className="text-2xl font-bold mb-4">Flight Logs</h2>
-            <p className="text-muted-foreground">Historical telemetry and flight data</p>
+          <div className="flex-1 relative overflow-hidden">
+            <FlightLogsPanel />
           </div>
         );
       case "settings":

@@ -10,15 +10,36 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
+interface Mission {
+  id: number;
+  name: string;
+  description: string | null;
+  status: string;
+  homeLatitude: number;
+  homeLongitude: number;
+  homeAltitude: number;
+}
+
+interface Waypoint {
+  id: number;
+  missionId: number;
+  order: number;
+  latitude: number;
+  longitude: number;
+  altitude: number;
+  speed: number | null;
+  action: string | null;
+}
+
 export function MissionPlanningPanel() {
   const queryClient = useQueryClient();
   const [selectedMission, setSelectedMission] = useState<number | null>(null);
 
-  const { data: missions = [] } = useQuery({
+  const { data: missions = [] } = useQuery<Mission[]>({
     queryKey: ["/api/missions"],
   });
 
-  const { data: waypoints = [] } = useQuery({
+  const { data: waypoints = [] } = useQuery<Waypoint[]>({
     queryKey: ["/api/missions", selectedMission, "waypoints"],
     enabled: !!selectedMission,
   });
