@@ -1,0 +1,58 @@
+import { 
+  Map, 
+  Navigation, 
+  Target, 
+  Box, 
+  Video, 
+  Settings, 
+  FileText,
+  AlertCircle
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+
+interface SidebarProps {
+  activeTab: string;
+  setActiveTab: (tab: string) => void;
+}
+
+export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
+  const menuItems = [
+    { id: "map", icon: Map, label: "Map View" },
+    { id: "mission", icon: Navigation, label: "Mission Plan" },
+    { id: "tracking", icon: Target, label: "Object Track" },
+    { id: "payload", icon: Box, label: "Payload" },
+    { id: "feeds", icon: Video, label: "Camera Feeds" },
+    { id: "logs", icon: FileText, label: "Flight Logs" },
+  ];
+
+  return (
+    <div className="w-16 flex flex-col items-center py-4 border-r border-border bg-card/50 backdrop-blur-sm z-40">
+      <div className="flex-1 flex flex-col gap-2 w-full px-2">
+        {menuItems.map((item) => (
+          <Button
+            key={item.id}
+            variant={activeTab === item.id ? "default" : "ghost"}
+            size="icon"
+            className={cn(
+              "w-12 h-12 rounded-lg transition-all duration-200",
+              activeTab === item.id 
+                ? "bg-primary text-primary-foreground shadow-[0_0_15px_rgba(6,182,212,0.5)]" 
+                : "text-muted-foreground hover:text-foreground hover:bg-accent"
+            )}
+            onClick={() => setActiveTab(item.id)}
+            title={item.label}
+          >
+            <item.icon className="h-6 w-6" />
+          </Button>
+        ))}
+      </div>
+      
+      <div className="mt-auto flex flex-col gap-2 w-full px-2">
+        <Button variant="ghost" size="icon" className="w-12 h-12 text-destructive hover:text-destructive hover:bg-destructive/10">
+          <AlertCircle className="h-6 w-6" />
+        </Button>
+      </div>
+    </div>
+  );
+}
