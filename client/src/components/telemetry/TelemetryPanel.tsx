@@ -23,31 +23,63 @@ export function TelemetryPanel() {
 
   const [motors, setMotors] = useState<MotorData[]>([]);
 
-  const [attitude, setAttitude] = useState({ pitch: -2, roll: 0, yaw: 0 });
-  const [heading, setHeading] = useState(315);
+  const [attitude, setAttitude] = useState({ pitch: 0, roll: 0, yaw: 0 });
+  const [heading, setHeading] = useState(0);
+  
+  // Track drone arm state - only update telemetry when armed
+  const [isArmed, setIsArmed] = useState(() => {
+    const saved = localStorage.getItem('mouse_drone_armed');
+    return saved ? JSON.parse(saved) : false;
+  });
 
   useEffect(() => {
     const handleMotorCountChange = (e: CustomEvent) => {
       setMotorCount(e.detail);
     };
+    const handleArmStateChange = (e: CustomEvent<{ armed: boolean }>) => {
+      setIsArmed(e.detail.armed);
+    };
     window.addEventListener('motor-count-changed' as any, handleMotorCountChange);
-    return () => window.removeEventListener('motor-count-changed' as any, handleMotorCountChange);
+    window.addEventListener('arm-state-changed' as any, handleArmStateChange);
+    return () => {
+      window.removeEventListener('motor-count-changed' as any, handleMotorCountChange);
+      window.removeEventListener('arm-state-changed' as any, handleArmStateChange);
+    };
   }, []);
 
+  // Initialize motors based on motor count and arm state
   useEffect(() => {
     const newMotors: MotorData[] = [];
     for (let i = 0; i < motorCount; i++) {
-      newMotors.push({
-        rpm: 3200 + Math.random() * 400 + i * 50,
-        temp: 42 + Math.random() * 8 + i * 2,
-        current: 7.5 + Math.random() * 2 + i * 0.3,
-        status: 'ok'
-      });
+      if (isArmed) {
+        newMotors.push({
+          rpm: 3200 + Math.random() * 400 + i * 50,
+          temp: 42 + Math.random() * 8 + i * 2,
+          current: 7.5 + Math.random() * 2 + i * 0.3,
+          status: 'ok'
+        });
+      } else {
+        newMotors.push({
+          rpm: 0,
+          temp: 25, // Ambient temp when idle
+          current: 0,
+          status: 'ok'
+        });
+      }
     }
     setMotors(newMotors);
-  }, [motorCount]);
+  }, [motorCount, isArmed]);
 
+  // Only simulate telemetry updates when drone is armed
   useEffect(() => {
+    if (!isArmed) {
+      // Reset to idle values when disarmed
+      setAttitude({ pitch: 0, roll: 0, yaw: 0 });
+      setHeading(0);
+      setMotors(prev => prev.map(m => ({ ...m, rpm: 0, current: 0 })));
+      return;
+    }
+    
     const interval = setInterval(() => {
       setAttitude(prev => ({
         pitch: prev.pitch + (Math.random() - 0.5) * 2,
@@ -57,14 +89,14 @@ export function TelemetryPanel() {
       setHeading(prev => (prev + 0.2) % 360);
       setMotors(prev => prev.map(m => ({
         ...m,
-        rpm: m.rpm + (Math.random() - 0.5) * 100,
+        rpm: Math.max(2800, m.rpm + (Math.random() - 0.5) * 100),
         temp: Math.max(35, Math.min(70, m.temp + (Math.random() - 0.5) * 0.5)),
         current: Math.max(5, Math.min(15, m.current + (Math.random() - 0.5) * 0.2)),
         status: m.temp > 60 ? 'warning' : m.temp > 70 ? 'error' : 'ok'
       })));
     }, 100);
     return () => clearInterval(interval);
-  }, []);
+  }, [isArmed]);
 
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -91,6 +123,11 @@ export function TelemetryPanel() {
         <CardTitle className="text-xs sm:text-sm font-mono text-muted-foreground uppercase tracking-widest flex items-center justify-between gap-2">
           <span className="flex items-center gap-2">
             <Gauge className="h-4 w-4" /> Telemetry
+            {isArmed ? (
+              <Badge variant="default" className="bg-emerald-500/20 text-emerald-500 text-[8px] px-1.5 py-0 border-emerald-500/30">LIVE</Badge>
+            ) : (
+              <Badge variant="outline" className="text-muted-foreground text-[8px] px-1.5 py-0">OFFLINE</Badge>
+            )}
           </span>
           <button 
             onClick={() => setIsCollapsed(true)}

@@ -24,7 +24,10 @@ interface ControlDeckProps {
 }
 
 export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
-  const [isArmed, setIsArmed] = useState(false);
+  const [isArmed, setIsArmed] = useState(() => {
+    const saved = localStorage.getItem('mouse_drone_armed');
+    return saved ? JSON.parse(saved) : false;
+  });
   const [gripperOpen, setGripperOpen] = useState(false);
   const [baseLocation, setBaseLocation] = useState<BaseLocation | null>(null);
   const [isReturning, setIsReturning] = useState(false);
@@ -115,7 +118,13 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
               ? "bg-destructive/10 border-destructive text-destructive hover:bg-destructive/20 hover:text-destructive" 
               : "bg-emerald-500/10 border-emerald-500 text-emerald-500 hover:bg-emerald-500/20 hover:text-emerald-500"
           )}
-          onClick={() => setIsArmed(!isArmed)}
+          onClick={() => {
+            const newArmed = !isArmed;
+            setIsArmed(newArmed);
+            // Persist arm state and notify other components
+            localStorage.setItem('mouse_drone_armed', JSON.stringify(newArmed));
+            window.dispatchEvent(new CustomEvent('arm-state-changed', { detail: { armed: newArmed } }));
+          }}
           data-testid="button-arm-toggle"
         >
           <Power className="h-6 w-6" />
