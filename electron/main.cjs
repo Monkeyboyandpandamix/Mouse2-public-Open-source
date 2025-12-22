@@ -6,8 +6,43 @@ const http = require('http');
 
 let mainWindow;
 let serverProcess;
+let isQuitting = false;
 const isDev = !app.isPackaged;
 let PORT = parseInt(process.env.PORT || '5000', 10);
+
+function shutdownServer() {
+  if (serverProcess && !serverProcess.killed) {
+    console.log('Shutting down server...');
+    serverProcess.kill('SIGTERM');
+    
+    setTimeout(() => {
+      if (serverProcess && !serverProcess.killed) {
+        console.log('Force killing server...');
+        serverProcess.kill('SIGKILL');
+      }
+    }, 2000);
+    
+    serverProcess = null;
+  }
+}
+
+function cleanup() {
+  if (isQuitting) return;
+  isQuitting = true;
+  
+  console.log('Cleaning up...');
+  shutdownServer();
+}
+
+process.on('SIGINT', () => {
+  cleanup();
+  app.quit();
+});
+
+process.on('SIGTERM', () => {
+  cleanup();
+  app.quit();
+});
 
 function getDataPath() {
   const userDataPath = app.getPath('userData');
@@ -197,15 +232,12 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  cleanup();
+  app.quit();
 });
 
 app.on('before-quit', () => {
-  if (serverProcess) {
-    serverProcess.kill();
-  }
+  cleanup();
 });
 
 ipcMain.handle('get-data-path', () => {

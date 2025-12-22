@@ -111,6 +111,53 @@ chmod +x start-linux.sh
 sudo ./start-pi-onboard.sh
 ```
 
+### Desktop Application (Electron)
+
+Run M.O.U.S.E as a native desktop application instead of in a browser:
+
+**Linux / macOS:**
+```bash
+# Make script executable (first time only)
+chmod +x start-electron.sh
+
+# Start the desktop application
+./start-electron.sh
+```
+
+**Windows:**
+```batch
+start-electron.bat
+```
+
+**Features of Desktop Mode:**
+- Native window with integrated server
+- No browser required
+- Automatically shuts down all processes when window is closed
+- Data stored in OS-specific application data directory
+- Works completely offline
+
+**Build Installers:**
+```bash
+# Create distributable installers for your platform
+./build-electron.sh
+```
+
+This creates platform-specific installers in the `electron-dist/` folder:
+- **Windows**: `.exe` installer and portable version
+- **macOS**: `.dmg` disk image
+- **Linux**: `.AppImage` and `.deb` packages
+
+**Troubleshooting Desktop App:**
+
+If port 5000 is already in use (common on macOS with AirPlay):
+```bash
+# Use a different port
+PORT=3000 ./start-electron.sh
+
+# Or kill the process using port 5000
+lsof -ti:5000 | xargs kill -9
+```
+
 ---
 
 ## Installation Without Replit
