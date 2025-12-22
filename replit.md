@@ -41,7 +41,7 @@ Preferred communication style: Simple, everyday language.
 - Real-time telemetry panel showing altitude, speed, attitude, and motor data
 - Interactive map with all connected drones visible, waypoints, flight path visualization, address search, and hover tooltips showing drone status/battery/GPS/mission
 - Mission planning with waypoint management and actions (hover, photo, drop/pickup payload, RTL)
-- Advanced object tracking with multi-scale detection (8px/16px/32px blocks), background subtraction for static objects, global motion compensation, IoU + color histogram matching, velocity prediction, and click-to-lock persistent tracking
+- Advanced AI-powered object tracking using TensorFlow.js COCO-SSD model for detecting stationary and moving objects (people, cars, trucks, motorcycles, bicycles), with multi-object tracking via IoU-based Hungarian assignment, velocity prediction for temporary occlusions, temporal confidence smoothing (0.7 EMA), and fallback motion detection for offline/degraded scenarios
 - Audio broadcast system with Pi GPIO speaker, USB speaker, and Orange Cube+ buzzer support
 - Flight controls including arm/disarm, takeoff, land, RTL, and emergency stop
 - Gripper control for payload drop/pickup operations
