@@ -152,30 +152,23 @@ interface Aircraft {
 // Empty by default until real data arrives from ADS-B receiver
 const defaultAircraft: Aircraft[] = [];
 
-function ZoomControls() {
+function ZoomControls({ dronePosition }: { dronePosition?: [number, number] | null }) {
   const map = useMap();
   
   const handleCenterOnDrone = () => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          map.setView([pos.coords.latitude, pos.coords.longitude], 18);
-          toast.success("Centered on drone position");
-        },
-        () => {
-          map.setView([DEFAULT_LAT, DEFAULT_LNG], 18);
-          toast.success("Centered on default position");
-        }
-      );
+    if (dronePosition && dronePosition[0] !== 0 && dronePosition[1] !== 0) {
+      map.setView(dronePosition, 18);
+      toast.success("Centered on drone GPS position");
+    } else {
+      toast.error("No drone GPS position available");
     }
   };
 
   const handleResetView = () => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => map.setView([pos.coords.latitude, pos.coords.longitude], 16),
-        () => map.setView([DEFAULT_LAT, DEFAULT_LNG], 16)
-      );
+    if (dronePosition && dronePosition[0] !== 0 && dronePosition[1] !== 0) {
+      map.setView(dronePosition, 16);
+    } else {
+      map.setView([DEFAULT_LAT, DEFAULT_LNG], 16);
     }
   };
   
@@ -229,6 +222,44 @@ function MapCenterUpdater({ searchResult }: { searchResult: {lat: number; lon: n
       map.setView([searchResult.lat, searchResult.lon], 17);
     }
   }, [searchResult, map]);
+  
+  return null;
+}
+
+function MapCenterPersist() {
+  const map = useMap();
+  
+  useEffect(() => {
+    const saved = localStorage.getItem('mouse_map_center');
+    if (saved) {
+      try {
+        const { lat, lng, zoom } = JSON.parse(saved);
+        if (lat && lng) {
+          map.setView([lat, lng], zoom || 16);
+        }
+      } catch (e) {
+        // Ignore parse errors
+      }
+    }
+    
+    const saveCenter = () => {
+      const center = map.getCenter();
+      const zoom = map.getZoom();
+      localStorage.setItem('mouse_map_center', JSON.stringify({
+        lat: center.lat,
+        lng: center.lng,
+        zoom
+      }));
+    };
+    
+    map.on('moveend', saveCenter);
+    map.on('zoomend', saveCenter);
+    
+    return () => {
+      map.off('moveend', saveCenter);
+      map.off('zoomend', saveCenter);
+    };
+  }, [map]);
   
   return null;
 }
@@ -304,11 +335,12 @@ export function MapInterface() {
   });
 
   // Get selected drone from localStorage
-  const [selectedDroneId, setSelectedDroneId] = useState<number | null>(() => {
+  const [selectedDroneId, setSelectedDroneId] = useState<string | null>(() => {
     const saved = localStorage.getItem('mouse_selected_drone');
     if (saved) {
       try {
-        return JSON.parse(saved).id;
+        const parsed = JSON.parse(saved);
+        return parsed.id ? String(parsed.id) : null;
       } catch {
         return null;
       }
@@ -319,7 +351,7 @@ export function MapInterface() {
   // Listen for drone selection changes
   useEffect(() => {
     const handleDroneChange = (e: CustomEvent<Drone>) => {
-      setSelectedDroneId(e.detail?.id || null);
+      setSelectedDroneId(e.detail?.id ? String(e.detail.id) : null);
     };
     window.addEventListener('drone-selected' as any, handleDroneChange);
     return () => window.removeEventListener('drone-selected' as any, handleDroneChange);
@@ -458,6 +490,13 @@ export function MapInterface() {
     };
   }, [adsbDragging, adsbDragOffset]);
 
+  // Get selected drone's GPS position for centering
+  const selectedDrone = selectedDroneId ? allDrones.find(d => d.id === selectedDroneId) : null;
+  const selectedDronePosition: [number, number] | null = 
+    selectedDrone?.latitude && selectedDrone?.longitude 
+      ? [selectedDrone.latitude, selectedDrone.longitude] 
+      : null;
+
   return (
     <div className="w-full h-full relative z-0 bg-background group">
       <MapContainer 
@@ -472,7 +511,8 @@ export function MapInterface() {
           url={getTileUrl()}
         />
         
-        <ZoomControls />
+        <ZoomControls dronePosition={selectedDronePosition} />
+        <MapCenterPersist />
         <MapCenterUpdater searchResult={searchResult} />
         
         {/* Search Result Marker */}
