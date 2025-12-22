@@ -893,6 +893,16 @@ export async function registerRoutes(
       });
       smartBroadcast("new_message", message);
       res.json(message);
+      
+      // Sync messages to Google Sheets in background (non-blocking)
+      setImmediate(async () => {
+        try {
+          const allMessages = await storage.getAllMessages();
+          await storage.syncMessagesToSheets(allMessages);
+        } catch (err: any) {
+          console.log('Background sync to Sheets failed:', err.message);
+        }
+      });
     } catch (error) {
       res.status(500).json({ error: "Failed to create message" });
     }
@@ -911,6 +921,16 @@ export async function registerRoutes(
       // Use smartBroadcast for DM privacy
       smartBroadcast("message_updated", message);
       res.json(message);
+      
+      // Sync messages to Google Sheets in background (non-blocking)
+      setImmediate(async () => {
+        try {
+          const allMessages = await storage.getAllMessages();
+          await storage.syncMessagesToSheets(allMessages);
+        } catch (err: any) {
+          console.log('Background sync to Sheets failed:', err.message);
+        }
+      });
     } catch (error) {
       res.status(500).json({ error: "Failed to update message" });
     }
@@ -931,6 +951,16 @@ export async function registerRoutes(
         broadcast("message_deleted", { id: req.params.id });
       }
       res.json({ success: true });
+      
+      // Sync messages to Google Sheets in background (non-blocking)
+      setImmediate(async () => {
+        try {
+          const allMessages = await storage.getAllMessages();
+          await storage.syncMessagesToSheets(allMessages);
+        } catch (err: any) {
+          console.log('Background sync to Sheets failed:', err.message);
+        }
+      });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete message" });
     }

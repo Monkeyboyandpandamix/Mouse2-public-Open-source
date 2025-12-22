@@ -84,8 +84,8 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   
-  // @ mention autocomplete state
-  const [chatUsers, setChatUsers] = useState<{ id: string; username: string; role: string }[]>([]);
+  // @ mention autocomplete state - includes fullName for better matching
+  const [chatUsers, setChatUsers] = useState<{ id: string; username: string; fullName: string; role: string }[]>([]);
   const [showMentions, setShowMentions] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionIndex, setMentionIndex] = useState(0);
@@ -110,17 +110,45 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
       .catch(() => {}); // Fail silently, use localStorage
   }, [session.user?.id]);
 
-  // Load chat users for @ mention autocomplete
+  // Load users from User Management (localStorage) for @ mention autocomplete
+  // Prioritizes localStorage (has fullName), but also checks API for any additional users
   useEffect(() => {
-    fetch('/api/chat-users')
-      .then(res => res.ok ? res.json() : [])
-      .then(data => {
-        if (Array.isArray(data)) {
-          setChatUsers(data);
+    const loadUsersFromStorage = (): { id: string; username: string; fullName: string; role: string }[] => {
+      const savedUsers = localStorage.getItem('mouse_gcs_users');
+      if (savedUsers) {
+        try {
+          const users = JSON.parse(savedUsers);
+          return users
+            .filter((u: any) => u.enabled !== false)
+            .map((u: any) => ({
+              id: u.id,
+              username: u.username,
+              fullName: u.fullName || u.username,
+              role: u.role || 'viewer'
+            }));
+        } catch (e) {
+          console.error('Failed to parse users:', e);
         }
-      })
-      .catch(() => {});
-  }, [messages]); // Refresh when messages change to pick up new users
+      }
+      return [];
+    };
+    
+    const loadUsers = () => {
+      // Always load from localStorage first (has fullName)
+      const storageUsers = loadUsersFromStorage();
+      setChatUsers(storageUsers);
+    };
+    
+    loadUsers();
+    // Listen for cross-tab storage events
+    window.addEventListener('storage', loadUsers);
+    // Listen for same-tab user updates (custom event from UserAccessPanel)
+    window.addEventListener('users-updated', loadUsers);
+    return () => {
+      window.removeEventListener('storage', loadUsers);
+      window.removeEventListener('users-updated', loadUsers);
+    };
+  }, [session]);
 
   // WebSocket subscription for real-time updates
   useEffect(() => {
@@ -160,10 +188,43 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     return () => ws.close();
   }, [session.user?.id]);
 
-  // Filter users for @ mention autocomplete
-  const filteredMentionUsers = chatUsers
-    .filter(u => u.id !== session.user?.id) // Exclude self
-    .filter(u => u.username.toLowerCase().includes(mentionQuery.toLowerCase()));
+  // Filter users for @ mention autocomplete - search by username AND fullName
+  // Also includes @all option for broadcasting to everyone
+  const filteredMentionUsers = (() => {
+    const query = mentionQuery.toLowerCase().trim();
+    
+    // Add "all" option when query matches "all" or is empty
+    const allOption = { id: 'all', username: 'all', fullName: 'Everyone (Broadcast)', role: 'broadcast' };
+    const showAllOption = query === '' || 'all'.startsWith(query);
+    
+    // Filter users by username or fullName
+    const matchedUsers = chatUsers
+      .filter(u => u.id !== session.user?.id) // Exclude self
+      .filter(u => {
+        if (!query) return true; // Show all when no query
+        const usernameMatch = u.username.toLowerCase().includes(query);
+        const fullNameMatch = u.fullName.toLowerCase().includes(query);
+        return usernameMatch || fullNameMatch;
+      })
+      .map(u => ({
+        ...u,
+        // Score for sorting - prioritize matches that start with query
+        _score: (() => {
+          if (!query) return 0;
+          const usernameStarts = u.username.toLowerCase().startsWith(query) ? 2 : 0;
+          const fullNameStarts = u.fullName.toLowerCase().startsWith(query) ? 1 : 0;
+          return usernameStarts + fullNameStarts;
+        })()
+      }))
+      .sort((a, b) => b._score - a._score); // Higher score first
+    
+    // Return with @all at the end (or beginning if typing "all")
+    if (showAllOption && query.length > 0 && 'all'.startsWith(query)) {
+      // If typing "all", show it first
+      return [allOption, ...matchedUsers];
+    }
+    return showAllOption && query === '' ? [...matchedUsers, allOption] : matchedUsers;
+  })();
 
   // Handle message input change for @ detection
   const handleMessageChange = (value: string) => {
@@ -202,7 +263,12 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     const lastAtIndex = newMessage.lastIndexOf('@');
     const beforeMention = newMessage.slice(0, lastAtIndex);
     setNewMessage(beforeMention + '@' + user.username + ' ');
-    setSelectedRecipient(user);
+    // @all means broadcast to everyone (no specific recipient)
+    if (user.id === 'all') {
+      setSelectedRecipient(null); // No recipient = broadcast
+    } else {
+      setSelectedRecipient(user);
+    }
     setShowMentions(false);
     setMentionQuery("");
     inputRef.current?.focus();
@@ -240,11 +306,19 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     const mentionMatch = messageContent.match(/^@(\S+)\s+(.+)$/);
     if (mentionMatch) {
       const mentionedUsername = mentionMatch[1];
-      const matchedUser = chatUsers.find(u => u.username.toLowerCase() === mentionedUsername.toLowerCase());
-      if (matchedUser) {
-        recipientId = matchedUser.id;
-        recipientName = matchedUser.username;
-        messageContent = mentionMatch[2]; // Content after the @mention
+      
+      // @all means broadcast to everyone
+      if (mentionedUsername.toLowerCase() === 'all') {
+        recipientId = null;
+        recipientName = null;
+        messageContent = mentionMatch[2]; // Content after @all
+      } else {
+        const matchedUser = chatUsers.find(u => u.username.toLowerCase() === mentionedUsername.toLowerCase());
+        if (matchedUser) {
+          recipientId = matchedUser.id;
+          recipientName = matchedUser.username;
+          messageContent = mentionMatch[2]; // Content after the @mention
+        }
       }
     }
     
@@ -763,18 +837,28 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
                         data-testid="input-new-message"
                       />
                       {showMentions && filteredMentionUsers.length > 0 && (
-                        <div className="absolute bottom-full left-0 w-full mb-1 bg-popover border border-border rounded-md shadow-lg z-50 max-h-32 overflow-y-auto" data-testid="mention-dropdown">
+                        <div className="absolute bottom-full left-0 w-full mb-1 bg-popover border border-border rounded-md shadow-lg z-50 max-h-40 overflow-y-auto" data-testid="mention-dropdown">
                           {filteredMentionUsers.map((user, idx) => (
                             <div
                               key={user.id}
-                              className={`px-3 py-2 text-xs cursor-pointer flex items-center justify-between ${
+                              className={`px-3 py-2 text-xs cursor-pointer flex items-center justify-between gap-2 ${
                                 idx === mentionIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'
                               }`}
                               onClick={() => selectMention(user)}
                               data-testid={`mention-user-${user.id}`}
                             >
-                              <span className="font-medium">@{user.username}</span>
-                              <Badge variant="outline" className="h-4 text-[8px] px-1">{user.role}</Badge>
+                              <div className="flex flex-col flex-1 min-w-0">
+                                <span className="font-medium truncate">@{user.username}</span>
+                                {'fullName' in user && user.fullName !== user.username && (
+                                  <span className="text-[10px] text-muted-foreground truncate">{user.fullName}</span>
+                                )}
+                              </div>
+                              <Badge 
+                                variant={user.id === 'all' ? 'default' : 'outline'} 
+                                className={`h-4 text-[8px] px-1 shrink-0 ${user.id === 'all' ? 'bg-primary' : ''}`}
+                              >
+                                {user.id === 'all' ? 'Everyone' : user.role}
+                              </Badge>
                             </div>
                           ))}
                         </div>

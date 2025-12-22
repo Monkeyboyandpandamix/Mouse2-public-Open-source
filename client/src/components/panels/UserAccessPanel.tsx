@@ -145,6 +145,8 @@ export function UserAccessPanel() {
 
   useEffect(() => {
     localStorage.setItem('mouse_gcs_users', JSON.stringify(users));
+    // Dispatch custom event for same-tab listeners (TopBar mention autocomplete)
+    window.dispatchEvent(new CustomEvent('users-updated'));
   }, [users]);
 
   useEffect(() => {
