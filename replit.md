@@ -59,6 +59,7 @@ Preferred communication style: Simple, everyday language.
 - Real system diagnostics (no simulations) - shows actual connection status
 - Operations console always active with memory-conscious log trimming
 - User authentication with role-based access (admin, operator, viewer) and full name display
+- **Team Communication**: Real-time messaging between users in the Comms panel with timestamps, edit/delete functionality, and automatic Google Sheets backup for message history
 - Automation scripts panel for custom flight automation with triggers (takeoff, landing, waypoint, battery low, GPS lost, disconnect)
 - GPS-denied navigation failsafe using visual odometry, dead reckoning, and flight path history
 - Autonomous mission completion on ground control disconnect with configurable RTL/hover/land actions
