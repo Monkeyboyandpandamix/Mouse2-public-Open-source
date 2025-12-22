@@ -35,11 +35,20 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { Drone, UserMessage } from "@shared/schema";
+import type { Drone, UserMessage, MessageRecipient, UserGroup } from "@shared/schema";
 
 interface UserSession {
   user: { id: string; username: string; role: string } | null;
   isLoggedIn: boolean;
+}
+
+interface MentionOption {
+  id: string;
+  username: string;
+  fullName: string;
+  role: string;
+  type: 'user' | 'group' | 'broadcast';
+  memberIds?: string[]; // For groups - members to expand to
 }
 
 interface TopBarProps {
@@ -86,10 +95,12 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
   
   // @ mention autocomplete state - includes fullName for better matching
   const [chatUsers, setChatUsers] = useState<{ id: string; username: string; fullName: string; role: string }[]>([]);
+  const [userGroups, setUserGroups] = useState<UserGroup[]>([]);
   const [showMentions, setShowMentions] = useState(false);
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionIndex, setMentionIndex] = useState(0);
-  const [selectedRecipient, setSelectedRecipient] = useState<{ id: string; username: string } | null>(null);
+  // Multi-recipient support: persistent array of recipients until @all or changed
+  const [selectedRecipients, setSelectedRecipients] = useState<MessageRecipient[]>([]);
   
   // Save messages to localStorage as backup
   useEffect(() => {
@@ -110,8 +121,7 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
       .catch(() => {}); // Fail silently, use localStorage
   }, [session.user?.id]);
 
-  // Load users from User Management (localStorage) for @ mention autocomplete
-  // Prioritizes localStorage (has fullName), but also checks API for any additional users
+  // Load users and groups from localStorage for @ mention autocomplete
   useEffect(() => {
     const loadUsersFromStorage = (): { id: string; username: string; fullName: string; role: string }[] => {
       const savedUsers = localStorage.getItem('mouse_gcs_users');
@@ -133,20 +143,38 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
       return [];
     };
     
-    const loadUsers = () => {
-      // Always load from localStorage first (has fullName)
-      const storageUsers = loadUsersFromStorage();
-      setChatUsers(storageUsers);
+    const loadGroupsFromStorage = (): UserGroup[] => {
+      const savedGroups = localStorage.getItem('mouse_gcs_groups');
+      if (savedGroups) {
+        try {
+          return JSON.parse(savedGroups);
+        } catch (e) {
+          console.error('Failed to parse groups:', e);
+        }
+      }
+      return [];
     };
     
-    loadUsers();
+    const loadData = () => {
+      // Load users from localStorage (has fullName)
+      const storageUsers = loadUsersFromStorage();
+      setChatUsers(storageUsers);
+      // Load groups from localStorage
+      const storageGroups = loadGroupsFromStorage();
+      setUserGroups(storageGroups);
+    };
+    
+    loadData();
     // Listen for cross-tab storage events
-    window.addEventListener('storage', loadUsers);
+    window.addEventListener('storage', loadData);
     // Listen for same-tab user updates (custom event from UserAccessPanel)
-    window.addEventListener('users-updated', loadUsers);
+    window.addEventListener('users-updated', loadData);
+    // Listen for group updates
+    window.addEventListener('groups-updated', loadData);
     return () => {
-      window.removeEventListener('storage', loadUsers);
-      window.removeEventListener('users-updated', loadUsers);
+      window.removeEventListener('storage', loadData);
+      window.removeEventListener('users-updated', loadData);
+      window.removeEventListener('groups-updated', loadData);
     };
   }, [session]);
 
@@ -188,17 +216,23 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     return () => ws.close();
   }, [session.user?.id]);
 
-  // Filter users for @ mention autocomplete - search by username AND fullName
-  // Also includes @all option for broadcasting to everyone
-  const filteredMentionUsers = (() => {
+  // Filter users and groups for @ mention autocomplete
+  // Includes @all option for broadcasting to everyone
+  const filteredMentionOptions: MentionOption[] = (() => {
     const query = mentionQuery.toLowerCase().trim();
     
     // Add "all" option when query matches "all" or is empty
-    const allOption = { id: 'all', username: 'all', fullName: 'Everyone (Broadcast)', role: 'broadcast' };
+    const allOption: MentionOption = { 
+      id: 'all', 
+      username: 'all', 
+      fullName: 'Everyone (Broadcast)', 
+      role: 'broadcast',
+      type: 'broadcast'
+    };
     const showAllOption = query === '' || 'all'.startsWith(query);
     
     // Filter users by username or fullName
-    const matchedUsers = chatUsers
+    const matchedUsers: MentionOption[] = chatUsers
       .filter(u => u.id !== session.user?.id) // Exclude self
       .filter(u => {
         if (!query) return true; // Show all when no query
@@ -208,6 +242,7 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
       })
       .map(u => ({
         ...u,
+        type: 'user' as const,
         // Score for sorting - prioritize matches that start with query
         _score: (() => {
           if (!query) return 0;
@@ -216,29 +251,48 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           return usernameStarts + fullNameStarts;
         })()
       }))
-      .sort((a, b) => b._score - a._score); // Higher score first
+      .sort((a, b) => (b as any)._score - (a as any)._score);
     
-    // Return with @all at the end (or beginning if typing "all")
+    // Filter groups by name
+    const matchedGroups: MentionOption[] = userGroups
+      .filter(g => {
+        if (!query) return true;
+        return g.name.toLowerCase().includes(query);
+      })
+      .map(g => ({
+        id: g.id,
+        username: g.name,
+        fullName: `Group (${g.memberIds.length} members)`,
+        role: 'group',
+        type: 'group' as const,
+        memberIds: g.memberIds
+      }));
+    
+    // Combine results: groups first if matching, then users, then @all
+    const results: MentionOption[] = [];
+    
+    // Add matching groups first
+    results.push(...matchedGroups);
+    
+    // Add matching users
+    results.push(...matchedUsers);
+    
+    // Add @all option at end (or beginning if typing "all")
     if (showAllOption && query.length > 0 && 'all'.startsWith(query)) {
-      // If typing "all", show it first
-      return [allOption, ...matchedUsers];
+      return [allOption, ...results];
     }
-    return showAllOption && query === '' ? [...matchedUsers, allOption] : matchedUsers;
+    if (showAllOption && query === '') {
+      results.push(allOption);
+    }
+    
+    return results;
   })();
 
   // Handle message input change for @ detection
   const handleMessageChange = (value: string) => {
     setNewMessage(value);
     
-    // Clear selected recipient if message no longer starts with @username
-    if (selectedRecipient) {
-      const expectedPrefix = `@${selectedRecipient.username} `;
-      if (!value.startsWith(expectedPrefix)) {
-        setSelectedRecipient(null);
-      }
-    }
-    
-    // Check for @ mention
+    // Check for @ mention trigger
     const lastAtIndex = value.lastIndexOf('@');
     if (lastAtIndex >= 0) {
       const afterAt = value.slice(lastAtIndex + 1);
@@ -258,34 +312,66 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     setMentionQuery("");
   };
 
-  // Select a user from mention dropdown
-  const selectMention = (user: { id: string; username: string }) => {
+  // Select a user/group from mention dropdown - supports multi-recipient
+  const selectMention = (option: MentionOption) => {
     const lastAtIndex = newMessage.lastIndexOf('@');
     const beforeMention = newMessage.slice(0, lastAtIndex);
-    setNewMessage(beforeMention + '@' + user.username + ' ');
-    // @all means broadcast to everyone (no specific recipient)
-    if (user.id === 'all') {
-      setSelectedRecipient(null); // No recipient = broadcast
+    setNewMessage(beforeMention); // Clear the @mention from input
+    
+    // @all means broadcast to everyone - clears all recipients
+    if (option.type === 'broadcast') {
+      setSelectedRecipients([]); // Empty = broadcast to all
+    } else if (option.type === 'group') {
+      // Group: expand to all members as recipients
+      const groupMembers = chatUsers
+        .filter(u => option.memberIds?.includes(u.id))
+        .filter(u => u.id !== session.user?.id) // Exclude self
+        .map(u => ({ id: u.id, name: u.username, type: 'user' as const }));
+      
+      // Replace existing recipients with group members
+      setSelectedRecipients(groupMembers);
     } else {
-      setSelectedRecipient(user);
+      // User: add to existing recipients (allow multi-select)
+      const newRecipient: MessageRecipient = { 
+        id: option.id, 
+        name: option.username, 
+        type: 'user' 
+      };
+      
+      // Check if already in list
+      setSelectedRecipients(prev => {
+        if (prev.some(r => r.id === option.id)) return prev;
+        return [...prev, newRecipient];
+      });
     }
+    
     setShowMentions(false);
     setMentionQuery("");
     inputRef.current?.focus();
   };
+  
+  // Clear a specific recipient from selection
+  const removeRecipient = (recipientId: string) => {
+    setSelectedRecipients(prev => prev.filter(r => r.id !== recipientId));
+  };
+  
+  // Clear all recipients (switch to broadcast)
+  const clearAllRecipients = () => {
+    setSelectedRecipients([]);
+  };
 
   // Handle keyboard navigation in mention dropdown
   const handleMessageKeyDown = (e: React.KeyboardEvent) => {
-    if (showMentions && filteredMentionUsers.length > 0) {
+    if (showMentions && filteredMentionOptions.length > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setMentionIndex(prev => Math.min(prev + 1, filteredMentionUsers.length - 1));
+        setMentionIndex(prev => Math.min(prev + 1, filteredMentionOptions.length - 1));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         setMentionIndex(prev => Math.max(prev - 1, 0));
       } else if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault();
-        selectMention(filteredMentionUsers[mentionIndex]);
+        selectMention(filteredMentionOptions[mentionIndex]);
       } else if (e.key === 'Escape') {
         setShowMentions(false);
       }
@@ -297,30 +383,13 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
   const sendMessage = async () => {
     if (!newMessage.trim() || !session.user) return;
     
-    // Extract recipient from message if it starts with @username
-    let recipientId = selectedRecipient?.id || null;
-    let recipientName = selectedRecipient?.username || null;
-    let messageContent = newMessage.trim();
+    const messageContent = newMessage.trim();
     
-    // Check if message starts with @username pattern
-    const mentionMatch = messageContent.match(/^@(\S+)\s+(.+)$/);
-    if (mentionMatch) {
-      const mentionedUsername = mentionMatch[1];
-      
-      // @all means broadcast to everyone
-      if (mentionedUsername.toLowerCase() === 'all') {
-        recipientId = null;
-        recipientName = null;
-        messageContent = mentionMatch[2]; // Content after @all
-      } else {
-        const matchedUser = chatUsers.find(u => u.username.toLowerCase() === mentionedUsername.toLowerCase());
-        if (matchedUser) {
-          recipientId = matchedUser.id;
-          recipientName = matchedUser.username;
-          messageContent = mentionMatch[2]; // Content after the @mention
-        }
-      }
-    }
+    // Use persistent selectedRecipients - empty array = broadcast to all
+    // For backward compatibility, also set recipientId/recipientName for single recipient
+    const recipients = selectedRecipients.length > 0 ? selectedRecipients : null;
+    const recipientId = selectedRecipients.length === 1 ? selectedRecipients[0].id : null;
+    const recipientName = selectedRecipients.length === 1 ? selectedRecipients[0].name : null;
     
     try {
       const res = await fetch('/api/messages', {
@@ -332,7 +401,8 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           senderRole: session.user.role,
           content: messageContent,
           recipientId,
-          recipientName
+          recipientName,
+          recipients // New multi-recipient field
         })
       });
       
@@ -342,8 +412,7 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           if (prev.some(m => m.id === message.id)) return prev;
           return [...prev, message];
         });
-        setNewMessage("");
-        setSelectedRecipient(null);
+        setNewMessage(""); // Clear message but KEEP selectedRecipients (persistent)
         setTimeout(() => scrollRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
       }
     } catch (e) {
@@ -355,14 +424,14 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
         senderRole: session.user.role,
         recipientId,
         recipientName,
+        recipients,
         content: messageContent,
         timestamp: new Date().toISOString(),
         editedAt: null,
         deleted: false
       };
       setMessages(prev => [...prev, message]);
-      setNewMessage("");
-      setSelectedRecipient(null);
+      setNewMessage(""); // Clear message but KEEP selectedRecipients (persistent)
     }
   };
 
@@ -836,36 +905,58 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
                         className="h-8 text-xs w-full"
                         data-testid="input-new-message"
                       />
-                      {showMentions && filteredMentionUsers.length > 0 && (
+                      {showMentions && filteredMentionOptions.length > 0 && (
                         <div className="absolute bottom-full left-0 w-full mb-1 bg-popover border border-border rounded-md shadow-lg z-50 max-h-40 overflow-y-auto" data-testid="mention-dropdown">
-                          {filteredMentionUsers.map((user, idx) => (
+                          {filteredMentionOptions.map((option, idx) => (
                             <div
-                              key={user.id}
+                              key={option.id}
                               className={`px-3 py-2 text-xs cursor-pointer flex items-center justify-between gap-2 ${
                                 idx === mentionIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'
                               }`}
-                              onClick={() => selectMention(user)}
-                              data-testid={`mention-user-${user.id}`}
+                              onClick={() => selectMention(option)}
+                              data-testid={`mention-option-${option.id}`}
                             >
                               <div className="flex flex-col flex-1 min-w-0">
-                                <span className="font-medium truncate">@{user.username}</span>
-                                {'fullName' in user && user.fullName !== user.username && (
-                                  <span className="text-[10px] text-muted-foreground truncate">{user.fullName}</span>
+                                <span className="font-medium truncate">@{option.username}</span>
+                                {option.fullName !== option.username && (
+                                  <span className="text-[10px] text-muted-foreground truncate">{option.fullName}</span>
                                 )}
                               </div>
                               <Badge 
-                                variant={user.id === 'all' ? 'default' : 'outline'} 
-                                className={`h-4 text-[8px] px-1 shrink-0 ${user.id === 'all' ? 'bg-primary' : ''}`}
+                                variant={option.type === 'broadcast' ? 'default' : option.type === 'group' ? 'secondary' : 'outline'} 
+                                className={`h-4 text-[8px] px-1 shrink-0 ${option.type === 'broadcast' ? 'bg-primary' : option.type === 'group' ? 'bg-blue-500 text-white' : ''}`}
                               >
-                                {user.id === 'all' ? 'Everyone' : user.role}
+                                {option.type === 'broadcast' ? 'Everyone' : option.type === 'group' ? 'Group' : option.role}
                               </Badge>
                             </div>
                           ))}
                         </div>
                       )}
-                      {selectedRecipient && (
-                        <div className="absolute -top-5 left-0 text-[10px] text-primary">
-                          DM to @{selectedRecipient.username}
+                      {selectedRecipients.length > 0 && (
+                        <div className="absolute -top-6 left-0 right-0 flex items-center gap-1 flex-wrap">
+                          <span className="text-[10px] text-muted-foreground">To:</span>
+                          {selectedRecipients.map(r => (
+                            <Badge 
+                              key={r.id} 
+                              variant="secondary" 
+                              className="h-4 text-[10px] px-1 gap-0.5 cursor-pointer hover:bg-destructive/20"
+                              onClick={() => removeRecipient(r.id)}
+                              data-testid={`recipient-badge-${r.id}`}
+                            >
+                              @{r.name}
+                              <X className="h-2 w-2" />
+                            </Badge>
+                          ))}
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-4 w-4" 
+                            onClick={clearAllRecipients}
+                            title="Clear all - switch to broadcast"
+                            data-testid="button-clear-recipients"
+                          >
+                            <X className="h-2 w-2" />
+                          </Button>
                         </div>
                       )}
                     </div>
