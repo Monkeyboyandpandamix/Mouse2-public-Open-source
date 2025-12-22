@@ -1,0 +1,415 @@
+[
+  {
+    "id": "1766378464753-6f4faqqpq",
+    "key": "connectionType",
+    "value": "usb",
+    "category": "connection",
+    "updatedAt": "2025-12-22T04:41:04.752Z"
+  },
+  {
+    "id": "1766378464992-v152o6cin",
+    "key": "fcPort",
+    "value": "/dev/ttyACM0",
+    "category": "connection",
+    "updatedAt": "2025-12-22T04:41:04.992Z"
+  },
+  {
+    "id": "1766378465190-ovoahg5o8",
+    "key": "fcBaud",
+    "value": "57600",
+    "category": "connection",
+    "updatedAt": "2025-12-22T04:41:05.190Z"
+  },
+  {
+    "id": "1766378465384-q3qwf7ccm",
+    "key": "fcAutoConnect",
+    "value": true,
+    "category": "connection",
+    "updatedAt": "2025-12-22T04:41:05.384Z"
+  },
+  {
+    "id": "1766378465580-qw5jbj9v0",
+    "key": "droneIp",
+    "value": "192.168.1.100",
+    "category": "connection",
+    "updatedAt": "2025-12-22T04:41:05.580Z"
+  },
+  {
+    "id": "1766378465776-fwm2wcjqw",
+    "key": "telemetryPort",
+    "value": "14550",
+    "category": "connection",
+    "updatedAt": "2025-12-22T04:41:05.776Z"
+  },
+  {
+    "id": "1766378466037-g4saaqnkv",
+    "key": "wsEnabled",
+    "value": true,
+    "category": "connection",
+    "updatedAt": "2025-12-22T04:41:06.037Z"
+  },
+  {
+    "id": "1766378466233-ufoo5z7b2",
+    "key": "gpioTx",
+    "value": "14",
+    "category": "connection",
+    "updatedAt": "2025-12-22T04:41:06.233Z"
+  },
+  {
+    "id": "1766378466428-4gqowgqe7",
+    "key": "gpioRx",
+    "value": "15",
+    "category": "connection",
+    "updatedAt": "2025-12-22T04:41:06.428Z"
+  },
+  {
+    "id": "1766378466625-va2su8oh9",
+    "key": "canBitrate",
+    "value": "1000000",
+    "category": "connection",
+    "updatedAt": "2025-12-22T04:41:06.625Z"
+  },
+  {
+    "id": "1766378466897-k2npe4a11",
+    "key": "canBusId",
+    "value": "1",
+    "category": "connection",
+    "updatedAt": "2025-12-22T04:41:06.897Z"
+  },
+  {
+    "id": "1766378467093-ry8kypz1g",
+    "key": "canSplitterEnabled",
+    "value": false,
+    "category": "connection",
+    "updatedAt": "2025-12-22T04:41:07.093Z"
+  },
+  {
+    "id": "1766378467286-iyk5vn3uu",
+    "key": "lidarAddress",
+    "value": "0x62",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:07.286Z"
+  },
+  {
+    "id": "1766378467483-yee1bwo27",
+    "key": "lidarRate",
+    "value": "10",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:07.482Z"
+  },
+  {
+    "id": "1766378467676-vwyidmjvx",
+    "key": "lidarEnabled",
+    "value": true,
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:07.676Z"
+  },
+  {
+    "id": "1766378467881-aaval1ibq",
+    "key": "lidarPosition",
+    "value": "bottom",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:07.881Z"
+  },
+  {
+    "id": "1766378468131-m4prfad4i",
+    "key": "gpsCanId",
+    "value": "1",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:08.131Z"
+  },
+  {
+    "id": "1766378468322-6uim4aysp",
+    "key": "gpsEnabled",
+    "value": true,
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:08.322Z"
+  },
+  {
+    "id": "1766378468514-2ynxuy2cx",
+    "key": "customSensors",
+    "value": [],
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:08.514Z"
+  },
+  {
+    "id": "1766378468709-38wnxcmxs",
+    "key": "i2c1Enabled",
+    "value": true,
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:08.709Z"
+  },
+  {
+    "id": "1766378468906-gjrwcrne2",
+    "key": "i2c2Enabled",
+    "value": true,
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:08.906Z"
+  },
+  {
+    "id": "1766378469183-yu0jjnhbb",
+    "key": "spi1Enabled",
+    "value": false,
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:09.183Z"
+  },
+  {
+    "id": "1766378469377-skj2ad9um",
+    "key": "spi2Enabled",
+    "value": false,
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:09.377Z"
+  },
+  {
+    "id": "1766378469568-e3qbmuboy",
+    "key": "uart1Protocol",
+    "value": "mavlink",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:09.568Z"
+  },
+  {
+    "id": "1766378469765-tijguexo2",
+    "key": "uart2Protocol",
+    "value": "gps",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:09.765Z"
+  },
+  {
+    "id": "1766378469968-8fqswijp8",
+    "key": "uart3Protocol",
+    "value": "none",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:09.968Z"
+  },
+  {
+    "id": "1766378470232-cmd6i0i7q",
+    "key": "uart4Protocol",
+    "value": "none",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:10.232Z"
+  },
+  {
+    "id": "1766378470423-witgx8br7",
+    "key": "can1Enabled",
+    "value": true,
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:10.423Z"
+  },
+  {
+    "id": "1766378470617-gbm0hiq3e",
+    "key": "can2Enabled",
+    "value": true,
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:10.617Z"
+  },
+  {
+    "id": "1766378470805-59dhyggp2",
+    "key": "adc1Enabled",
+    "value": true,
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:10.805Z"
+  },
+  {
+    "id": "1766378471013-069n8387v",
+    "key": "adc2Enabled",
+    "value": false,
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:11.013Z"
+  },
+  {
+    "id": "1766378471277-2u4ix1mbe",
+    "key": "pwmOutputs",
+    "value": "8",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:11.277Z"
+  },
+  {
+    "id": "1766378471472-nb83nnrn2",
+    "key": "gpioSpeaker",
+    "value": "18",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:11.472Z"
+  },
+  {
+    "id": "1766378471663-0pjh9x0ow",
+    "key": "gpioLed",
+    "value": "23",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:11.663Z"
+  },
+  {
+    "id": "1766378471851-eorvvqnea",
+    "key": "gpioRelay",
+    "value": "24",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:11.851Z"
+  },
+  {
+    "id": "1766378472039-dql6rib1f",
+    "key": "gpioButton",
+    "value": "25",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:12.039Z"
+  },
+  {
+    "id": "1766378472228-j8k8mzqd5",
+    "key": "usbCamera",
+    "value": "/dev/video0",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:12.228Z"
+  },
+  {
+    "id": "1766378472433-9b9n7cxo6",
+    "key": "usbGps",
+    "value": "none",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:12.433Z"
+  },
+  {
+    "id": "1766378472624-htoxpyoqq",
+    "key": "usbRadio",
+    "value": "none",
+    "category": "sensor",
+    "updatedAt": "2025-12-22T04:41:12.624Z"
+  },
+  {
+    "id": "1766378472849-4n1cl2ldm",
+    "key": "rcProtocol",
+    "value": "sbus",
+    "category": "input",
+    "updatedAt": "2025-12-22T04:41:12.849Z"
+  },
+  {
+    "id": "1766378473045-byvbtnump",
+    "key": "rcFailsafe",
+    "value": true,
+    "category": "input",
+    "updatedAt": "2025-12-22T04:41:13.045Z"
+  },
+  {
+    "id": "1766378473235-06zv48flj",
+    "key": "gamepadDevice",
+    "value": "none",
+    "category": "input",
+    "updatedAt": "2025-12-22T04:41:13.235Z"
+  },
+  {
+    "id": "1766378473427-qkvlvm2ya",
+    "key": "joystickDeadzone",
+    "value": "5",
+    "category": "input",
+    "updatedAt": "2025-12-22T04:41:13.427Z"
+  },
+  {
+    "id": "1766378473616-xyfxjetqe",
+    "key": "resolution",
+    "value": "1080p",
+    "category": "camera",
+    "updatedAt": "2025-12-22T04:41:13.616Z"
+  },
+  {
+    "id": "1766378473897-7ponlfzqc",
+    "key": "fps",
+    "value": "30",
+    "category": "camera",
+    "updatedAt": "2025-12-22T04:41:13.897Z"
+  },
+  {
+    "id": "1766378474090-bvju2u9s0",
+    "key": "autoRecord",
+    "value": false,
+    "category": "camera",
+    "updatedAt": "2025-12-22T04:41:14.090Z"
+  },
+  {
+    "id": "1766378474278-6411a2vj2",
+    "key": "thermalPalette",
+    "value": "ironbow",
+    "category": "camera",
+    "updatedAt": "2025-12-22T04:41:14.278Z"
+  },
+  {
+    "id": "1766378474472-lpvsha0wh",
+    "key": "gimbalSmoothing",
+    "value": "50",
+    "category": "camera",
+    "updatedAt": "2025-12-22T04:41:14.472Z"
+  },
+  {
+    "id": "1766378474663-xuwrd7aiu",
+    "key": "exposure",
+    "value": "auto",
+    "category": "camera",
+    "updatedAt": "2025-12-22T04:41:14.663Z"
+  },
+  {
+    "id": "1766378474943-dibn2wyzm",
+    "key": "whiteBalance",
+    "value": "auto",
+    "category": "camera",
+    "updatedAt": "2025-12-22T04:41:14.943Z"
+  },
+  {
+    "id": "1766378475210-dwwa5wqm0",
+    "key": "zoom",
+    "value": "1",
+    "category": "camera",
+    "updatedAt": "2025-12-22T04:41:15.210Z"
+  },
+  {
+    "id": "1766378475475-an9swavwb",
+    "key": "deviceRole",
+    "value": "controller",
+    "category": "network",
+    "updatedAt": "2025-12-22T04:41:15.475Z"
+  },
+  {
+    "id": "1766378475668-wf9le03kw",
+    "key": "syncEnabled",
+    "value": true,
+    "category": "network",
+    "updatedAt": "2025-12-22T04:41:15.668Z"
+  },
+  {
+    "id": "1766378475861-s5ckiq6ft",
+    "key": "remoteIp",
+    "value": "",
+    "category": "network",
+    "updatedAt": "2025-12-22T04:41:15.861Z"
+  },
+  {
+    "id": "1766378476049-vdhnzwpoj",
+    "key": "syncPort",
+    "value": "8080",
+    "category": "network",
+    "updatedAt": "2025-12-22T04:41:16.049Z"
+  },
+  {
+    "id": "1766378476240-brb5f13hu",
+    "key": "encryptionEnabled",
+    "value": true,
+    "category": "network",
+    "updatedAt": "2025-12-22T04:41:16.240Z"
+  },
+  {
+    "id": "1766378476524-f62wloqk5",
+    "key": "hotspotEnabled",
+    "value": false,
+    "category": "network",
+    "updatedAt": "2025-12-22T04:41:16.524Z"
+  },
+  {
+    "id": "1766378476718-3q7ttebre",
+    "key": "hotspotSsid",
+    "value": "MOUSE-GCS",
+    "category": "network",
+    "updatedAt": "2025-12-22T04:41:16.718Z"
+  },
+  {
+    "id": "1766378476914-w11a50p6e",
+    "key": "hotspotPassword",
+    "value": "",
+    "category": "network",
+    "updatedAt": "2025-12-22T04:41:16.914Z"
+  }
+]
