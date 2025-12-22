@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { usePermissions } from "@/hooks/usePermissions";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useState, useEffect } from "react";
 
 interface SidebarProps {
   activeTab: string;
@@ -34,8 +35,45 @@ interface MenuItem {
   alwaysShow?: boolean;
 }
 
+interface TabConfig {
+  id: string;
+  name: string;
+  icon: string;
+  visible: boolean;
+  order: number;
+  isCustom: boolean;
+}
+
 export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
   const { hasPermission, hasAnyPermission, isLoggedIn } = usePermissions();
+  const [tabConfig, setTabConfig] = useState<TabConfig[]>([]);
+
+  useEffect(() => {
+    const loadTabConfig = () => {
+      const saved = localStorage.getItem('mouse_gui_tabs');
+      if (saved) {
+        try {
+          setTabConfig(JSON.parse(saved));
+        } catch (e) {
+          setTabConfig([]);
+        }
+      }
+    };
+
+    loadTabConfig();
+
+    const handleConfigChange = () => {
+      loadTabConfig();
+    };
+
+    window.addEventListener('gui-config-changed', handleConfigChange);
+    window.addEventListener('storage', handleConfigChange);
+    
+    return () => {
+      window.removeEventListener('gui-config-changed', handleConfigChange);
+      window.removeEventListener('storage', handleConfigChange);
+    };
+  }, []);
 
   const menuItems: MenuItem[] = [
     { id: "map", icon: Map, label: "Map View", requiredPermission: "view_map" },
@@ -54,15 +92,30 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
     { id: "settings", icon: Settings, label: "Settings", requiredPermission: "system_settings" },
   ];
 
+  const isTabVisible = (id: string): boolean => {
+    if (tabConfig.length === 0) return true;
+    const config = tabConfig.find(t => t.id === id);
+    return config ? config.visible : true;
+  };
+
   const canAccessItem = (item: MenuItem): boolean => {
     if (!isLoggedIn) return false;
+    if (!isTabVisible(item.id)) return false;
     if (item.alwaysShow) return true;
     if (item.requiredPermission) return hasPermission(item.requiredPermission);
     if (item.requiredAnyPermission) return hasAnyPermission(item.requiredAnyPermission);
     return true;
   };
 
-  const visibleItems = menuItems.filter(canAccessItem);
+  const getTabOrder = (id: string): number => {
+    if (tabConfig.length === 0) return 999;
+    const config = tabConfig.find(t => t.id === id);
+    return config ? config.order : 999;
+  };
+
+  const visibleItems = menuItems
+    .filter(canAccessItem)
+    .sort((a, b) => getTabOrder(a.id) - getTabOrder(b.id));
 
   return (
     <TooltipProvider delayDuration={300}>

@@ -103,6 +103,52 @@
     --sidebar-border: 220 15% 25%;
     --sidebar-ring: 190 90% 50%;
   }
+
+  .light {
+    /* M.O.U.S.E Light Theme */
+    --background: 210 20% 98%;
+    --foreground: 220 15% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 15% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 15% 15%;
+
+    --primary: 190 90% 40%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 20% 94%;
+    --secondary-foreground: 220 15% 20%;
+
+    --muted: 210 20% 92%;
+    --muted-foreground: 215 15% 45%;
+
+    --accent: 35 90% 50%;
+    --accent-foreground: 220 15% 10%;
+
+    --destructive: 0 85% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 210 20% 85%;
+    --input: 210 20% 90%;
+    --ring: 190 90% 40%;
+
+    --chart-1: 190 90% 40%;
+    --chart-2: 35 90% 50%;
+    --chart-3: 142 70% 45%;
+    --chart-4: 262 80% 50%;
+    --chart-5: 20 80% 50%;
+
+    --sidebar: 210 20% 96%;
+    --sidebar-foreground: 220 15% 15%;
+    --sidebar-primary: 190 90% 40%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 210 20% 92%;
+    --sidebar-accent-foreground: 220 15% 15%;
+    --sidebar-border: 210 20% 85%;
+    --sidebar-ring: 190 90% 40%;
+  }
 }
 
 @layer base {
