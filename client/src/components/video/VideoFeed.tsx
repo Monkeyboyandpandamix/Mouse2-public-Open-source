@@ -21,13 +21,36 @@ interface CameraConfig {
 
 interface DetectedObject {
   id: string;
-  type: "person" | "vehicle" | "unknown";
+  type: "person" | "vehicle" | "animal" | "aircraft" | "unknown";
   confidence: number;
   x: number;
   y: number;
   width: number;
   height: number;
   color: string;
+  isLocked: boolean;
+  isMoving: boolean;
+  velocity: { vx: number; vy: number };
+  colorSignature: number[];
+  framesSeen: number;
+  lastPredictedPos: { x: number; y: number };
+}
+
+interface TrackedObject {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  vx: number;
+  vy: number;
+  lastSeen: number;
+  framesSeen: number;
+  colorSignature: number[];
+  isLocked: boolean;
+  isMoving: boolean;
+  type: "person" | "vehicle" | "animal" | "aircraft" | "unknown";
+  confidence: number;
 }
 
 const defaultCameraConfig: CameraConfig = {
@@ -82,10 +105,14 @@ export function VideoFeed() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const prevFrameRef = useRef<ImageData | null>(null);
+  const backgroundModelRef = useRef<Float32Array | null>(null);
   const detectionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const trackedObjectsRef = useRef<Map<string, {x: number, y: number, lastSeen: number}>>(new Map());
+  const trackedObjectsRef = useRef<Map<string, TrackedObject>>(new Map());
   const objectIdCounterRef = useRef(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const lockedObjectIdRef = useRef<string | null>(null);
+  const frameCountRef = useRef(0);
+  const globalMotionRef = useRef({ dx: 0, dy: 0 });
   
   useEffect(() => {
     localStorage.setItem('mouse_camera_config', JSON.stringify(cameraConfig));
@@ -124,12 +151,16 @@ export function VideoFeed() {
     }
   }, [webcamStream]);
 
-  // Motion detection for webcam
+  // Advanced object detection for webcam
   useEffect(() => {
     if (isDetecting && webcamStream && activeCam === 'webcam') {
+      // Reset background model when starting detection
+      backgroundModelRef.current = null;
+      frameCountRef.current = 0;
+      
       detectionIntervalRef.current = setInterval(() => {
-        detectMotion();
-      }, 200);
+        detectObjects();
+      }, 150); // Faster detection rate for smoother tracking
       
       return () => {
         if (detectionIntervalRef.current) {
@@ -158,7 +189,113 @@ export function VideoFeed() {
     };
   }, [isRecording]);
 
-  const detectMotion = () => {
+  // Calculate color histogram for an image region (for object re-identification)
+  const calculateColorHistogram = (imageData: ImageData, x: number, y: number, w: number, h: number): number[] => {
+    const histogram = new Array(48).fill(0); // 16 bins per channel (R, G, B)
+    const data = imageData.data;
+    const width = imageData.width;
+    let pixelCount = 0;
+    
+    for (let py = Math.max(0, y); py < Math.min(imageData.height, y + h); py += 4) {
+      for (let px = Math.max(0, x); px < Math.min(width, x + w); px += 4) {
+        const i = (py * width + px) * 4;
+        histogram[Math.floor(data[i] / 16)] += 1;
+        histogram[16 + Math.floor(data[i + 1] / 16)] += 1;
+        histogram[32 + Math.floor(data[i + 2] / 16)] += 1;
+        pixelCount++;
+      }
+    }
+    
+    // Normalize
+    if (pixelCount > 0) {
+      for (let i = 0; i < histogram.length; i++) {
+        histogram[i] /= pixelCount;
+      }
+    }
+    return histogram;
+  };
+
+  // Compare two color histograms (returns similarity 0-1)
+  const compareHistograms = (h1: number[], h2: number[]): number => {
+    if (!h1.length || !h2.length || h1.length !== h2.length) return 0;
+    let similarity = 0;
+    for (let i = 0; i < h1.length; i++) {
+      similarity += Math.min(h1[i], h2[i]);
+    }
+    return Math.min(1, similarity);
+  };
+
+  // Calculate IoU (Intersection over Union) between two boxes
+  const calculateIoU = (box1: {x: number, y: number, w: number, h: number}, 
+                        box2: {x: number, y: number, w: number, h: number}): number => {
+    const x1 = Math.max(box1.x, box2.x);
+    const y1 = Math.max(box1.y, box2.y);
+    const x2 = Math.min(box1.x + box1.w, box2.x + box2.w);
+    const y2 = Math.min(box1.y + box1.h, box2.y + box2.h);
+    
+    if (x2 <= x1 || y2 <= y1) return 0;
+    
+    const intersection = (x2 - x1) * (y2 - y1);
+    const union = box1.w * box1.h + box2.w * box2.h - intersection;
+    return intersection / union;
+  };
+
+  // Estimate global camera motion between frames
+  const estimateGlobalMotion = (prev: ImageData, curr: ImageData): { dx: number; dy: number } => {
+    const width = curr.width;
+    const height = curr.height;
+    const sampleSize = 8;
+    const blockSize = 32;
+    const searchRange = 16;
+    
+    let totalDx = 0, totalDy = 0, validBlocks = 0;
+    
+    // Sample blocks across the frame
+    for (let by = 0; by < sampleSize; by++) {
+      for (let bx = 0; bx < sampleSize; bx++) {
+        const startX = Math.floor((width - blockSize) * bx / (sampleSize - 1));
+        const startY = Math.floor((height - blockSize) * by / (sampleSize - 1));
+        
+        let bestDx = 0, bestDy = 0, minSAD = Infinity;
+        
+        // Search for best match
+        for (let dy = -searchRange; dy <= searchRange; dy += 4) {
+          for (let dx = -searchRange; dx <= searchRange; dx += 4) {
+            const searchX = startX + dx;
+            const searchY = startY + dy;
+            
+            if (searchX < 0 || searchY < 0 || searchX + blockSize > width || searchY + blockSize > height) continue;
+            
+            let sad = 0;
+            for (let py = 0; py < blockSize; py += 8) {
+              for (let px = 0; px < blockSize; px += 8) {
+                const prevI = ((startY + py) * width + startX + px) * 4;
+                const currI = ((searchY + py) * width + searchX + px) * 4;
+                sad += Math.abs(prev.data[prevI] - curr.data[currI]);
+              }
+            }
+            
+            if (sad < minSAD) {
+              minSAD = sad;
+              bestDx = dx;
+              bestDy = dy;
+            }
+          }
+        }
+        
+        if (minSAD < 5000) {
+          totalDx += bestDx;
+          totalDy += bestDy;
+          validBlocks++;
+        }
+      }
+    }
+    
+    return validBlocks > 0 ? { dx: totalDx / validBlocks, dy: totalDy / validBlocks } : { dx: 0, dy: 0 };
+  };
+
+  // Enhanced object detection using edge detection + motion + background subtraction
+  const detectObjects = () => {
     if (!videoRef.current || !canvasRef.current) return;
     
     const video = videoRef.current;
@@ -171,105 +308,462 @@ export function VideoFeed() {
     ctx.drawImage(video, 0, 0);
     
     const currentFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const width = currentFrame.width;
+    const height = currentFrame.height;
+    frameCountRef.current++;
     
-    if (prevFrameRef.current) {
-      const motionRegions = findMotionRegions(prevFrameRef.current, currentFrame, 30);
-      const objects = classifyRegions(motionRegions);
-      setDetectedObjects(objects);
+    // Initialize or update background model (for static object detection)
+    if (!backgroundModelRef.current) {
+      backgroundModelRef.current = new Float32Array(width * height * 3);
+      for (let i = 0; i < width * height; i++) {
+        backgroundModelRef.current[i * 3] = currentFrame.data[i * 4];
+        backgroundModelRef.current[i * 3 + 1] = currentFrame.data[i * 4 + 1];
+        backgroundModelRef.current[i * 3 + 2] = currentFrame.data[i * 4 + 2];
+      }
     }
+    
+    const bgModel = backgroundModelRef.current;
+    const learningRate = 0.02;
+    
+    // Estimate global camera motion for motion compensation
+    if (prevFrameRef.current) {
+      globalMotionRef.current = estimateGlobalMotion(prevFrameRef.current, currentFrame);
+    }
+    
+    // Multi-scale detection with different block sizes for various distances
+    const scales = [
+      { blockSize: 8, minArea: 100, label: 'far' },      // Far objects (100+ feet)
+      { blockSize: 16, minArea: 400, label: 'medium' },  // Medium distance (30-100 feet)
+      { blockSize: 32, minArea: 1600, label: 'near' }    // Near objects (10-30 feet)
+    ];
+    
+    const allRegions: { x: number; y: number; w: number; h: number; isMoving: boolean; scale: string }[] = [];
+    
+    for (const scale of scales) {
+      const { blockSize, minArea } = scale;
+      const foregroundMask = new Uint8Array(Math.ceil(width / blockSize) * Math.ceil(height / blockSize));
+      const motionMask = new Uint8Array(foregroundMask.length);
+      
+      // Process blocks
+      for (let by = 0; by < height; by += blockSize) {
+        for (let bx = 0; bx < width; bx += blockSize) {
+          let bgDiff = 0, motionDiff = 0, edgeStrength = 0;
+          let pixelCount = 0;
+          
+          for (let py = by; py < Math.min(by + blockSize, height); py += 2) {
+            for (let px = bx; px < Math.min(bx + blockSize, width); px += 2) {
+              const i = py * width + px;
+              const di = i * 4;
+              const bi = i * 3;
+              
+              // Background subtraction (detects both static and moving foreground objects)
+              bgDiff += Math.abs(currentFrame.data[di] - bgModel[bi]) +
+                       Math.abs(currentFrame.data[di + 1] - bgModel[bi + 1]) +
+                       Math.abs(currentFrame.data[di + 2] - bgModel[bi + 2]);
+              
+              // Motion detection (with global motion compensation)
+              if (prevFrameRef.current) {
+                const compX = Math.round(px - globalMotionRef.current.dx);
+                const compY = Math.round(py - globalMotionRef.current.dy);
+                if (compX >= 0 && compX < width && compY >= 0 && compY < height) {
+                  const prevI = (compY * width + compX) * 4;
+                  motionDiff += Math.abs(currentFrame.data[di] - prevFrameRef.current.data[prevI]) +
+                               Math.abs(currentFrame.data[di + 1] - prevFrameRef.current.data[prevI + 1]) +
+                               Math.abs(currentFrame.data[di + 2] - prevFrameRef.current.data[prevI + 2]);
+                }
+              }
+              
+              // Edge detection (Sobel-like for object boundaries)
+              if (px > 0 && px < width - 1 && py > 0 && py < height - 1) {
+                const gx = Math.abs(currentFrame.data[(py * width + px + 1) * 4] - currentFrame.data[(py * width + px - 1) * 4]);
+                const gy = Math.abs(currentFrame.data[((py + 1) * width + px) * 4] - currentFrame.data[((py - 1) * width + px) * 4]);
+                edgeStrength += gx + gy;
+              }
+              
+              pixelCount++;
+            }
+          }
+          
+          const blockIdx = Math.floor(by / blockSize) * Math.ceil(width / blockSize) + Math.floor(bx / blockSize);
+          const avgBgDiff = bgDiff / pixelCount;
+          const avgMotionDiff = motionDiff / pixelCount;
+          const avgEdge = edgeStrength / pixelCount;
+          
+          // Mark as foreground if significantly different from background OR has strong edges
+          if (avgBgDiff > 60 || avgEdge > 40) {
+            foregroundMask[blockIdx] = 1;
+          }
+          
+          // Mark as moving if there's local motion after compensating for camera movement
+          if (avgMotionDiff > 50) {
+            motionMask[blockIdx] = 1;
+          }
+          
+          // Update background model only for non-foreground regions
+          if (avgBgDiff < 30) {
+            for (let py = by; py < Math.min(by + blockSize, height); py += 4) {
+              for (let px = bx; px < Math.min(bx + blockSize, width); px += 4) {
+                const i = py * width + px;
+                const di = i * 4;
+                const bi = i * 3;
+                bgModel[bi] = bgModel[bi] * (1 - learningRate) + currentFrame.data[di] * learningRate;
+                bgModel[bi + 1] = bgModel[bi + 1] * (1 - learningRate) + currentFrame.data[di + 1] * learningRate;
+                bgModel[bi + 2] = bgModel[bi + 2] * (1 - learningRate) + currentFrame.data[di + 2] * learningRate;
+              }
+            }
+          }
+        }
+      }
+      
+      // Connected component labeling to find object regions
+      const blocksW = Math.ceil(width / blockSize);
+      const blocksH = Math.ceil(height / blockSize);
+      const labels = new Int32Array(foregroundMask.length);
+      let currentLabel = 0;
+      
+      const floodFill = (startIdx: number, label: number): { minX: number; minY: number; maxX: number; maxY: number; hasMotion: boolean } => {
+        const stack = [startIdx];
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        let hasMotion = false;
+        
+        while (stack.length > 0) {
+          const idx = stack.pop()!;
+          if (labels[idx] !== 0 || foregroundMask[idx] === 0) continue;
+          
+          labels[idx] = label;
+          const bx = idx % blocksW;
+          const by = Math.floor(idx / blocksW);
+          minX = Math.min(minX, bx * blockSize);
+          minY = Math.min(minY, by * blockSize);
+          maxX = Math.max(maxX, (bx + 1) * blockSize);
+          maxY = Math.max(maxY, (by + 1) * blockSize);
+          if (motionMask[idx]) hasMotion = true;
+          
+          // 8-connectivity
+          for (let dy = -1; dy <= 1; dy++) {
+            for (let dx = -1; dx <= 1; dx++) {
+              if (dx === 0 && dy === 0) continue;
+              const nx = bx + dx, ny = by + dy;
+              if (nx >= 0 && nx < blocksW && ny >= 0 && ny < blocksH) {
+                const nIdx = ny * blocksW + nx;
+                if (foregroundMask[nIdx] === 1 && labels[nIdx] === 0) {
+                  stack.push(nIdx);
+                }
+              }
+            }
+          }
+        }
+        
+        return { minX, minY, maxX, maxY, hasMotion };
+      };
+      
+      // Find all regions
+      for (let i = 0; i < foregroundMask.length; i++) {
+        if (foregroundMask[i] === 1 && labels[i] === 0) {
+          currentLabel++;
+          const region = floodFill(i, currentLabel);
+          const area = (region.maxX - region.minX) * (region.maxY - region.minY);
+          
+          if (area >= minArea && region.maxX - region.minX >= 15 && region.maxY - region.minY >= 15) {
+            allRegions.push({
+              x: region.minX,
+              y: region.minY,
+              w: region.maxX - region.minX,
+              h: region.maxY - region.minY,
+              isMoving: region.hasMotion,
+              scale: scale.label
+            });
+          }
+        }
+      }
+    }
+    
+    // Merge overlapping regions from different scales
+    const mergedRegions = mergeOverlappingRegions(allRegions);
+    
+    // Track and classify objects
+    const objects = trackAndClassifyObjects(mergedRegions, currentFrame);
+    setDetectedObjects(objects);
     
     prevFrameRef.current = currentFrame;
   };
 
-  const findMotionRegions = (prev: ImageData, curr: ImageData, threshold: number) => {
-    const width = curr.width;
-    const height = curr.height;
-    const regions: {x: number, y: number, w: number, h: number}[] = [];
+  // Merge overlapping regions from multi-scale detection
+  const mergeOverlappingRegions = (regions: { x: number; y: number; w: number; h: number; isMoving: boolean; scale: string }[]) => {
+    if (regions.length === 0) return [];
     
-    let minX = width, minY = height, maxX = 0, maxY = 0;
-    let hasMotion = false;
+    const merged: typeof regions = [];
+    const used = new Set<number>();
     
-    for (let y = 0; y < height; y += 10) {
-      for (let x = 0; x < width; x += 10) {
-        const i = (y * width + x) * 4;
-        const diff = Math.abs(curr.data[i] - prev.data[i]) +
-                    Math.abs(curr.data[i+1] - prev.data[i+1]) +
-                    Math.abs(curr.data[i+2] - prev.data[i+2]);
-        
-        if (diff > threshold * 3) {
-          hasMotion = true;
-          minX = Math.min(minX, x);
-          minY = Math.min(minY, y);
-          maxX = Math.max(maxX, x);
-          maxY = Math.max(maxY, y);
+    for (let i = 0; i < regions.length; i++) {
+      if (used.has(i)) continue;
+      
+      let current = { ...regions[i] };
+      used.add(i);
+      
+      // Find and merge overlapping regions
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (let j = 0; j < regions.length; j++) {
+          if (used.has(j)) continue;
+          
+          const iou = calculateIoU(
+            { x: current.x, y: current.y, w: current.w, h: current.h },
+            { x: regions[j].x, y: regions[j].y, w: regions[j].w, h: regions[j].h }
+          );
+          
+          if (iou > 0.3) {
+            // Merge by taking bounding box
+            const minX = Math.min(current.x, regions[j].x);
+            const minY = Math.min(current.y, regions[j].y);
+            const maxX = Math.max(current.x + current.w, regions[j].x + regions[j].w);
+            const maxY = Math.max(current.y + current.h, regions[j].y + regions[j].h);
+            current = {
+              x: minX,
+              y: minY,
+              w: maxX - minX,
+              h: maxY - minY,
+              isMoving: current.isMoving || regions[j].isMoving,
+              scale: current.scale
+            };
+            used.add(j);
+            changed = true;
+          }
         }
       }
+      
+      merged.push(current);
     }
     
-    if (hasMotion && maxX - minX > 30 && maxY - minY > 30) {
-      regions.push({ x: minX, y: minY, w: maxX - minX, h: maxY - minY });
-    }
-    
-    return regions;
+    return merged;
   };
 
-  const classifyRegions = (regions: {x: number, y: number, w: number, h: number}[]): DetectedObject[] => {
+  // Advanced object tracking with prediction and re-identification
+  const trackAndClassifyObjects = (
+    regions: { x: number; y: number; w: number; h: number; isMoving: boolean; scale: string }[],
+    currentFrame: ImageData
+  ): DetectedObject[] => {
     const now = Date.now();
     const trackedObjects = trackedObjectsRef.current;
+    const lockedId = lockedObjectIdRef.current;
     
-    trackedObjects.forEach((val, key) => {
-      if (now - val.lastSeen > 2000) {
-        trackedObjects.delete(key);
-      }
+    // Update tracked objects with prediction (Kalman-like)
+    trackedObjects.forEach((obj, id) => {
+      // Predict new position based on velocity
+      obj.x += obj.vx;
+      obj.y += obj.vy;
+      
+      // Compensate for camera motion
+      obj.x -= globalMotionRef.current.dx;
+      obj.y -= globalMotionRef.current.dy;
     });
     
-    return regions.map((r) => {
-      const aspectRatio = r.w / r.h;
-      let type: "person" | "vehicle" | "unknown" = "unknown";
-      let confidence = 60 + Math.floor(Math.random() * 30);
+    // Match regions to existing tracked objects
+    const matchedRegions = new Set<number>();
+    const matchedObjects = new Set<string>();
+    
+    // Priority matching for locked object
+    if (lockedId && trackedObjects.has(lockedId)) {
+      const locked = trackedObjects.get(lockedId)!;
+      let bestIdx = -1;
+      let bestScore = 0;
       
-      if (aspectRatio < 0.8 && r.h > 80) {
-        type = "person";
-        confidence = 75 + Math.floor(Math.random() * 20);
-      } else if (aspectRatio > 1.2 && r.w > 100) {
-        type = "vehicle";
-        confidence = 70 + Math.floor(Math.random() * 25);
+      for (let i = 0; i < regions.length; i++) {
+        const r = regions[i];
+        const iou = calculateIoU(
+          { x: locked.x, y: locked.y, w: locked.width, h: locked.height },
+          { x: r.x, y: r.y, w: r.w, h: r.h }
+        );
+        const colorSim = compareHistograms(
+          locked.colorSignature,
+          calculateColorHistogram(currentFrame, r.x, r.y, r.w, r.h)
+        );
+        const score = iou * 0.6 + colorSim * 0.4;
+        
+        if (score > bestScore && score > 0.25) {
+          bestScore = score;
+          bestIdx = i;
+        }
       }
       
-      let bestMatchId = "";
-      let bestMatchScore = 0;
+      if (bestIdx >= 0) {
+        const r = regions[bestIdx];
+        const newVx = (r.x - locked.x) * 0.3 + locked.vx * 0.7;
+        const newVy = (r.y - locked.y) * 0.3 + locked.vy * 0.7;
+        
+        trackedObjects.set(lockedId, {
+          ...locked,
+          x: r.x,
+          y: r.y,
+          width: r.w,
+          height: r.h,
+          vx: newVx,
+          vy: newVy,
+          lastSeen: now,
+          framesSeen: locked.framesSeen + 1,
+          colorSignature: calculateColorHistogram(currentFrame, r.x, r.y, r.w, r.h),
+          isMoving: r.isMoving
+        });
+        
+        matchedRegions.add(bestIdx);
+        matchedObjects.add(lockedId);
+      }
+    }
+    
+    // Match remaining regions to tracked objects
+    for (let i = 0; i < regions.length; i++) {
+      if (matchedRegions.has(i)) continue;
       
-      trackedObjects.forEach((tracked, id) => {
-        const dx = Math.abs(r.x - tracked.x);
-        const dy = Math.abs(r.y - tracked.y);
-        const score = 1 / (1 + dx * 0.01 + dy * 0.01);
-        if (score > bestMatchScore && score > 0.5) {
-          bestMatchScore = score;
-          bestMatchId = id;
+      const r = regions[i];
+      let bestId = "";
+      let bestScore = 0;
+      
+      trackedObjects.forEach((obj, id) => {
+        if (matchedObjects.has(id)) return;
+        
+        const iou = calculateIoU(
+          { x: obj.x, y: obj.y, w: obj.width, h: obj.height },
+          { x: r.x, y: r.y, w: r.w, h: r.h }
+        );
+        const colorSim = compareHistograms(
+          obj.colorSignature,
+          calculateColorHistogram(currentFrame, r.x, r.y, r.w, r.h)
+        );
+        const score = iou * 0.5 + colorSim * 0.5;
+        
+        if (score > bestScore && score > 0.2) {
+          bestScore = score;
+          bestId = id;
         }
       });
       
-      let objectId: string;
-      if (bestMatchId) {
-        objectId = bestMatchId;
-        trackedObjects.set(objectId, { x: r.x, y: r.y, lastSeen: now });
-      } else {
-        objectIdCounterRef.current++;
-        objectId = `obj_${type}_${objectIdCounterRef.current}`;
-        trackedObjects.set(objectId, { x: r.x, y: r.y, lastSeen: now });
+      if (bestId) {
+        const obj = trackedObjects.get(bestId)!;
+        const newVx = (r.x - obj.x) * 0.3 + obj.vx * 0.7;
+        const newVy = (r.y - obj.y) * 0.3 + obj.vy * 0.7;
+        
+        trackedObjects.set(bestId, {
+          ...obj,
+          x: r.x,
+          y: r.y,
+          width: r.w,
+          height: r.h,
+          vx: newVx,
+          vy: newVy,
+          lastSeen: now,
+          framesSeen: obj.framesSeen + 1,
+          colorSignature: calculateColorHistogram(currentFrame, r.x, r.y, r.w, r.h),
+          isMoving: r.isMoving
+        });
+        
+        matchedRegions.add(i);
+        matchedObjects.add(bestId);
+      }
+    }
+    
+    // Create new tracked objects for unmatched regions
+    for (let i = 0; i < regions.length; i++) {
+      if (matchedRegions.has(i)) continue;
+      
+      const r = regions[i];
+      objectIdCounterRef.current++;
+      const newId = `obj_${objectIdCounterRef.current}`;
+      const colorSig = calculateColorHistogram(currentFrame, r.x, r.y, r.w, r.h);
+      
+      // Classify object type based on aspect ratio and size
+      const aspectRatio = r.w / r.h;
+      const area = r.w * r.h;
+      let type: "person" | "vehicle" | "animal" | "aircraft" | "unknown" = "unknown";
+      let confidence = 55;
+      
+      if (aspectRatio > 0.3 && aspectRatio < 0.9 && r.h > 40) {
+        type = "person";
+        confidence = 70 + Math.min(20, r.h / 10);
+      } else if (aspectRatio > 1.3 && area > 2000) {
+        type = "vehicle";
+        confidence = 65 + Math.min(25, area / 1000);
+      } else if (aspectRatio > 0.7 && aspectRatio < 1.5 && area < 1500 && area > 100) {
+        type = "animal";
+        confidence = 55 + Math.min(20, area / 50);
+      } else if (aspectRatio > 1.5 && r.y < currentFrame.height * 0.4) {
+        type = "aircraft";
+        confidence = 50 + Math.min(20, r.w / 20);
       }
       
-      return {
-        id: objectId,
-        type,
-        confidence,
+      trackedObjects.set(newId, {
+        id: newId,
         x: r.x,
         y: r.y,
         width: r.w,
         height: r.h,
-        color: type === "person" ? "#22c55e" : type === "vehicle" ? "#f59e0b" : "#6b7280"
-      };
+        vx: 0,
+        vy: 0,
+        lastSeen: now,
+        framesSeen: 1,
+        colorSignature: colorSig,
+        isLocked: false,
+        isMoving: r.isMoving,
+        type,
+        confidence
+      });
+    }
+    
+    // Remove stale tracked objects (keep locked objects longer)
+    trackedObjects.forEach((obj, id) => {
+      const timeout = id === lockedId ? 10000 : 3000;
+      if (now - obj.lastSeen > timeout) {
+        if (id === lockedId) {
+          lockedObjectIdRef.current = null;
+        }
+        trackedObjects.delete(id);
+      }
     });
+    
+    // Convert to DetectedObject array
+    const result: DetectedObject[] = [];
+    trackedObjects.forEach((obj, id) => {
+      const isLocked = id === lockedId;
+      const typeColors: Record<string, string> = {
+        person: "#22c55e",
+        vehicle: "#f59e0b", 
+        animal: "#8b5cf6",
+        aircraft: "#3b82f6",
+        unknown: "#6b7280"
+      };
+      
+      result.push({
+        id,
+        type: obj.type,
+        confidence: Math.min(99, obj.confidence + Math.min(15, obj.framesSeen * 2)),
+        x: obj.x,
+        y: obj.y,
+        width: obj.width,
+        height: obj.height,
+        color: isLocked ? "#ef4444" : typeColors[obj.type] || "#6b7280",
+        isLocked,
+        isMoving: obj.isMoving,
+        velocity: { vx: obj.vx, vy: obj.vy },
+        colorSignature: obj.colorSignature,
+        framesSeen: obj.framesSeen,
+        lastPredictedPos: { x: obj.x + obj.vx, y: obj.y + obj.vy }
+      });
+    });
+    
+    return result;
+  };
+
+  // Lock onto a specific object for persistent tracking
+  const lockOnObject = (objectId: string) => {
+    if (lockedObjectIdRef.current === objectId) {
+      lockedObjectIdRef.current = null;
+      toast.info("Object lock released");
+    } else {
+      lockedObjectIdRef.current = objectId;
+      toast.success("Object locked for tracking");
+    }
+    // Force re-render
+    setDetectedObjects(prev => [...prev]);
   };
 
   const startWebcam = async () => {
@@ -730,21 +1224,53 @@ export function VideoFeed() {
                 {detectedObjects.map((obj) => (
                   <div
                     key={obj.id}
-                    className="absolute border-2 rounded pointer-events-none"
+                    className={cn(
+                      "absolute border-2 rounded cursor-pointer transition-all",
+                      obj.isLocked && "border-4 animate-pulse"
+                    )}
                     style={{
                       left: `${(obj.x / videoDimensions.width) * 100}%`,
                       top: `${(obj.y / videoDimensions.height) * 100}%`,
                       width: `${(obj.width / videoDimensions.width) * 100}%`,
                       height: `${(obj.height / videoDimensions.height) * 100}%`,
                       borderColor: obj.color,
+                      boxShadow: obj.isLocked ? `0 0 10px ${obj.color}, 0 0 20px ${obj.color}` : 'none',
                     }}
+                    onClick={() => lockOnObject(obj.id)}
+                    title={obj.isLocked ? "Click to unlock" : "Click to lock onto this object"}
+                    data-testid={`object-bbox-${obj.id}`}
                   >
+                    {/* Object label with enhanced info */}
                     <div 
-                      className="absolute -top-4 left-0 text-[8px] px-1 font-bold text-black"
+                      className="absolute -top-5 left-0 text-[8px] px-1 font-bold text-black flex items-center gap-1 whitespace-nowrap"
                       style={{ backgroundColor: obj.color }}
                     >
+                      {obj.isLocked && <Crosshair className="h-2 w-2" />}
                       {obj.type.toUpperCase()} {obj.confidence}%
+                      {obj.isMoving ? " [MOVING]" : " [STATIC]"}
                     </div>
+                    
+                    {/* Lock indicator */}
+                    {obj.isLocked && (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="w-3 h-3 border-2 border-red-500 rounded-full animate-ping" />
+                        <Crosshair className="absolute h-4 w-4 text-red-500" />
+                      </div>
+                    )}
+                    
+                    {/* Velocity vector indicator for moving objects */}
+                    {obj.isMoving && Math.abs(obj.velocity.vx) + Math.abs(obj.velocity.vy) > 2 && (
+                      <div 
+                        className="absolute w-0.5 bg-yellow-400"
+                        style={{
+                          left: '50%',
+                          top: '50%',
+                          height: `${Math.min(30, Math.sqrt(obj.velocity.vx ** 2 + obj.velocity.vy ** 2) * 3)}px`,
+                          transform: `rotate(${Math.atan2(obj.velocity.vy, obj.velocity.vx) * 180 / Math.PI + 90}deg)`,
+                          transformOrigin: 'top center'
+                        }}
+                      />
+                    )}
                   </div>
                 ))}
                 
