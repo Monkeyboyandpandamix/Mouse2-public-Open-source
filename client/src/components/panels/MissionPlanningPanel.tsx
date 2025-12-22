@@ -68,6 +68,7 @@ export function MissionPlanningPanel() {
     hoverTime: "5",
     patrolRadius: "20"
   });
+  const [isExecuting, setIsExecuting] = useState(false);
 
   const { data: missions = [] } = useQuery<Mission[]>({
     queryKey: ["/api/missions"],
@@ -294,6 +295,56 @@ export function MissionPlanningPanel() {
     setEditingWaypoint(null);
   };
 
+  const executeMission = () => {
+    if (!selectedMissionData || waypoints.length === 0) {
+      toast.error("No waypoints to execute");
+      return;
+    }
+    
+    setIsExecuting(true);
+    
+    // Dispatch mission execution event with waypoints
+    window.dispatchEvent(new CustomEvent('mission-execute', {
+      detail: {
+        missionId: selectedMission,
+        missionName: selectedMissionData.name,
+        waypoints: waypoints.map(wp => ({
+          id: wp.id,
+          order: wp.order,
+          lat: wp.latitude,
+          lng: wp.longitude,
+          altitude: wp.altitude,
+          action: wp.action,
+          actionParams: wp.actionParams
+        })),
+        homePosition: {
+          lat: selectedMissionData.homeLatitude,
+          lng: selectedMissionData.homeLongitude,
+          alt: selectedMissionData.homeAltitude
+        }
+      }
+    }));
+    
+    // Dispatch takeoff command to start the mission
+    window.dispatchEvent(new CustomEvent('flight-command', {
+      detail: { command: 'takeoff', altitude: waypoints[0]?.altitude || 50 }
+    }));
+    
+    toast.success(`Executing mission: ${selectedMissionData.name}`, {
+      description: `${waypoints.length} waypoints queued. Click Stop to abort.`
+    });
+    
+    // isExecuting remains true until user clicks Stop or mission completes
+  };
+
+  const stopMission = () => {
+    window.dispatchEvent(new CustomEvent('flight-command', {
+      detail: { command: 'land' }
+    }));
+    setIsExecuting(false);
+    toast.info("Mission stopped - landing");
+  };
+
   return (
     <div className="h-full flex">
       {/* Mission List Sidebar */}
@@ -366,14 +417,31 @@ export function MissionPlanningPanel() {
                   <p className="text-xs text-muted-foreground">{waypoints.length} waypoints</p>
                 </div>
                 <div className="flex gap-2">
-                  <Button variant="outline" size="sm">
+                  <Button variant="outline" size="sm" data-testid="button-save-mission">
                     <Save className="h-4 w-4 mr-1" />
                     Save
                   </Button>
-                  <Button size="sm">
-                    <Play className="h-4 w-4 mr-1" />
-                    Execute
-                  </Button>
+                  {isExecuting ? (
+                    <Button 
+                      size="sm" 
+                      variant="destructive" 
+                      onClick={stopMission}
+                      data-testid="button-stop-mission"
+                    >
+                      <X className="h-4 w-4 mr-1" />
+                      Stop
+                    </Button>
+                  ) : (
+                    <Button 
+                      size="sm" 
+                      onClick={executeMission}
+                      disabled={waypoints.length === 0}
+                      data-testid="button-execute-mission"
+                    >
+                      <Play className="h-4 w-4 mr-1" />
+                      Execute
+                    </Button>
+                  )}
                 </div>
               </div>
             </div>
