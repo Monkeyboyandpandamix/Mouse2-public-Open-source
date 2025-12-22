@@ -1,0 +1,58 @@
+../dist/public/assets/aerial_drone_view_of_a_suburban_street_with_overlaid_bounding_boxes-ChFuhxtD.png  2,140.53 kB
+../dist/public/assets/index-CuzLOMJW.css                                                                  140.03 kB │ gzip:  26.50 kB
+../dist/public/assets/index-BVNxox11.js                                                                 3,477.66 kB │ gzip: 735.81 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 30.17s
+building server...
+
+  dist/index.cjs  993.2kb
+
+⚡ Done in 39ms
+
+Starting M.O.U.S.E. Desktop Application...
+
+Starting M.O.U.S.E. Ground Control Station...
+Data directory: /Users/mohammadaghamohammadi/Library/Application Support/Electron/data
+Using port: 5000
+Server Error: WARNING: No encryption key configured for Google OAuth tokens.
+Server Error: Set GOOGLE_AUTH_ENCRYPTION_KEY or SESSION_SECRET for production security.
+Server Error: (node:431) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Server Error: node:events:496
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use 0.0.0.0:5000
+    at Server.setupListenHandle [as _listen2] (node:net:1907:16)
+    at listenInCluster (node:net:1964:12)
+    at node:net:2170:7
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+Emitted 'error' event on ep instance at:
+    at Server.emit (node:events:518:28)
+    at emitErrorNT (node:net:1943:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  code: 'EADDRINUSE',
+  errno: -48,
+  syscall: 'listen',
+  address: '0.0.0.0',
+  port: 5000
+}
+
+Node.js v22.11.0
+Server process exited with code 1
+Failed to start server: Error: Server health check failed
+    at ClientRequest.<anonymous> (/Users/mohammadaghamohammadi/Desktop/MOUSE2-app-main/electron/main.cjs:52:18)
+    at Object.onceWrapper (node:events:634:26)
+    at ClientRequest.emit (node:events:519:28)
+    at HTTPParser.parserOnIncomingClient (node:_http_client:772:27)
+    at HTTPParser.parserOnHeadersComplete (node:_http_common:122:17)
+    at Socket.socketOnData (node:_http_client:614:22)
+    at Socket.emit (node:events:519:28)
+    at addChunk (node:internal/streams/readable:561:12)
+    at readableAddChunkPushByteMode (node:internal/streams/readable:512:3)
+    at Readable.push (node:internal/streams/readable:392:5)
+
