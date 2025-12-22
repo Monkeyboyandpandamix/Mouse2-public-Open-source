@@ -2,7 +2,7 @@
 
 ## Overview
 
-M.O.U.S.E (Mission Optimized Unmanned System Environment) is a comprehensive ground control station application for autonomous drone control. The system is designed to run on Raspberry Pi for onboard control and desktop/laptop for the primary ground control interface. It provides real-time telemetry, mission planning, object tracking, and two-way communication capabilities for drone operations, including GPS-denied environment support.
+M.O.U.S.E (Multi-purpose Operational Unmanned Aerial System for Emergency Response & Environmental Monitoring) is a comprehensive ground control station application for autonomous drone control. The system is designed to run on Raspberry Pi for onboard control and desktop/laptop for the primary ground control interface. It provides real-time telemetry, mission planning, object tracking, and two-way communication capabilities for drone operations, including GPS-denied environment support.
 
 ## User Preferences
 
