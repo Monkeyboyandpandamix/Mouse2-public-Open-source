@@ -90,6 +90,30 @@ export function GUIConfigPanel() {
   const [theme, setTheme] = useState<"dark" | "light" | "system">(() => {
     return (localStorage.getItem('mouse_theme') as "dark" | "light" | "system") || "dark";
   });
+
+  // Apply theme immediately when changed
+  useEffect(() => {
+    localStorage.setItem('mouse_theme', theme);
+    
+    if (theme === 'light') {
+      document.documentElement.classList.remove('dark');
+      document.documentElement.classList.add('light');
+    } else if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+      document.documentElement.classList.remove('light');
+    } else if (theme === 'system') {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      if (prefersDark) {
+        document.documentElement.classList.add('dark');
+        document.documentElement.classList.remove('light');
+      } else {
+        document.documentElement.classList.remove('dark');
+        document.documentElement.classList.add('light');
+      }
+    }
+    
+    window.dispatchEvent(new CustomEvent('gui-config-changed', { detail: { theme } }));
+  }, [theme]);
   
   const [customWidgets, setCustomWidgets] = useState<CustomWidget[]>(() => {
     const saved = localStorage.getItem('mouse_gui_widgets');
@@ -488,7 +512,7 @@ export function GUIConfigPanel() {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground mt-2">
-                  Theme changes will apply on next refresh
+                  Theme changes apply immediately
                 </p>
               </CardContent>
             </Card>
