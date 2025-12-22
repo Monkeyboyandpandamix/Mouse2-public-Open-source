@@ -91,7 +91,7 @@ export default function Home() {
     };
   }, []);
 
-  // Listen for system errors from various sources (must be before conditional return)
+  // Listen for real system errors from MAVLink/sensors (must be before conditional return)
   useEffect(() => {
     if (!isLoggedIn) return; // Only run when logged in
     
@@ -100,25 +100,9 @@ export default function Home() {
     };
 
     window.addEventListener('system-error' as any, handleError);
-    
-    // Simulate occasional system warnings for demo
-    const checkInterval = setInterval(() => {
-      // In real implementation, this would check actual system status
-      const random = Math.random();
-      if (random < 0.02) { // 2% chance of error demo
-        const errors: SystemError[] = [
-          { id: Date.now().toString(), type: 'warning', title: 'GPS Signal Weak', message: 'Only 4 satellites in view. Consider waiting for better signal.', timestamp: new Date() },
-          { id: Date.now().toString(), type: 'warning', title: 'Battery Low', message: 'Battery at 22%. Consider returning to base.', timestamp: new Date() },
-          { id: Date.now().toString(), type: 'error', title: 'Telemetry Lag', message: 'High latency detected on telemetry link. Check connection.', timestamp: new Date() },
-        ];
-        const error = errors[Math.floor(Math.random() * errors.length)];
-        setSystemErrors(prev => [...prev, error]);
-      }
-    }, 30000);
 
     return () => {
       window.removeEventListener('system-error' as any, handleError);
-      clearInterval(checkInterval);
     };
   }, [isLoggedIn]);
 

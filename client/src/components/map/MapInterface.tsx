@@ -129,13 +129,9 @@ interface Aircraft {
   verticalRate: number;
 }
 
-// Simulated aircraft near Burlington, NC
-const simulatedAircraft: Aircraft[] = [
-  { id: "UAL123", callsign: "UAL123", lat: DEFAULT_LAT + 0.012, lon: DEFAULT_LNG + 0.013, altitude: 3500, speed: 250, heading: 180, threat: 'low', verticalRate: -500 },
-  { id: "SWA456", callsign: "SWA456", lat: DEFAULT_LAT - 0.012, lon: DEFAULT_LNG - 0.016, altitude: 2800, speed: 180, heading: 45, threat: 'medium', verticalRate: 0 },
-  { id: "N789AB", callsign: "N789AB", lat: DEFAULT_LAT + 0.003, lon: DEFAULT_LNG + 0.006, altitude: 800, speed: 95, heading: 270, threat: 'high', verticalRate: -200 },
-  { id: "DAL789", callsign: "DAL789", lat: DEFAULT_LAT + 0.028, lon: DEFAULT_LNG + 0.034, altitude: 5200, speed: 300, heading: 135, threat: 'low', verticalRate: 1000 },
-];
+// Real ADS-B aircraft data - populated from actual receiver when connected
+// Empty by default until real data arrives from ADS-B receiver
+const defaultAircraft: Aircraft[] = [];
 
 function ZoomControls() {
   const map = useMap();
@@ -244,7 +240,7 @@ export function MapInterface() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchResult, setSearchResult] = useState<{lat: number; lon: number; name: string} | null>(null);
   const [showAdsb, setShowAdsb] = useState(true);
-  const [aircraft, setAircraft] = useState<Aircraft[]>(simulatedAircraft);
+  const [aircraft, setAircraft] = useState<Aircraft[]>(defaultAircraft);
   
   // ADS-B panel drag state (using top/left positioning)
   const [adsbPosition, setAdsbPosition] = useState({ x: 16, y: 200 });
@@ -363,16 +359,14 @@ export function MapInterface() {
     return () => window.removeEventListener('mission-selected' as any, handleMissionSelect);
   }, []);
 
+  // Listen for real ADS-B data from receiver
   useEffect(() => {
-    const interval = setInterval(() => {
-      setAircraft(prev => prev.map(ac => ({
-        ...ac,
-        lat: ac.lat + (Math.sin(ac.heading * Math.PI / 180) * 0.0001),
-        lon: ac.lon + (Math.cos(ac.heading * Math.PI / 180) * 0.0001),
-        altitude: ac.altitude + (ac.verticalRate / 60),
-      })));
-    }, 1000);
-    return () => clearInterval(interval);
+    const handleAdsbUpdate = (e: CustomEvent<Aircraft[]>) => {
+      setAircraft(e.detail);
+    };
+
+    window.addEventListener('adsb-update' as any, handleAdsbUpdate);
+    return () => window.removeEventListener('adsb-update' as any, handleAdsbUpdate);
   }, []);
 
   const getTileUrl = () => {
@@ -813,7 +807,12 @@ export function MapInterface() {
           />
         </div>
         <div className="px-3 pb-3">
-        {showAdsb && (
+        {showAdsb && aircraft.length === 0 && (
+          <div className="text-xs text-muted-foreground italic py-2">
+            Awaiting ADS-B feed...
+          </div>
+        )}
+        {showAdsb && aircraft.length > 0 && (
           <div className="space-y-1.5 max-h-32 overflow-auto">
             {aircraft.map(ac => (
               <div 

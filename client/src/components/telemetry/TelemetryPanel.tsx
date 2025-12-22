@@ -128,137 +128,49 @@ export function TelemetryPanel() {
     };
   }, []);
 
-  // Initialize motors based on motor count and arm state
+  // Initialize motors based on motor count - all start at zero until real data arrives
   useEffect(() => {
     const newMotors: MotorData[] = [];
     for (let i = 0; i < motorCount; i++) {
-      if (isArmed) {
-        newMotors.push({
-          rpm: 3200 + Math.random() * 400 + i * 50,
-          temp: 42 + Math.random() * 8 + i * 2,
-          current: 7.5 + Math.random() * 2 + i * 0.3,
-          status: 'ok'
-        });
-      } else {
-        newMotors.push({
-          rpm: 0,
-          temp: 25, // Ambient temp when idle
-          current: 0,
-          status: 'ok'
-        });
-      }
+      newMotors.push({
+        rpm: 0,
+        temp: 0,
+        current: 0,
+        status: 'ok'
+      });
     }
     setMotors(newMotors);
-  }, [motorCount, isArmed]);
+  }, [motorCount]);
 
-  // Only simulate telemetry updates when drone is armed
+  // Listen for real telemetry data from WebSocket/MAVLink
+  // This will be populated when connected to an actual drone
   useEffect(() => {
-    if (!isArmed) {
-      // Reset to idle values when disarmed
-      setAttitude({ pitch: 0, roll: 0, yaw: 0 });
-      setHeading(0);
-      setAltitude(0);
-      setGroundSpeed(0);
-      setMotors(prev => prev.map(m => ({ ...m, rpm: 0, current: 0 })));
-      return;
-    }
-    
-    const interval = setInterval(() => {
-      // Update altitude based on flight mode
-      setAltitude(prev => {
-        switch (flightMode) {
-          case 'takeoff':
-            if (prev >= 50) {
-              setFlightMode('flying');
-              return 50;
-            }
-            return Math.min(50, prev + 2);
-          case 'landing':
-            if (prev <= 0) {
-              setFlightMode('idle');
-              return 0;
-            }
-            return Math.max(0, prev - 1.5);
-          case 'rtl':
-            // Maintain altitude during RTL, then descend when near home
-            if (prev <= 0) return 0;
-            return prev;
-          case 'flying':
-            return Math.max(0, Math.min(100, prev + (Math.random() - 0.5) * 2));
-          default:
-            return prev;
-        }
-      });
-      
-      // Update ground speed based on flight mode
-      setGroundSpeed(prev => {
-        switch (flightMode) {
-          case 'takeoff':
-            return Math.min(5, prev + 0.5);
-          case 'landing':
-            return Math.max(0, prev - 0.5);
-          case 'rtl':
-            return Math.min(15, Math.max(5, prev + (Math.random() - 0.5)));
-          case 'flying':
-            return Math.max(0, Math.min(20, prev + (Math.random() - 0.5) * 2));
-          default:
-            return Math.max(0, prev - 0.5);
-        }
-      });
-      
-      // Update position when flying or RTL
-      if (flightMode === 'flying' || flightMode === 'rtl' || flightMode === 'takeoff') {
-        setPosition(prev => {
-          if (flightMode === 'rtl') {
-            // Move toward home position (use ref for current home)
-            const home = homePositionRef.current;
-            const latDiff = home.lat - prev.lat;
-            const lngDiff = home.lng - prev.lng;
-            const dist = Math.sqrt(latDiff * latDiff + lngDiff * lngDiff);
-            
-            if (dist < 0.00001) {
-              // Close enough to home, start landing
-              setFlightMode('landing');
-              return prev;
-            }
-            
-            // Move 5% of the remaining distance each tick
-            const moveSpeed = 0.05;
-            return {
-              lat: prev.lat + latDiff * moveSpeed,
-              lng: prev.lng + lngDiff * moveSpeed
-            };
-          } else {
-            // Random movement during normal flight
-            return {
-              lat: prev.lat + (Math.random() - 0.5) * 0.00005,
-              lng: prev.lng + (Math.random() - 0.5) * 0.00005
-            };
-          }
-        });
-      }
-      
-      // Update distance to home using actual calculation (use refs for current values)
-      const currentPos = positionRef.current;
-      const homePos = homePositionRef.current;
-      setDistToHome(calculateDistance(currentPos.lat, currentPos.lng, homePos.lat, homePos.lng));
-      
-      setAttitude(prev => ({
-        pitch: prev.pitch + (Math.random() - 0.5) * 2,
-        roll: prev.roll + (Math.random() - 0.5) * 2,
-        yaw: (prev.yaw + 0.5) % 360,
-      }));
-      setHeading(prev => (prev + 0.2) % 360);
-      setMotors(prev => prev.map(m => ({
-        ...m,
-        rpm: Math.max(2800, m.rpm + (Math.random() - 0.5) * 100),
-        temp: Math.max(35, Math.min(70, m.temp + (Math.random() - 0.5) * 0.5)),
-        current: Math.max(5, Math.min(15, m.current + (Math.random() - 0.5) * 0.2)),
-        status: m.temp > 60 ? 'warning' : m.temp > 70 ? 'error' : 'ok'
-      })));
-    }, 100);
-    return () => clearInterval(interval);
-  }, [isArmed, flightMode]);
+    const handleTelemetryUpdate = (e: CustomEvent<{
+      attitude?: { pitch: number; roll: number; yaw: number };
+      heading?: number;
+      altitude?: number;
+      groundSpeed?: number;
+      position?: { lat: number; lng: number };
+      motors?: MotorData[];
+    }>) => {
+      const data = e.detail;
+      if (data.attitude) setAttitude(data.attitude);
+      if (data.heading !== undefined) setHeading(data.heading);
+      if (data.altitude !== undefined) setAltitude(data.altitude);
+      if (data.groundSpeed !== undefined) setGroundSpeed(data.groundSpeed);
+      if (data.position) setPosition(data.position);
+      if (data.motors) setMotors(data.motors);
+    };
+
+    window.addEventListener('telemetry-update' as any, handleTelemetryUpdate);
+    return () => window.removeEventListener('telemetry-update' as any, handleTelemetryUpdate);
+  }, []);
+
+  // Update distance to home when position changes
+  useEffect(() => {
+    const dist = calculateDistance(position.lat, position.lng, homePosition.lat, homePosition.lng);
+    setDistToHome(dist);
+  }, [position, homePosition]);
 
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -375,7 +287,7 @@ export function TelemetryPanel() {
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground uppercase">Next Waypoint</span>
-                <span className="font-mono text-foreground">WP 3 (45m)</span>
+                <span className="font-mono text-muted-foreground">---</span>
               </div>
             </div>
 
@@ -485,14 +397,15 @@ export function TelemetryPanel() {
           <TabsContent value="sensors" className="flex-1 overflow-y-auto px-4 mt-2 space-y-4">
             <div className="space-y-3">
               <span className="text-xs text-muted-foreground uppercase font-bold">System Health</span>
+              <p className="text-xs text-muted-foreground italic">Waiting for sensor data...</p>
               
               <div className="space-y-1">
                 <div className="flex justify-between text-xs">
                   <span className="text-muted-foreground">LiDAR Range</span>
-                  <span className="font-mono text-emerald-500">12.4m</span>
+                  <span className="font-mono text-muted-foreground">---</span>
                 </div>
                 <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                  <div className="h-full bg-emerald-500 w-[70%]" />
+                  <div className="h-full bg-muted-foreground w-[0%]" />
                 </div>
               </div>
 
@@ -501,10 +414,10 @@ export function TelemetryPanel() {
                   <span className="text-muted-foreground flex items-center gap-1">
                     <Thermometer className="h-3 w-3" /> CPU Temp
                   </span>
-                  <span className="font-mono text-amber-500">52°C</span>
+                  <span className="font-mono text-muted-foreground">---</span>
                 </div>
                 <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                  <div className="h-full bg-amber-500 w-[52%]" />
+                  <div className="h-full bg-muted-foreground w-[0%]" />
                 </div>
               </div>
 
@@ -513,20 +426,20 @@ export function TelemetryPanel() {
                   <span className="text-muted-foreground flex items-center gap-1">
                     <Thermometer className="h-3 w-3" /> ESC Temp
                   </span>
-                  <span className="font-mono text-amber-500">48°C</span>
+                  <span className="font-mono text-muted-foreground">---</span>
                 </div>
                 <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                  <div className="h-full bg-amber-500 w-[48%]" />
+                  <div className="h-full bg-muted-foreground w-[0%]" />
                 </div>
               </div>
               
               <div className="space-y-1">
                 <div className="flex justify-between text-xs">
                   <span className="text-muted-foreground">Vibration</span>
-                  <span className="font-mono text-emerald-500">0.2 G</span>
+                  <span className="font-mono text-muted-foreground">---</span>
                 </div>
                 <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                  <div className="h-full bg-emerald-500 w-[10%]" />
+                  <div className="h-full bg-muted-foreground w-[0%]" />
                 </div>
               </div>
             </div>
@@ -539,15 +452,15 @@ export function TelemetryPanel() {
               <div className="space-y-2 text-xs">
                 <div className="flex justify-between p-2 bg-muted/20 rounded">
                   <span className="text-muted-foreground">Barometer</span>
-                  <span className="font-mono text-foreground">1013.25 hPa</span>
+                  <span className="font-mono text-muted-foreground">---</span>
                 </div>
                 <div className="flex justify-between p-2 bg-muted/20 rounded">
                   <span className="text-muted-foreground">IMU Status</span>
-                  <span className="font-mono text-emerald-500">HEALTHY</span>
+                  <span className="font-mono text-muted-foreground">NO DATA</span>
                 </div>
                 <div className="flex justify-between p-2 bg-muted/20 rounded">
                   <span className="text-muted-foreground">Compass</span>
-                  <span className="font-mono text-emerald-500">CALIBRATED</span>
+                  <span className="font-mono text-muted-foreground">NO DATA</span>
                 </div>
               </div>
             </div>
