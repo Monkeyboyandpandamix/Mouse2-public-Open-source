@@ -331,37 +331,112 @@ export function TrackingPanel() {
     trackedObjectsRef.current.clear();
   };
 
-  // ML-based object detection using COCO-SSD
+  // Ref for motion detection fallback
+  const prevFrameRef = useRef<ImageData | null>(null);
+  
+  // Fallback motion detection when ML model is not available
+  const runMotionDetection = useCallback((video: HTMLVideoElement, canvas: HTMLCanvasElement): Array<{label: string, confidence: number, bbox: number[]}> => {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return [];
+    
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0);
+    
+    const currentFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const prevFrame = prevFrameRef.current;
+    
+    const detections: Array<{label: string, confidence: number, bbox: number[]}> = [];
+    
+    if (prevFrame && prevFrame.width === currentFrame.width) {
+      const threshold = 30;
+      const minArea = 500;
+      
+      let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
+      let motionPixels = 0;
+      
+      for (let i = 0; i < currentFrame.data.length; i += 4) {
+        const diff = Math.abs(currentFrame.data[i] - prevFrame.data[i]) + 
+                     Math.abs(currentFrame.data[i+1] - prevFrame.data[i+1]) + 
+                     Math.abs(currentFrame.data[i+2] - prevFrame.data[i+2]);
+        
+        if (diff > threshold * 3) {
+          const pixelIndex = i / 4;
+          const x = pixelIndex % currentFrame.width;
+          const y = Math.floor(pixelIndex / currentFrame.width);
+          
+          minX = Math.min(minX, x);
+          minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x);
+          maxY = Math.max(maxY, y);
+          motionPixels++;
+        }
+      }
+      
+      if (motionPixels > minArea && minX < Infinity) {
+        const padding = 20;
+        const x = Math.max(0, minX - padding);
+        const y = Math.max(0, minY - padding);
+        const w = Math.min(currentFrame.width - x, maxX - minX + padding * 2);
+        const h = Math.min(currentFrame.height - y, maxY - minY + padding * 2);
+        
+        const aspectRatio = w / h;
+        let label = "unknown";
+        let confidence = 0.5;
+        
+        if (aspectRatio < 0.8 && h > 80) {
+          label = "person";
+          confidence = 0.6;
+        } else if (aspectRatio > 1.2 && w > 100) {
+          label = "car";
+          confidence = 0.55;
+        }
+        
+        detections.push({ label, confidence, bbox: [x, y, w, h] });
+      }
+    }
+    
+    prevFrameRef.current = currentFrame;
+    return detections;
+  }, []);
+  
+  // ML-based object detection using COCO-SSD with fallback
   const runDetection = useCallback(async () => {
     if (!videoRef.current || !isDetecting) return;
     
     const video = videoRef.current;
     if (video.videoWidth === 0 || video.readyState < 2) return;
     
-    // Use ML model if available
+    let mlDetections: Array<{label: string, confidence: number, bbox: number[]}> = [];
+    
+    // Use ML model if available, otherwise fall back to motion detection
     if (modelRef.current) {
       try {
         const predictions = await modelRef.current.detect(video);
-        
-        // Convert predictions to our format
-        const mlDetections = predictions.map(p => ({
+        mlDetections = predictions.map(p => ({
           label: p.class,
           confidence: p.score,
-          bbox: p.bbox // [x, y, width, height]
+          bbox: p.bbox
         }));
-        
-        // Run multi-object tracking assignment
-        const trackedResults = assignDetectionsToTracks(
-          mlDetections, 
-          trackedObjectsRef.current
-        );
-        
-        setDetectedObjects(trackedResults);
       } catch (error) {
-        console.error("Detection error:", error);
+        console.error("ML detection error, falling back to motion:", error);
+        if (canvasRef.current) {
+          mlDetections = runMotionDetection(video, canvasRef.current);
+        }
       }
+    } else if (canvasRef.current) {
+      // Fallback to motion detection when model not loaded
+      mlDetections = runMotionDetection(video, canvasRef.current);
     }
-  }, [isDetecting, assignDetectionsToTracks]);
+    
+    // Run multi-object tracking assignment
+    const trackedResults = assignDetectionsToTracks(
+      mlDetections, 
+      trackedObjectsRef.current
+    );
+    
+    setDetectedObjects(trackedResults);
+  }, [isDetecting, assignDetectionsToTracks, runMotionDetection]);
 
   // Setup video and detection when webcam starts
   useEffect(() => {
@@ -817,10 +892,14 @@ export function TrackingPanel() {
                       Loading AI...
                     </Badge>
                   )}
-                  {modelLoaded && (
+                  {modelLoaded ? (
                     <Badge className="bg-blue-500">
                       <Zap className="h-3 w-3 mr-1" />
                       AI Active
+                    </Badge>
+                  ) : !modelLoading && (
+                    <Badge className="bg-gray-600">
+                      Motion Mode
                     </Badge>
                   )}
                   <Badge className={isDetecting ? "bg-emerald-500 animate-pulse" : "bg-gray-500"}>
