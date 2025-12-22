@@ -2,17 +2,13 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Separator } from "@/components/ui/separator";
-import { Progress } from "@/components/ui/progress";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { 
   Download, 
   Search, 
-  Filter, 
   Play, 
   FileText, 
   Activity, 
@@ -21,24 +17,38 @@ import {
   Plane, 
   AlertTriangle,
   Video,
-  Image,
   Box,
   RefreshCw,
   Trash2,
   CheckCircle,
   XCircle,
   Loader2,
-  Lock
+  Lock,
+  ArrowUp,
+  Gauge,
+  Compass,
+  Battery,
+  Thermometer,
+  Waves,
+  Wind,
+  Navigation,
+  X,
+  ExternalLink
 } from "lucide-react";
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect, useMemo } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { usePermissions } from "@/hooks/usePermissions";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from "recharts";
+import { MapContainer, TileLayer, Polyline, Marker, Popup } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 
 interface FlightSession {
-  id: number;
-  missionId: number | null;
+  id: string;
+  droneId: string | null;
+  missionId: string | null;
   startTime: string;
   endTime: string | null;
   status: string;
@@ -50,15 +60,47 @@ interface FlightSession {
   model3dFilePath: string | null;
 }
 
-interface FlightEvent {
-  id: number;
-  sessionId: number;
+interface FlightLog {
+  id: string;
+  sessionId: string | null;
+  missionId: string | null;
+  droneId: string | null;
   timestamp: string;
-  eventType: string;
-  eventData: any;
   latitude: number | null;
   longitude: number | null;
   altitude: number | null;
+  relativeAltitude: number | null;
+  heading: number | null;
+  groundSpeed: number | null;
+  verticalSpeed: number | null;
+  airSpeed: number | null;
+  batteryVoltage: number | null;
+  batteryCurrent: number | null;
+  batteryPercent: number | null;
+  batteryTemp: number | null;
+  gpsFixType: number | null;
+  gpsSatellites: number | null;
+  gpsHdop: number | null;
+  flightMode: string | null;
+  armed: boolean;
+  pitch: number | null;
+  roll: number | null;
+  yaw: number | null;
+  motor1Rpm: number | null;
+  motor2Rpm: number | null;
+  motor3Rpm: number | null;
+  motor4Rpm: number | null;
+  motor1Current: number | null;
+  motor2Current: number | null;
+  motor3Current: number | null;
+  motor4Current: number | null;
+  cpuTemp: number | null;
+  vibrationX: number | null;
+  vibrationY: number | null;
+  vibrationZ: number | null;
+  distanceFromHome: number | null;
+  windSpeed: number | null;
+  windDirection: number | null;
 }
 
 interface SystemLog {
@@ -69,117 +111,246 @@ interface SystemLog {
   message: string;
 }
 
-const mockFlightSessions: FlightSession[] = [
-  {
-    id: 1,
-    missionId: 1,
-    startTime: "2024-01-15T10:30:00Z",
-    endTime: "2024-01-15T10:45:00Z",
-    status: "completed",
-    totalFlightTime: 900,
-    maxAltitude: 85.5,
-    totalDistance: 2450,
-    videoFilePath: "/recordings/flight_001.mp4",
-    logFilePath: "/logs/flight_001.csv",
-    model3dFilePath: null,
-  },
-  {
-    id: 2,
-    missionId: 2,
-    startTime: "2024-01-14T14:20:00Z",
-    endTime: "2024-01-14T14:35:00Z",
-    status: "completed",
-    totalFlightTime: 850,
-    maxAltitude: 65.2,
-    totalDistance: 1820,
-    videoFilePath: "/recordings/flight_002.mp4",
-    logFilePath: "/logs/flight_002.csv",
-    model3dFilePath: "/models/site_002.obj",
-  },
-];
+type DataViewType = 'altitude' | 'speed' | 'heading' | 'battery' | 'motors' | 'vibration' | 'gps' | 'wind' | null;
 
-const mockSystemLogs: SystemLog[] = [
-  { id: "1", timestamp: new Date().toISOString(), level: "success", source: "FlightController", message: "Mission completed successfully" },
-  { id: "2", timestamp: new Date(Date.now() - 5000).toISOString(), level: "info", source: "Navigation", message: "Returned to home position" },
-  { id: "3", timestamp: new Date(Date.now() - 30000).toISOString(), level: "warning", source: "Battery", message: "Battery at 25% - initiating RTL" },
-  { id: "4", timestamp: new Date(Date.now() - 120000).toISOString(), level: "info", source: "Waypoint", message: "Reached waypoint 3" },
-  { id: "5", timestamp: new Date(Date.now() - 240000).toISOString(), level: "info", source: "Camera", message: "Photo captured at WP2" },
-  { id: "6", timestamp: new Date(Date.now() - 360000).toISOString(), level: "info", source: "Waypoint", message: "Reached waypoint 2" },
-  { id: "7", timestamp: new Date(Date.now() - 420000).toISOString(), level: "debug", source: "Gimbal", message: "Gimbal stabilization active" },
-  { id: "8", timestamp: new Date(Date.now() - 480000).toISOString(), level: "info", source: "Waypoint", message: "Reached waypoint 1" },
-  { id: "9", timestamp: new Date(Date.now() - 600000).toISOString(), level: "info", source: "FlightController", message: "Takeoff complete - altitude 50m" },
-  { id: "10", timestamp: new Date(Date.now() - 660000).toISOString(), level: "info", source: "FlightController", message: "Motors armed - preparing for takeoff" },
-  { id: "11", timestamp: new Date(Date.now() - 720000).toISOString(), level: "info", source: "System", message: "Mission 1 started" },
-  { id: "12", timestamp: new Date(Date.now() - 900000).toISOString(), level: "error", source: "Compass", message: "Compass interference detected - recalibration required" },
-];
+const startMarkerIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+});
 
-const mockTelemetryData = [
-  { time: "10:30:00", altitude: 0, speed: 0, battery: 100 },
-  { time: "10:32:00", altitude: 50, speed: 5, battery: 98 },
-  { time: "10:35:00", altitude: 55, speed: 8, battery: 92 },
-  { time: "10:38:00", altitude: 60, speed: 10, battery: 85 },
-  { time: "10:40:00", altitude: 65, speed: 8, battery: 78 },
-  { time: "10:42:00", altitude: 70, speed: 12, battery: 65 },
-  { time: "10:44:00", altitude: 50, speed: 6, battery: 45 },
-  { time: "10:45:00", altitude: 0, speed: 0, battery: 25 },
-];
+const endMarkerIcon = new L.Icon({
+  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+});
 
 export function FlightLogsPanel() {
   const { hasPermission } = usePermissions();
   const canDeleteRecords = hasPermission('delete_records');
   const canAccessFlightRecorder = hasPermission('access_flight_recorder');
+  const queryClient = useQueryClient();
+  
   const [selectedSession, setSelectedSession] = useState<FlightSession | null>(null);
   const [logFilter, setLogFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState("sessions");
-  const [is3DGenerating, setIs3DGenerating] = useState(false);
-  const [show3DDialog, setShow3DDialog] = useState(false);
-  const [flightSessions, setFlightSessions] = useState<FlightSession[]>(mockFlightSessions);
-  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [dataViewDialog, setDataViewDialog] = useState<DataViewType>(null);
+  const [videoDialog, setVideoDialog] = useState(false);
+  const [mapDialog, setMapDialog] = useState(false);
 
-  const handleDeleteSession = (id: number) => {
-    setFlightSessions(prev => prev.filter(s => s.id !== id));
-    if (selectedSession?.id === id) {
-      setSelectedSession(null);
-    }
-    setDeleteConfirmId(null);
-    toast.success("Flight record deleted successfully");
-  };
-
-  const filteredLogs = mockSystemLogs.filter(log => {
-    const matchesFilter = logFilter === "all" || log.level === logFilter;
-    const matchesSearch = log.message.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          log.source.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesFilter && matchesSearch;
+  const { data: flightSessions = [], isLoading: sessionsLoading, refetch: refetchSessions } = useQuery<FlightSession[]>({
+    queryKey: ['/api/flight-sessions'],
+    queryFn: async () => {
+      const res = await fetch('/api/flight-sessions');
+      if (!res.ok) return [];
+      return res.json();
+    },
+    refetchInterval: 30000,
   });
 
-  const handleExportLogs = () => {
-    toast.success("Flight logs exported to CSV");
-  };
+  const { data: sessionLogs = [], isLoading: logsLoading } = useQuery<FlightLog[]>({
+    queryKey: ['/api/flight-sessions', selectedSession?.id, 'logs'],
+    queryFn: async () => {
+      if (!selectedSession?.id) return [];
+      const res = await fetch(`/api/flight-sessions/${selectedSession.id}/logs`);
+      return res.json();
+    },
+    enabled: !!selectedSession?.id,
+  });
 
-  const handleGenerate3DModel = async () => {
-    setIs3DGenerating(true);
-    toast.info("Processing camera footage for 3D reconstruction...");
-    
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    
-    setIs3DGenerating(false);
-    toast.success("3D model generation complete!");
-    setShow3DDialog(false);
-  };
+  const { data: recentLogs = [] } = useQuery<FlightLog[]>({
+    queryKey: ['/api/flight-logs/recent'],
+    queryFn: async () => {
+      const res = await fetch('/api/flight-logs?limit=100');
+      return res.json();
+    },
+  });
 
-  const handleExport3DModel = (session: FlightSession) => {
-    if (session.model3dFilePath) {
-      toast.success("Downloading 3D model...");
-    } else {
-      setShow3DDialog(true);
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`/api/flight-sessions/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed to delete session');
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/flight-sessions'] });
+      if (selectedSession?.id === deleteConfirmId) {
+        setSelectedSession(null);
+      }
+      setDeleteConfirmId(null);
+      toast.success("Flight record deleted successfully");
+    },
+    onError: () => {
+      toast.error("Failed to delete flight record");
     }
+  });
+
+  const systemLogs: SystemLog[] = useMemo(() => {
+    return recentLogs.slice(0, 50).map((log, idx) => ({
+      id: log.id || `log-${idx}`,
+      timestamp: log.timestamp,
+      level: log.armed ? 'success' : 'info',
+      source: log.flightMode || 'Telemetry',
+      message: `Alt: ${log.altitude?.toFixed(1) || 0}m, Speed: ${log.groundSpeed?.toFixed(1) || 0}m/s, Bat: ${log.batteryPercent || 0}%`
+    }));
+  }, [recentLogs]);
+
+  const filteredLogs = useMemo(() => {
+    return systemLogs.filter(log => {
+      const matchesFilter = logFilter === "all" || log.level === logFilter;
+      const matchesSearch = log.message.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            log.source.toLowerCase().includes(searchQuery.toLowerCase());
+      return matchesFilter && matchesSearch;
+    });
+  }, [systemLogs, logFilter, searchQuery]);
+
+  const chartData = useMemo(() => {
+    return sessionLogs.map((log, idx) => ({
+      time: format(new Date(log.timestamp), 'HH:mm:ss'),
+      altitude: log.altitude || 0,
+      relativeAltitude: log.relativeAltitude || 0,
+      groundSpeed: log.groundSpeed || 0,
+      airSpeed: log.airSpeed || 0,
+      verticalSpeed: log.verticalSpeed || 0,
+      heading: log.heading || 0,
+      batteryPercent: log.batteryPercent || 0,
+      batteryVoltage: log.batteryVoltage || 0,
+      batteryCurrent: log.batteryCurrent || 0,
+      batteryTemp: log.batteryTemp || 0,
+      motor1Rpm: log.motor1Rpm || 0,
+      motor2Rpm: log.motor2Rpm || 0,
+      motor3Rpm: log.motor3Rpm || 0,
+      motor4Rpm: log.motor4Rpm || 0,
+      motor1Current: log.motor1Current || 0,
+      motor2Current: log.motor2Current || 0,
+      motor3Current: log.motor3Current || 0,
+      motor4Current: log.motor4Current || 0,
+      vibrationX: log.vibrationX || 0,
+      vibrationY: log.vibrationY || 0,
+      vibrationZ: log.vibrationZ || 0,
+      windSpeed: log.windSpeed || 0,
+      windDirection: log.windDirection || 0,
+      latitude: log.latitude,
+      longitude: log.longitude,
+      gpsHdop: log.gpsHdop || 0,
+      gpsSatellites: log.gpsSatellites || 0,
+    }));
+  }, [sessionLogs]);
+
+  const flightPath = useMemo(() => {
+    return sessionLogs
+      .filter(log => log.latitude && log.longitude)
+      .map(log => [log.latitude!, log.longitude!] as [number, number]);
+  }, [sessionLogs]);
+
+  const mapCenter = useMemo(() => {
+    if (flightPath.length > 0) {
+      const lats = flightPath.map(p => p[0]);
+      const lngs = flightPath.map(p => p[1]);
+      return [(Math.min(...lats) + Math.max(...lats)) / 2, (Math.min(...lngs) + Math.max(...lngs)) / 2] as [number, number];
+    }
+    return [0, 0] as [number, number];
+  }, [flightPath]);
+
+  const handleExportCSV = () => {
+    if (!selectedSession || sessionLogs.length === 0) {
+      toast.error("No data to export");
+      return;
+    }
+
+    const headers = [
+      'Timestamp', 'Latitude', 'Longitude', 'Altitude', 'Relative Altitude',
+      'Heading', 'Ground Speed', 'Air Speed', 'Vertical Speed',
+      'Battery %', 'Battery Voltage', 'Battery Current', 'Battery Temp',
+      'GPS Fix', 'GPS Satellites', 'GPS HDOP', 'Flight Mode', 'Armed',
+      'Pitch', 'Roll', 'Yaw',
+      'Motor 1 RPM', 'Motor 2 RPM', 'Motor 3 RPM', 'Motor 4 RPM',
+      'Motor 1 Current', 'Motor 2 Current', 'Motor 3 Current', 'Motor 4 Current',
+      'CPU Temp', 'Vibration X', 'Vibration Y', 'Vibration Z',
+      'Distance From Home', 'Wind Speed', 'Wind Direction'
+    ];
+
+    const rows = sessionLogs.map(log => [
+      log.timestamp,
+      log.latitude || '',
+      log.longitude || '',
+      log.altitude || '',
+      log.relativeAltitude || '',
+      log.heading || '',
+      log.groundSpeed || '',
+      log.airSpeed || '',
+      log.verticalSpeed || '',
+      log.batteryPercent || '',
+      log.batteryVoltage || '',
+      log.batteryCurrent || '',
+      log.batteryTemp || '',
+      log.gpsFixType || '',
+      log.gpsSatellites || '',
+      log.gpsHdop || '',
+      log.flightMode || '',
+      log.armed ? 'Yes' : 'No',
+      log.pitch || '',
+      log.roll || '',
+      log.yaw || '',
+      log.motor1Rpm || '',
+      log.motor2Rpm || '',
+      log.motor3Rpm || '',
+      log.motor4Rpm || '',
+      log.motor1Current || '',
+      log.motor2Current || '',
+      log.motor3Current || '',
+      log.motor4Current || '',
+      log.cpuTemp || '',
+      log.vibrationX || '',
+      log.vibrationY || '',
+      log.vibrationZ || '',
+      log.distanceFromHome || '',
+      log.windSpeed || '',
+      log.windDirection || ''
+    ]);
+
+    const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `flight_${selectedSession.id}_${format(new Date(selectedSession.startTime), 'yyyy-MM-dd_HH-mm')}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("Flight data exported to CSV");
+  };
+
+  const handleExportSystemLogs = () => {
+    const headers = ['Timestamp', 'Level', 'Source', 'Message'];
+    const rows = filteredLogs.map(log => [
+      log.timestamp,
+      log.level,
+      log.source,
+      `"${log.message.replace(/"/g, '""')}"`
+    ]);
+
+    const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `system_logs_${format(new Date(), 'yyyy-MM-dd_HH-mm')}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("System logs exported to CSV");
   };
 
   const formatDuration = (seconds: number | null) => {
     if (!seconds) return "N/A";
     const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
+    const secs = Math.round(seconds % 60);
     return `${mins}m ${secs}s`;
   };
 
@@ -212,7 +383,261 @@ export function FlightLogsPanel() {
     }
   };
 
-  // Show permission denied if user doesn't have access
+  const renderDataViewChart = () => {
+    if (!dataViewDialog || chartData.length === 0) return null;
+
+    const chartConfig: Record<DataViewType & string, { title: string; lines: { key: string; color: string; name: string }[] }> = {
+      altitude: {
+        title: "Altitude Over Time",
+        lines: [
+          { key: 'altitude', color: '#3b82f6', name: 'Altitude (m)' },
+          { key: 'relativeAltitude', color: '#10b981', name: 'Relative Alt (m)' }
+        ]
+      },
+      speed: {
+        title: "Speed Over Time",
+        lines: [
+          { key: 'groundSpeed', color: '#3b82f6', name: 'Ground Speed (m/s)' },
+          { key: 'airSpeed', color: '#10b981', name: 'Air Speed (m/s)' },
+          { key: 'verticalSpeed', color: '#f59e0b', name: 'Vertical Speed (m/s)' }
+        ]
+      },
+      heading: {
+        title: "Heading Over Time",
+        lines: [
+          { key: 'heading', color: '#3b82f6', name: 'Heading (°)' }
+        ]
+      },
+      battery: {
+        title: "Battery Status Over Time",
+        lines: [
+          { key: 'batteryPercent', color: '#10b981', name: 'Battery %' },
+          { key: 'batteryVoltage', color: '#3b82f6', name: 'Voltage (V)' },
+          { key: 'batteryCurrent', color: '#f59e0b', name: 'Current (A)' },
+          { key: 'batteryTemp', color: '#ef4444', name: 'Temp (°C)' }
+        ]
+      },
+      motors: {
+        title: "Motor Performance",
+        lines: [
+          { key: 'motor1Rpm', color: '#3b82f6', name: 'Motor 1 RPM' },
+          { key: 'motor2Rpm', color: '#10b981', name: 'Motor 2 RPM' },
+          { key: 'motor3Rpm', color: '#f59e0b', name: 'Motor 3 RPM' },
+          { key: 'motor4Rpm', color: '#ef4444', name: 'Motor 4 RPM' }
+        ]
+      },
+      vibration: {
+        title: "Vibration Analysis",
+        lines: [
+          { key: 'vibrationX', color: '#3b82f6', name: 'Vibration X' },
+          { key: 'vibrationY', color: '#10b981', name: 'Vibration Y' },
+          { key: 'vibrationZ', color: '#f59e0b', name: 'Vibration Z' }
+        ]
+      },
+      gps: {
+        title: "GPS Quality",
+        lines: [
+          { key: 'gpsSatellites', color: '#3b82f6', name: 'Satellites' },
+          { key: 'gpsHdop', color: '#10b981', name: 'HDOP' }
+        ]
+      },
+      wind: {
+        title: "Wind Conditions",
+        lines: [
+          { key: 'windSpeed', color: '#3b82f6', name: 'Wind Speed (m/s)' },
+          { key: 'windDirection', color: '#10b981', name: 'Wind Direction (°)' }
+        ]
+      }
+    };
+
+    const config = chartConfig[dataViewDialog];
+    if (!config) return null;
+
+    return (
+      <Dialog open={!!dataViewDialog} onOpenChange={() => setDataViewDialog(null)}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Activity className="h-5 w-5" />
+              {config.title}
+            </DialogTitle>
+            <DialogDescription>
+              Flight #{selectedSession?.id} - {selectedSession && format(new Date(selectedSession.startTime), 'MMM dd, yyyy HH:mm')}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="h-80">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                <XAxis dataKey="time" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+                <YAxis tick={{ fontSize: 10 }} />
+                <Tooltip contentStyle={{ fontSize: 12 }} />
+                <Legend />
+                {config.lines.map(line => (
+                  <Line 
+                    key={line.key}
+                    type="monotone" 
+                    dataKey={line.key} 
+                    stroke={line.color} 
+                    name={line.name}
+                    dot={false}
+                    strokeWidth={2}
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+            {config.lines.map(line => {
+              const values = chartData.map(d => d[line.key as keyof typeof d] as number).filter(v => v !== 0);
+              const min = values.length ? Math.min(...values) : 0;
+              const max = values.length ? Math.max(...values) : 0;
+              const avg = values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
+              return (
+                <div key={line.key} className="p-3 bg-muted/50 rounded-lg text-center">
+                  <div className="text-xs text-muted-foreground">{line.name}</div>
+                  <div className="grid grid-cols-3 gap-1 mt-1 text-[10px]">
+                    <div>
+                      <div className="text-muted-foreground">Min</div>
+                      <div className="font-mono">{min.toFixed(1)}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground">Avg</div>
+                      <div className="font-mono">{avg.toFixed(1)}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground">Max</div>
+                      <div className="font-mono">{max.toFixed(1)}</div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  };
+
+  const renderMapDialog = () => {
+    if (!mapDialog || flightPath.length === 0) return null;
+
+    return (
+      <Dialog open={mapDialog} onOpenChange={setMapDialog}>
+        <DialogContent className="max-w-4xl max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <MapPin className="h-5 w-5" />
+              Flight Path Map
+            </DialogTitle>
+            <DialogDescription>
+              Flight #{selectedSession?.id} - {selectedSession && format(new Date(selectedSession.startTime), 'MMM dd, yyyy HH:mm')}
+              {selectedSession?.endTime && ` to ${format(new Date(selectedSession.endTime), 'HH:mm')}`}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="h-96 rounded-lg overflow-hidden border">
+            <MapContainer
+              center={mapCenter}
+              zoom={15}
+              style={{ height: '100%', width: '100%' }}
+            >
+              <TileLayer
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                attribution='&copy; OpenStreetMap'
+              />
+              <Polyline 
+                positions={flightPath} 
+                color="#3b82f6" 
+                weight={3}
+                opacity={0.8}
+              />
+              {flightPath.length > 0 && (
+                <>
+                  <Marker position={flightPath[0]} icon={startMarkerIcon}>
+                    <Popup>
+                      <strong>Start</strong><br/>
+                      {selectedSession && format(new Date(selectedSession.startTime), 'HH:mm:ss')}
+                    </Popup>
+                  </Marker>
+                  <Marker position={flightPath[flightPath.length - 1]} icon={endMarkerIcon}>
+                    <Popup>
+                      <strong>End</strong><br/>
+                      {selectedSession?.endTime && format(new Date(selectedSession.endTime), 'HH:mm:ss')}
+                    </Popup>
+                  </Marker>
+                </>
+              )}
+            </MapContainer>
+          </div>
+          <div className="grid grid-cols-4 gap-4 mt-2">
+            <div className="p-2 bg-muted/50 rounded text-center">
+              <div className="text-xs text-muted-foreground">Total Distance</div>
+              <div className="font-mono font-bold">{formatDistance(selectedSession?.totalDistance ?? null)}</div>
+            </div>
+            <div className="p-2 bg-muted/50 rounded text-center">
+              <div className="text-xs text-muted-foreground">Max Altitude</div>
+              <div className="font-mono font-bold">{selectedSession?.maxAltitude?.toFixed(1) || 'N/A'}m</div>
+            </div>
+            <div className="p-2 bg-muted/50 rounded text-center">
+              <div className="text-xs text-muted-foreground">Duration</div>
+              <div className="font-mono font-bold">{formatDuration(selectedSession?.totalFlightTime ?? null)}</div>
+            </div>
+            <div className="p-2 bg-muted/50 rounded text-center">
+              <div className="text-xs text-muted-foreground">GPS Points</div>
+              <div className="font-mono font-bold">{flightPath.length}</div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  };
+
+  const renderVideoDialog = () => {
+    if (!videoDialog || !selectedSession?.videoFilePath) return null;
+
+    return (
+      <Dialog open={videoDialog} onOpenChange={setVideoDialog}>
+        <DialogContent className="max-w-4xl max-h-[80vh]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Video className="h-5 w-5" />
+              Flight Video
+            </DialogTitle>
+            <DialogDescription>
+              Flight #{selectedSession?.id} - {selectedSession && format(new Date(selectedSession.startTime), 'MMM dd, yyyy HH:mm')}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="aspect-video bg-black rounded-lg overflow-hidden flex items-center justify-center">
+            {selectedSession.videoFilePath.includes('drive.google.com') ? (
+              <iframe
+                src={selectedSession.videoFilePath.replace('/view', '/preview')}
+                className="w-full h-full"
+                allowFullScreen
+              />
+            ) : (
+              <video
+                src={selectedSession.videoFilePath}
+                controls
+                className="w-full h-full"
+              />
+            )}
+          </div>
+          <div className="flex justify-between items-center mt-2">
+            <div className="text-sm text-muted-foreground">
+              Source: {selectedSession.videoFilePath.includes('drive.google.com') ? 'Google Drive' : 'Local Storage'}
+            </div>
+            <Button variant="outline" size="sm" asChild>
+              <a href={selectedSession.videoFilePath} target="_blank" rel="noopener noreferrer">
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Open in New Tab
+              </a>
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  };
+
   if (!canAccessFlightRecorder) {
     return (
       <div className="h-full flex items-center justify-center p-6 bg-background">
@@ -230,106 +655,124 @@ export function FlightLogsPanel() {
 
   return (
     <div className="h-full flex overflow-hidden">
-      {/* Left Panel - Session List */}
+      {renderDataViewChart()}
+      {renderMapDialog()}
+      {renderVideoDialog()}
+
       <div className="w-80 border-r border-border bg-card/50 flex flex-col shrink-0">
-        <div className="p-3 border-b border-border">
-          <h3 className="font-bold font-sans text-sm mb-2">Flight Records</h3>
-          <p className="text-xs text-muted-foreground">Comprehensive flight logging</p>
+        <div className="p-3 border-b border-border flex items-center justify-between">
+          <div>
+            <h3 className="font-bold font-sans text-sm mb-1">Flight Records</h3>
+            <p className="text-xs text-muted-foreground">Comprehensive flight logging</p>
+          </div>
+          <Button variant="ghost" size="icon" onClick={() => refetchSessions()} data-testid="button-refresh-sessions">
+            <RefreshCw className={`h-4 w-4 ${sessionsLoading ? 'animate-spin' : ''}`} />
+          </Button>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
           <TabsList className="mx-3 mt-2 grid w-auto grid-cols-2">
-            <TabsTrigger value="sessions" className="text-xs">Sessions</TabsTrigger>
+            <TabsTrigger value="sessions" className="text-xs">Sessions ({flightSessions.length})</TabsTrigger>
             <TabsTrigger value="system" className="text-xs">System Logs</TabsTrigger>
           </TabsList>
 
           <TabsContent value="sessions" className="flex-1 mt-0 overflow-hidden">
             <ScrollArea className="h-full">
               <div className="p-2 space-y-2">
-                {flightSessions.map((session) => (
-                  <Card
-                    key={session.id}
-                    className={`cursor-pointer transition-colors ${
-                      selectedSession?.id === session.id 
-                        ? "border-primary bg-primary/10" 
-                        : "hover:bg-muted/50"
-                    }`}
-                    onClick={() => setSelectedSession(session)}
-                    data-testid={`card-flight-${session.id}`}
-                  >
-                    <CardContent className="p-3">
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <Plane className="h-4 w-4 text-primary" />
-                            <span className="font-mono text-sm">Flight #{session.id}</span>
+                {sessionsLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  </div>
+                ) : flightSessions.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground text-sm">
+                    No flight sessions recorded yet
+                  </div>
+                ) : (
+                  flightSessions.map((session) => (
+                    <Card
+                      key={session.id}
+                      className={`cursor-pointer transition-colors ${
+                        selectedSession?.id === session.id 
+                          ? "border-primary bg-primary/10" 
+                          : "hover:bg-muted/50"
+                      }`}
+                      onClick={() => setSelectedSession(session)}
+                      data-testid={`card-flight-${session.id}`}
+                    >
+                      <CardContent className="p-3">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <Plane className="h-4 w-4 text-primary" />
+                              <span className="font-mono text-sm">Flight #{session.id.slice(-6)}</span>
+                            </div>
+                            <div className="text-xs text-muted-foreground mt-1">
+                              {format(new Date(session.startTime), "MMM dd, yyyy HH:mm")}
+                            </div>
                           </div>
-                          <div className="text-xs text-muted-foreground mt-1">
-                            {format(new Date(session.startTime), "MMM dd, yyyy HH:mm")}
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <Badge variant={session.status === 'completed' ? 'default' : 'outline'} className="text-[10px]">
-                            {session.status}
-                          </Badge>
-                          {canDeleteRecords && (
-                            deleteConfirmId === session.id ? (
-                              <div className="flex gap-1">
+                          <div className="flex items-center gap-1">
+                            <Badge variant={session.status === 'completed' ? 'default' : session.status === 'active' ? 'destructive' : 'outline'} className="text-[10px]">
+                              {session.status}
+                            </Badge>
+                            {canDeleteRecords && (
+                              deleteConfirmId === session.id ? (
+                                <div className="flex gap-1">
+                                  <Button 
+                                    size="icon" 
+                                    variant="destructive" 
+                                    className="h-5 w-5"
+                                    onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(session.id); }}
+                                    data-testid={`button-confirm-delete-${session.id}`}
+                                  >
+                                    <CheckCircle className="h-3 w-3" />
+                                  </Button>
+                                  <Button 
+                                    size="icon" 
+                                    variant="outline" 
+                                    className="h-5 w-5"
+                                    onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(null); }}
+                                    data-testid={`button-cancel-delete-${session.id}`}
+                                  >
+                                    <XCircle className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                              ) : (
                                 <Button 
                                   size="icon" 
-                                  variant="destructive" 
-                                  className="h-5 w-5"
-                                  onClick={(e) => { e.stopPropagation(); handleDeleteSession(session.id); }}
-                                  data-testid={`button-confirm-delete-${session.id}`}
+                                  variant="ghost" 
+                                  className="h-5 w-5 text-muted-foreground hover:text-red-500"
+                                  onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(session.id); }}
+                                  data-testid={`button-delete-flight-${session.id}`}
                                 >
-                                  <CheckCircle className="h-3 w-3" />
+                                  <Trash2 className="h-3 w-3" />
                                 </Button>
-                                <Button 
-                                  size="icon" 
-                                  variant="outline" 
-                                  className="h-5 w-5"
-                                  onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(null); }}
-                                  data-testid={`button-cancel-delete-${session.id}`}
-                                >
-                                  <XCircle className="h-3 w-3" />
-                                </Button>
-                              </div>
-                            ) : (
-                              <Button 
-                                size="icon" 
-                                variant="ghost" 
-                                className="h-5 w-5 text-muted-foreground hover:text-red-500"
-                                onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(session.id); }}
-                                data-testid={`button-delete-flight-${session.id}`}
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </Button>
-                            )
-                          )}
+                              )
+                            )}
+                          </div>
                         </div>
-                      </div>
-                      <div className="grid grid-cols-3 gap-2 mt-2 text-[10px]">
-                        <div className="text-center p-1 bg-muted/50 rounded">
-                          <div className="text-muted-foreground">Duration</div>
-                          <div className="font-mono">{formatDuration(session.totalFlightTime)}</div>
+                        <div className="grid grid-cols-3 gap-2 mt-2 text-[10px]">
+                          <div className="text-center p-1 bg-muted/50 rounded">
+                            <div className="text-muted-foreground">Duration</div>
+                            <div className="font-mono">{formatDuration(session.totalFlightTime)}</div>
+                          </div>
+                          <div className="text-center p-1 bg-muted/50 rounded">
+                            <div className="text-muted-foreground">Max Alt</div>
+                            <div className="font-mono">{session.maxAltitude?.toFixed(0) || "N/A"}m</div>
+                          </div>
+                          <div className="text-center p-1 bg-muted/50 rounded">
+                            <div className="text-muted-foreground">Distance</div>
+                            <div className="font-mono">{formatDistance(session.totalDistance)}</div>
+                          </div>
                         </div>
-                        <div className="text-center p-1 bg-muted/50 rounded">
-                          <div className="text-muted-foreground">Max Alt</div>
-                          <div className="font-mono">{session.maxAltitude?.toFixed(0) || "N/A"}m</div>
+                        <div className="flex gap-1 mt-2">
+                          {session.videoFilePath && <Badge variant="outline" className="text-[10px]"><Video className="h-2 w-2 mr-1" />Video</Badge>}
+                          {session.logFilePath && <Badge variant="outline" className="text-[10px]"><FileText className="h-2 w-2 mr-1" />Log</Badge>}
+                          {session.model3dFilePath && <Badge variant="outline" className="text-[10px]"><Box className="h-2 w-2 mr-1" />3D</Badge>}
                         </div>
-                        <div className="text-center p-1 bg-muted/50 rounded">
-                          <div className="text-muted-foreground">Distance</div>
-                          <div className="font-mono">{formatDistance(session.totalDistance)}</div>
-                        </div>
-                      </div>
-                      <div className="flex gap-1 mt-2">
-                        {session.videoFilePath && <Badge variant="outline" className="text-[10px]"><Video className="h-2 w-2 mr-1" />Video</Badge>}
-                        {session.logFilePath && <Badge variant="outline" className="text-[10px]"><FileText className="h-2 w-2 mr-1" />Log</Badge>}
-                        {session.model3dFilePath && <Badge variant="outline" className="text-[10px]"><Box className="h-2 w-2 mr-1" />3D</Badge>}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
+                      </CardContent>
+                    </Card>
+                  ))
+                )}
               </div>
             </ScrollArea>
           </TabsContent>
@@ -344,10 +787,11 @@ export function FlightLogsPanel() {
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="pl-7 h-8 text-xs"
+                    data-testid="input-search-logs"
                   />
                 </div>
                 <Select value={logFilter} onValueChange={setLogFilter}>
-                  <SelectTrigger className="w-20 h-8 text-xs">
+                  <SelectTrigger className="w-20 h-8 text-xs" data-testid="select-log-filter">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -381,7 +825,7 @@ export function FlightLogsPanel() {
               </div>
             </ScrollArea>
             <div className="p-2 border-t border-border">
-              <Button variant="outline" size="sm" className="w-full text-xs" onClick={handleExportLogs}>
+              <Button variant="outline" size="sm" className="w-full text-xs" onClick={handleExportSystemLogs} data-testid="button-export-system-logs">
                 <Download className="h-3 w-3 mr-2" />
                 Export Logs
               </Button>
@@ -390,7 +834,6 @@ export function FlightLogsPanel() {
         </Tabs>
       </div>
 
-      {/* Right Panel - Session Details */}
       <div className="flex-1 overflow-hidden">
         {selectedSession ? (
           <div className="h-full flex flex-col">
@@ -399,18 +842,14 @@ export function FlightLogsPanel() {
                 <div>
                   <h2 className="text-lg font-bold font-sans flex items-center gap-2">
                     <Plane className="h-5 w-5 text-primary" />
-                    Flight #{selectedSession.id} Details
+                    Flight #{selectedSession.id.slice(-6)} Details
                   </h2>
                   <p className="text-sm text-muted-foreground">
                     {format(new Date(selectedSession.startTime), "MMMM dd, yyyy 'at' HH:mm")}
                   </p>
                 </div>
                 <div className="flex gap-2">
-                  <Button variant="outline" size="sm" onClick={() => handleExport3DModel(selectedSession)}>
-                    <Box className="h-4 w-4 mr-2" />
-                    {selectedSession.model3dFilePath ? "Export 3D" : "Generate 3D"}
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={handleExportLogs}>
+                  <Button variant="outline" size="sm" onClick={handleExportCSV} data-testid="button-export-csv">
                     <Download className="h-4 w-4 mr-2" />
                     Export CSV
                   </Button>
@@ -419,7 +858,6 @@ export function FlightLogsPanel() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {/* Flight Summary */}
               <Card>
                 <CardHeader className="p-4">
                   <CardTitle className="text-sm flex items-center gap-2">
@@ -446,210 +884,225 @@ export function FlightLogsPanel() {
                     </div>
                     <div className="text-center p-3 bg-muted/50 rounded-lg">
                       <FileText className="h-5 w-5 mx-auto mb-1 text-primary" />
-                      <div className="text-xs text-muted-foreground">Mission</div>
-                      <div className="font-mono font-bold">#{selectedSession.missionId || "N/A"}</div>
+                      <div className="text-xs text-muted-foreground">Data Points</div>
+                      <div className="font-mono font-bold">{sessionLogs.length}</div>
                     </div>
                   </div>
                 </CardContent>
               </Card>
 
-              {/* Telemetry Graph */}
               <Card>
                 <CardHeader className="p-4">
                   <CardTitle className="text-sm flex items-center gap-2">
                     <Activity className="h-4 w-4" />
-                    Telemetry History
+                    Recorded Data
                   </CardTitle>
+                  <CardDescription>Click on any data type to view detailed charts</CardDescription>
                 </CardHeader>
-                <CardContent className="p-4 pt-0">
-                  <div className="h-40 bg-muted/30 rounded-lg p-4 relative">
-                    <div className="absolute left-0 top-0 h-full flex flex-col justify-between py-2 text-[10px] text-muted-foreground">
-                      <span>100</span>
-                      <span>50</span>
-                      <span>0</span>
-                    </div>
-                    <div className="ml-8 h-full flex items-end gap-1">
-                      {mockTelemetryData.map((data, idx) => (
-                        <div key={idx} className="flex-1 flex flex-col items-center gap-1">
-                          <div 
-                            className="w-full bg-primary/80 rounded-t transition-all hover:bg-primary" 
-                            style={{ height: `${data.altitude}%` }}
-                            title={`Alt: ${data.altitude}m`}
-                          />
-                          <span className="text-[8px] text-muted-foreground">{data.time.split(':').slice(1).join(':')}</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="absolute right-2 top-2 text-xs bg-background/80 px-2 py-1 rounded">
-                      <span className="text-primary">Altitude (m)</span>
-                    </div>
-                  </div>
+                <CardContent className="p-4 pt-0 grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <Button 
+                    variant="outline" 
+                    className="h-auto py-3 flex flex-col gap-1"
+                    onClick={() => setDataViewDialog('altitude')}
+                    data-testid="button-view-altitude"
+                  >
+                    <ArrowUp className="h-5 w-5 text-blue-500" />
+                    <span className="text-xs">Altitude</span>
+                    <span className="text-[10px] text-muted-foreground">{chartData.length} points</span>
+                  </Button>
+                  
+                  <Button 
+                    variant="outline" 
+                    className="h-auto py-3 flex flex-col gap-1"
+                    onClick={() => setDataViewDialog('speed')}
+                    data-testid="button-view-speed"
+                  >
+                    <Gauge className="h-5 w-5 text-green-500" />
+                    <span className="text-xs">Speed</span>
+                    <span className="text-[10px] text-muted-foreground">{chartData.length} points</span>
+                  </Button>
+                  
+                  <Button 
+                    variant="outline" 
+                    className="h-auto py-3 flex flex-col gap-1"
+                    onClick={() => setDataViewDialog('heading')}
+                    data-testid="button-view-heading"
+                  >
+                    <Compass className="h-5 w-5 text-purple-500" />
+                    <span className="text-xs">Heading</span>
+                    <span className="text-[10px] text-muted-foreground">{chartData.length} points</span>
+                  </Button>
+                  
+                  <Button 
+                    variant="outline" 
+                    className="h-auto py-3 flex flex-col gap-1"
+                    onClick={() => setDataViewDialog('battery')}
+                    data-testid="button-view-battery"
+                  >
+                    <Battery className="h-5 w-5 text-yellow-500" />
+                    <span className="text-xs">Battery</span>
+                    <span className="text-[10px] text-muted-foreground">{chartData.length} points</span>
+                  </Button>
+                  
+                  <Button 
+                    variant="outline" 
+                    className="h-auto py-3 flex flex-col gap-1"
+                    onClick={() => setDataViewDialog('motors')}
+                    data-testid="button-view-motors"
+                  >
+                    <RefreshCw className="h-5 w-5 text-orange-500" />
+                    <span className="text-xs">Motors</span>
+                    <span className="text-[10px] text-muted-foreground">{chartData.length} points</span>
+                  </Button>
+                  
+                  <Button 
+                    variant="outline" 
+                    className="h-auto py-3 flex flex-col gap-1"
+                    onClick={() => setDataViewDialog('vibration')}
+                    data-testid="button-view-vibration"
+                  >
+                    <Waves className="h-5 w-5 text-red-500" />
+                    <span className="text-xs">Vibration</span>
+                    <span className="text-[10px] text-muted-foreground">{chartData.length} points</span>
+                  </Button>
+                  
+                  <Button 
+                    variant="outline" 
+                    className="h-auto py-3 flex flex-col gap-1"
+                    onClick={() => setDataViewDialog('gps')}
+                    data-testid="button-view-gps"
+                  >
+                    <Navigation className="h-5 w-5 text-cyan-500" />
+                    <span className="text-xs">GPS Quality</span>
+                    <span className="text-[10px] text-muted-foreground">{chartData.length} points</span>
+                  </Button>
+                  
+                  <Button 
+                    variant="outline" 
+                    className="h-auto py-3 flex flex-col gap-1"
+                    onClick={() => setDataViewDialog('wind')}
+                    data-testid="button-view-wind"
+                  >
+                    <Wind className="h-5 w-5 text-teal-500" />
+                    <span className="text-xs">Wind</span>
+                    <span className="text-[10px] text-muted-foreground">{chartData.length} points</span>
+                  </Button>
                 </CardContent>
               </Card>
 
-              {/* Recorded Data */}
               <Card>
                 <CardHeader className="p-4">
                   <CardTitle className="text-sm flex items-center gap-2">
-                    <FileText className="h-4 w-4" />
-                    Recorded Data
+                    <MapPin className="h-4 w-4" />
+                    Flight Path & Media
                   </CardTitle>
-                  <CardDescription>Data captured during flight</CardDescription>
                 </CardHeader>
                 <CardContent className="p-4 pt-0 space-y-3">
+                  <Button 
+                    variant="outline" 
+                    className="w-full justify-start"
+                    onClick={() => setMapDialog(true)}
+                    disabled={flightPath.length === 0}
+                    data-testid="button-view-map"
+                  >
+                    <MapPin className="h-5 w-5 mr-3 text-primary" />
+                    <div className="text-left">
+                      <div className="font-mono text-sm">View Flight Path Map</div>
+                      <div className="text-xs text-muted-foreground">
+                        {flightPath.length > 0 ? `${flightPath.length} GPS coordinates recorded` : 'No GPS data available'}
+                      </div>
+                    </div>
+                  </Button>
+
                   {selectedSession.videoFilePath && (
-                    <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <Video className="h-5 w-5 text-primary" />
-                        <div>
-                          <div className="font-mono text-sm">Flight Video</div>
-                          <div className="text-xs text-muted-foreground">{selectedSession.videoFilePath}</div>
+                    <Button 
+                      variant="outline" 
+                      className="w-full justify-start"
+                      onClick={() => setVideoDialog(true)}
+                      data-testid="button-view-video"
+                    >
+                      <Video className="h-5 w-5 mr-3 text-primary" />
+                      <div className="text-left">
+                        <div className="font-mono text-sm">View Flight Video</div>
+                        <div className="text-xs text-muted-foreground">
+                          {selectedSession.videoFilePath.includes('drive.google.com') ? 'Stored on Google Drive' : 'Local storage'}
                         </div>
                       </div>
-                      <Button variant="outline" size="sm">
-                        <Play className="h-4 w-4 mr-2" />
-                        Play
-                      </Button>
-                    </div>
+                      <Play className="h-4 w-4 ml-auto" />
+                    </Button>
                   )}
-                  
+
                   {selectedSession.logFilePath && (
-                    <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <FileText className="h-5 w-5 text-primary" />
-                        <div>
-                          <div className="font-mono text-sm">Telemetry Log</div>
-                          <div className="text-xs text-muted-foreground">{selectedSession.logFilePath}</div>
-                        </div>
+                    <Button 
+                      variant="outline" 
+                      className="w-full justify-start"
+                      onClick={handleExportCSV}
+                      data-testid="button-download-log"
+                    >
+                      <FileText className="h-5 w-5 mr-3 text-primary" />
+                      <div className="text-left">
+                        <div className="font-mono text-sm">Download Flight Log</div>
+                        <div className="text-xs text-muted-foreground">CSV format with all telemetry data</div>
                       </div>
-                      <Button variant="outline" size="sm">
-                        <Download className="h-4 w-4 mr-2" />
-                        Download
-                      </Button>
-                    </div>
+                      <Download className="h-4 w-4 ml-auto" />
+                    </Button>
                   )}
-                  
-                  {selectedSession.model3dFilePath ? (
-                    <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <Box className="h-5 w-5 text-primary" />
-                        <div>
-                          <div className="font-mono text-sm">3D Model</div>
-                          <div className="text-xs text-muted-foreground">{selectedSession.model3dFilePath}</div>
+
+                  {selectedSession.model3dFilePath && (
+                    <Button 
+                      variant="outline" 
+                      className="w-full justify-start"
+                      asChild
+                      data-testid="button-view-3d"
+                    >
+                      <a href={selectedSession.model3dFilePath} target="_blank" rel="noopener noreferrer">
+                        <Box className="h-5 w-5 mr-3 text-primary" />
+                        <div className="text-left">
+                          <div className="font-mono text-sm">View 3D Model</div>
+                          <div className="text-xs text-muted-foreground">Photogrammetry reconstruction</div>
                         </div>
-                      </div>
-                      <Button variant="outline" size="sm">
-                        <Download className="h-4 w-4 mr-2" />
-                        Export OBJ
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg border border-dashed border-border">
-                      <div className="flex items-center gap-3">
-                        <Box className="h-5 w-5 text-muted-foreground" />
-                        <div>
-                          <div className="font-mono text-sm text-muted-foreground">3D Model</div>
-                          <div className="text-xs text-muted-foreground">Not yet generated</div>
-                        </div>
-                      </div>
-                      <Button variant="outline" size="sm" onClick={() => setShow3DDialog(true)}>
-                        Generate
-                      </Button>
-                    </div>
+                        <ExternalLink className="h-4 w-4 ml-auto" />
+                      </a>
+                    </Button>
                   )}
                 </CardContent>
               </Card>
 
-              {/* What Gets Recorded */}
-              <Card>
-                <CardHeader className="p-4">
-                  <CardTitle className="text-sm">Data Captured While Airborne</CardTitle>
-                  <CardDescription>Everything recorded during flight operations</CardDescription>
-                </CardHeader>
-                <CardContent className="p-4 pt-0">
-                  <div className="grid grid-cols-2 gap-3 text-xs">
-                    {[
-                      { icon: Plane, label: "Altitude, speed, heading" },
-                      { icon: MapPin, label: "GPS coordinates, flight path" },
-                      { icon: Activity, label: "Pitch, roll, yaw (attitude)" },
-                      { icon: Clock, label: "Timestamps for all events" },
-                      { icon: AlertTriangle, label: "Commands issued to drone" },
-                      { icon: Video, label: "Video footage (if recording)" },
-                      { icon: Image, label: "Photos captured at waypoints" },
-                      { icon: Box, label: "3D mapping data (if enabled)" },
-                    ].map((item, idx) => (
-                      <div key={idx} className="flex items-center gap-2 p-2 bg-muted/30 rounded">
-                        <item.icon className="h-4 w-4 text-primary" />
-                        <span>{item.label}</span>
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-              </Card>
+              {chartData.length > 0 && (
+                <Card>
+                  <CardHeader className="p-4">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                      <Activity className="h-4 w-4" />
+                      Quick Altitude Preview
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-4 pt-0">
+                    <div className="h-40">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={chartData}>
+                          <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                          <XAxis dataKey="time" tick={{ fontSize: 9 }} interval="preserveStartEnd" />
+                          <YAxis tick={{ fontSize: 9 }} />
+                          <Tooltip contentStyle={{ fontSize: 11 }} />
+                          <Area type="monotone" dataKey="altitude" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.3} />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
             </div>
           </div>
         ) : (
-          <div className="h-full flex items-center justify-center text-muted-foreground">
-            <div className="text-center">
-              <Plane className="h-12 w-12 mx-auto mb-3 opacity-50" />
-              <p>Select a flight session to view details</p>
+          <div className="h-full flex items-center justify-center">
+            <div className="text-center text-muted-foreground">
+              <Plane className="h-16 w-16 mx-auto mb-4 opacity-30" />
+              <h3 className="font-semibold text-lg">Select a Flight Session</h3>
+              <p className="text-sm">Choose a session from the list to view detailed flight data</p>
             </div>
           </div>
         )}
       </div>
-
-      {/* 3D Model Generation Dialog */}
-      <Dialog open={show3DDialog} onOpenChange={setShow3DDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Box className="h-5 w-5 text-primary" />
-              Generate 3D Model
-            </DialogTitle>
-            <DialogDescription>
-              Create a 3D reconstruction from camera footage using photogrammetry.
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="py-4 space-y-4">
-            <div className="p-4 bg-muted/50 rounded-lg">
-              <h4 className="font-medium mb-2">How it works:</h4>
-              <ul className="text-sm text-muted-foreground space-y-1">
-                <li>1. Photos from the flight are analyzed</li>
-                <li>2. OpenDroneMap processes the imagery</li>
-                <li>3. A 3D model is generated (OBJ/PLY format)</li>
-                <li>4. Georeferenced data is included</li>
-              </ul>
-            </div>
-            
-            <div className="p-4 bg-primary/10 border border-primary/30 rounded-lg">
-              <p className="text-sm">
-                <strong>Note:</strong> 3D model generation requires adequate photo coverage 
-                and may take several minutes depending on the number of images.
-              </p>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShow3DDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleGenerate3DModel} disabled={is3DGenerating}>
-              {is3DGenerating ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                <>
-                  <Box className="h-4 w-4 mr-2" />
-                  Generate Model
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
