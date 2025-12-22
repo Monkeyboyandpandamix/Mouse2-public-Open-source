@@ -20,7 +20,6 @@ if %ERRORLEVEL% neq 0 (
 )
 
 REM Set environment variables
-set NODE_ENV=production
 set PORT=5000
 set DATA_DIR=.\data
 
@@ -30,10 +29,10 @@ REM set NO_BROWSER=1
 REM Create data directory if needed
 if not exist data mkdir data
 
-REM Install ALL dependencies (needed for TypeScript build)
-if not exist node_modules (
+REM Install ALL dependencies including dev (needed for TypeScript build)
+if not exist node_modules\\.bin\\tsx (
     echo Installing dependencies...
-    call npm install
+    call npm install --include=dev
 )
 
 REM Build the application

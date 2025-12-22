@@ -31,17 +31,16 @@ if [ "$NODE_VERSION" -lt 18 ]; then
 fi
 
 # Set environment variables
-export NODE_ENV=production
 export PORT=${PORT:-5000}
 export DATA_DIR=${DATA_DIR:-./data}
 
 # Create data directory
 mkdir -p "$DATA_DIR"
 
-# Install ALL dependencies (needed for TypeScript build)
-if [ ! -d "node_modules" ]; then
+# Install ALL dependencies including dev (needed for TypeScript build)
+if [ ! -d "node_modules" ] || [ ! -f "node_modules/.bin/tsx" ]; then
     echo "Installing dependencies..."
-    npm install
+    npm install --include=dev
 fi
 
 # Build the application

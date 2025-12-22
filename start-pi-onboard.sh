@@ -41,7 +41,6 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Set environment variables for onboard mode
-export NODE_ENV=production
 export PORT=${PORT:-5000}
 export DATA_DIR=${DATA_DIR:-./data}
 export DEVICE_ROLE=ONBOARD
@@ -49,10 +48,10 @@ export DEVICE_ROLE=ONBOARD
 # Create data directory
 mkdir -p "$DATA_DIR"
 
-# Install ALL dependencies (needed for TypeScript build)
-if [ ! -d "node_modules" ]; then
+# Install ALL dependencies including dev (needed for TypeScript build)
+if [ ! -d "node_modules" ] || [ ! -f "node_modules/.bin/tsx" ]; then
     echo "Installing dependencies..."
-    npm install
+    npm install --include=dev
 fi
 
 # Build the application
