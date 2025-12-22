@@ -1069,6 +1069,43 @@ export function SettingsPanel() {
                     </div>
                   </div>
                 </div>
+
+                {/* Admin-only: Google Account Management */}
+                {(() => {
+                  const saved = localStorage.getItem('mouse_gcs_session');
+                  const session = saved ? JSON.parse(saved) : null;
+                  const isAdmin = session?.user?.role === 'admin';
+                  
+                  if (!isAdmin) return null;
+                  
+                  return (
+                    <div className="mt-4 pt-4 border-t border-border space-y-4">
+                      <div className="flex items-center gap-2">
+                        <Shield className="h-5 w-5 text-primary" />
+                        <Label className="font-medium">Admin: Google Account Settings</Label>
+                      </div>
+                      <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg space-y-3">
+                        <p className="text-sm text-muted-foreground">
+                          To switch to a different Google account for data storage, you need to disconnect 
+                          and reconnect the Google integration from the Replit integrations panel.
+                        </p>
+                        <div className="text-sm space-y-2">
+                          <p className="font-medium">Steps to switch Google account:</p>
+                          <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
+                            <li>Open the Replit workspace panel (left sidebar)</li>
+                            <li>Click on "Integrations" section</li>
+                            <li>Disconnect both Google Drive and Google Sheets</li>
+                            <li>Reconnect with the new Google account</li>
+                            <li>Data will sync to the new account on next backup</li>
+                          </ol>
+                        </div>
+                        <p className="text-xs text-amber-500">
+                          Note: This will not transfer existing data. Previous data remains in the old account.
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })()}
               </CardContent>
             </Card>
           </TabsContent>

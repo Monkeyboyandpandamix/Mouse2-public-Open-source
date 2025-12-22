@@ -264,9 +264,12 @@ export const userMessageSchema = z.object({
   recipientId: z.string().nullable().optional(), // null = broadcast to all
   recipientName: z.string().nullable().optional(),
   content: z.string(),
+  originalContent: z.string().nullable().optional(), // Preserved original before edit
   timestamp: z.string(),
   editedAt: z.string().nullable().optional(),
   deleted: z.boolean().default(false),
+  deletedAt: z.string().nullable().optional(), // When deleted
+  deletedBy: z.string().nullable().optional(), // Who deleted it
 });
 
 export const insertUserMessageSchema = userMessageSchema.omit({ id: true, timestamp: true, editedAt: true, deleted: true });

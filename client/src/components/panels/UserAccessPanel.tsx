@@ -158,7 +158,7 @@ export function UserAccessPanel() {
 
   const [loginError, setLoginError] = useState<string | null>(null);
   
-  const handleLogin = () => {
+  const handleLogin = async () => {
     setLoginError(null);
     const user = users.find(u => u.username === loginForm.username);
     
@@ -180,6 +180,29 @@ export function UserAccessPanel() {
       return;
     }
     
+    // Create server-side session
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.id,
+          username: user.username,
+          role: user.role,
+          name: user.fullName || user.username
+        })
+      });
+      
+      const result = await response.json();
+      if (result.sessionToken) {
+        // Store session token for WebSocket auth and API calls
+        localStorage.setItem('mouse_gcs_session_token', result.sessionToken);
+      }
+    } catch (error) {
+      console.error('Failed to create server session:', error);
+      // Continue with local session even if server session fails
+    }
+    
     setSession({ user, isLoggedIn: true });
     setUsers(prev => prev.map(u => 
       u.id === user.id ? { ...u, lastLogin: new Date().toISOString() } : u
@@ -188,9 +211,23 @@ export function UserAccessPanel() {
     setLoginForm({ username: "", password: "" });
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // Invalidate server-side session
+    const sessionToken = localStorage.getItem('mouse_gcs_session_token');
+    if (sessionToken) {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { 'X-Session-Token': sessionToken }
+        });
+      } catch (error) {
+        console.error('Failed to invalidate server session:', error);
+      }
+    }
+    
     setSession({ user: null, isLoggedIn: false });
     localStorage.removeItem('mouse_gcs_session');
+    localStorage.removeItem('mouse_gcs_session_token');
     window.dispatchEvent(new CustomEvent('session-change', { detail: { user: null, isLoggedIn: false } }));
     toast.info("Logged out successfully");
   };

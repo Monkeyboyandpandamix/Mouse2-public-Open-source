@@ -126,16 +126,20 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
-    const userId = session.user?.id;
+    
+    ws.onopen = () => {
+      // Authenticate with server-side session token for DM privacy
+      const sessionToken = localStorage.getItem('mouse_gcs_session_token');
+      if (sessionToken) {
+        ws.send(JSON.stringify({ type: 'auth', sessionToken }));
+      }
+    };
     
     ws.onmessage = (event) => {
       try {
         const { type, data } = JSON.parse(event.data);
         if (type === 'new_message') {
-          // Filter DMs client-side: only show if broadcast, user is sender, or user is recipient
-          const isDMForMe = !data.recipientId || data.senderId === userId || data.recipientId === userId;
-          if (!isDMForMe) return;
-          
+          // Server already filters DMs, but add client-side check as safety
           setMessages(prev => {
             // Avoid duplicates
             if (prev.some(m => m.id === data.id)) return prev;

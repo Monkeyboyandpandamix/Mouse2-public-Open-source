@@ -230,11 +230,12 @@ export interface IStorage {
   
   // User Messages (Team Communication)
   getAllMessages(): Promise<UserMessage[]>;
+  getAllMessagesWithHistory(): Promise<UserMessage[]>; // For admin - includes originals
   getMessagesForUser(userId: string): Promise<UserMessage[]>;
   getChatUsers(): Promise<{ id: string; username: string; role: string }[]>;
   createMessage(message: InsertUserMessage): Promise<UserMessage>;
   updateMessage(id: string, content: string): Promise<UserMessage | undefined>;
-  deleteMessage(id: string): Promise<void>;
+  deleteMessage(id: string, deletedBy?: string): Promise<void>;
   syncMessagesToSheets(messages: UserMessage[]): Promise<void>;
   
   // Sync operations
@@ -682,6 +683,12 @@ export class FileStorage implements IStorage {
     return messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
   }
 
+  async getAllMessagesWithHistory(): Promise<UserMessage[]> {
+    // For admin - returns all messages including originalContent field
+    const messages = readJsonFile<UserMessage>('messages.json');
+    return messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }
+
   async getMessagesForUser(userId: string): Promise<UserMessage[]> {
     const messages = readJsonFile<UserMessage>('messages.json');
     return messages
@@ -729,6 +736,11 @@ export class FileStorage implements IStorage {
     const index = messages.findIndex(m => m.id === id);
     if (index < 0) return undefined;
     
+    // Preserve original content on first edit
+    if (!messages[index].originalContent) {
+      messages[index].originalContent = messages[index].content;
+    }
+    
     messages[index].content = content;
     messages[index].editedAt = new Date().toISOString();
     writeJsonFile('messages.json', messages);
@@ -736,11 +748,17 @@ export class FileStorage implements IStorage {
     return messages[index];
   }
 
-  async deleteMessage(id: string): Promise<void> {
+  async deleteMessage(id: string, deletedBy?: string): Promise<void> {
     const messages = readJsonFile<UserMessage>('messages.json');
     const index = messages.findIndex(m => m.id === id);
     if (index >= 0) {
+      // Preserve original content before marking deleted
+      if (!messages[index].originalContent) {
+        messages[index].originalContent = messages[index].content;
+      }
       messages[index].deleted = true;
+      messages[index].deletedAt = new Date().toISOString();
+      messages[index].deletedBy = deletedBy || null;
       messages[index].content = "[Message deleted]";
       writeJsonFile('messages.json', messages);
       this.markSyncPending();
@@ -785,17 +803,19 @@ export class FileStorage implements IStorage {
         spreadsheetId = createRes.data.spreadsheetId!;
       }
 
-      // Prepare data for sheets
-      const headers = ['ID', 'Sender ID', 'Sender Name', 'Sender Role', 'Content', 'Timestamp', 'Edited At', 'Deleted'];
+      // Prepare data for sheets - includes full history for admin
+      const headers = ['ID', 'Sender ID', 'Sender Name', 'Sender Role', 'Recipient ID', 'Recipient Name', 
+                       'Content', 'Original Content', 'Timestamp', 'Edited At', 'Deleted', 'Deleted At', 'Deleted By'];
       const rows = msgs.map(m => [
-        m.id, m.senderId, m.senderName, m.senderRole, m.content, 
-        m.timestamp, m.editedAt || '', m.deleted ? 'Yes' : 'No'
+        m.id, m.senderId, m.senderName, m.senderRole, m.recipientId || '', m.recipientName || '',
+        m.content, m.originalContent || '', m.timestamp, m.editedAt || '', 
+        m.deleted ? 'Yes' : 'No', m.deletedAt || '', m.deletedBy || ''
       ]);
 
-      // Clear and update sheet
+      // Clear and update sheet (M = 13 columns)
       await sheetsClient.spreadsheets.values.clear({
         spreadsheetId,
-        range: 'Messages!A:H',
+        range: 'Messages!A:M',
       });
 
       await sheetsClient.spreadsheets.values.update({

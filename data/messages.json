@@ -26,11 +26,14 @@
     "senderId": "1",
     "senderName": "admin",
     "senderRole": "admin",
-    "content": "helllo",
+    "content": "[Message deleted]",
     "recipientId": null,
     "recipientName": null,
     "timestamp": "2025-12-22T02:28:44.894Z",
     "editedAt": null,
-    "deleted": false
+    "deleted": true,
+    "originalContent": "helllo",
+    "deletedAt": "2025-12-22T02:42:03.863Z",
+    "deletedBy": null
   }
 ]

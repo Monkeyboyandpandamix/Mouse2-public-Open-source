@@ -18,6 +18,36 @@ import { ZodError } from "zod";
 import { syncDataToSheets, getOrCreateBackupSpreadsheet, getSpreadsheetUrl } from "./googleSheets";
 import { uploadFileToDrive, listDriveFiles, checkDriveConnection, deleteFileFromDrive } from "./googleDrive";
 
+// Server-side session store for authenticated users
+// Key: session token, Value: { userId, role, name, createdAt }
+interface ServerSession {
+  userId: string;
+  role: string;
+  name: string;
+  createdAt: number;
+}
+const activeSessions = new Map<string, ServerSession>();
+
+import { randomBytes } from 'crypto';
+
+// Generate a cryptographically secure random token
+function generateSessionToken(): string {
+  return randomBytes(32).toString('hex'); // 64 hex chars, 256 bits of entropy
+}
+
+// Validate session token and return session info
+function validateSession(token: string | undefined): ServerSession | null {
+  if (!token) return null;
+  const session = activeSessions.get(token);
+  if (!session) return null;
+  // Session expires after 24 hours
+  if (Date.now() - session.createdAt > 24 * 60 * 60 * 1000) {
+    activeSessions.delete(token);
+    return null;
+  }
+  return session;
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -26,11 +56,37 @@ export async function registerRoutes(
   // WebSocket server for real-time telemetry streaming
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
   
-  const clients = new Set<WebSocket>();
+  // Track clients with their user IDs for DM privacy
+  interface ClientInfo {
+    ws: WebSocket;
+    userId: string | null;
+  }
+  const clients = new Map<WebSocket, ClientInfo>();
   
   wss.on("connection", (ws) => {
-    clients.add(ws);
+    // Initially, user is not authenticated
+    const clientInfo: ClientInfo = { ws, userId: null };
+    clients.set(ws, clientInfo);
     console.log("WebSocket client connected");
+    
+    // Handle incoming messages to register user ID
+    ws.on("message", (data) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === "auth" && msg.sessionToken) {
+          // Validate token against server session store
+          const session = validateSession(msg.sessionToken);
+          if (session) {
+            clientInfo.userId = session.userId;
+            console.log(`WebSocket client authenticated as user: ${session.userId} (${session.name})`);
+          } else {
+            console.log("WebSocket auth failed: invalid or expired session token");
+          }
+        }
+      } catch (e) {
+        // Ignore parse errors
+      }
+    });
     
     ws.on("close", () => {
       clients.delete(ws);
@@ -38,14 +94,39 @@ export async function registerRoutes(
     });
   });
   
-  // Broadcast function for real-time data
+  // Broadcast function for real-time data (non-DM messages)
   const broadcast = (type: string, data: any) => {
     const message = JSON.stringify({ type, data });
-    clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(message);
+    clients.forEach((clientInfo) => {
+      if (clientInfo.ws.readyState === WebSocket.OPEN) {
+        clientInfo.ws.send(message);
       }
     });
+  };
+
+  // Send to specific users only (for DMs)
+  const sendToUsers = (type: string, data: any, userIds: string[]) => {
+    const message = JSON.stringify({ type, data });
+    clients.forEach((clientInfo) => {
+      if (clientInfo.ws.readyState === WebSocket.OPEN && 
+          clientInfo.userId && 
+          userIds.includes(clientInfo.userId)) {
+        clientInfo.ws.send(message);
+      }
+    });
+  };
+
+  // Smart broadcast - handles DMs privately, broadcasts public messages
+  const smartBroadcast = (type: string, data: any) => {
+    // Check if this is a DM (has recipientId)
+    if (data.recipientId) {
+      // Only send to sender and recipient
+      const targetUsers = [data.senderId, data.recipientId].filter(Boolean);
+      sendToUsers(type, data, targetUsers);
+    } else {
+      // Public message - broadcast to all
+      broadcast(type, data);
+    }
   };
 
   // Runtime config API - returns device role for Pi vs Ground Control detection
@@ -61,6 +142,53 @@ export async function registerRoutes(
       mavlinkDefaults,
       isOnboard: deviceRole === "ONBOARD",
     });
+  });
+
+  // Authentication: Create server-side session on login
+  // SECURITY MODEL: This GCS is designed for closed network deployment with trusted team members.
+  // Users are managed client-side (localStorage). The server validates that:
+  // 1. Login requests generate cryptographically secure session tokens (256-bit entropy)
+  // 2. Session tokens are required for WebSocket DM routing
+  // 3. Session tokens are required for admin-only API endpoints
+  // For internet-facing deployments, implement server-side credential validation.
+  app.post("/api/auth/login", async (req, res) => {
+    try {
+      const { userId, username, role, name } = req.body;
+      
+      // Generate a secure session token
+      const sessionToken = generateSessionToken();
+      
+      // Store session on server
+      activeSessions.set(sessionToken, {
+        userId,
+        role: role || 'viewer',
+        name: name || username || 'Unknown',
+        createdAt: Date.now()
+      });
+      
+      console.log(`User ${name} (${userId}) logged in with role: ${role}`);
+      
+      res.json({ 
+        success: true, 
+        sessionToken,
+        message: 'Login successful' 
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Login failed" });
+    }
+  });
+
+  // Authentication: Logout - invalidate session
+  app.post("/api/auth/logout", async (req, res) => {
+    try {
+      const sessionToken = req.headers['x-session-token'] as string;
+      if (sessionToken) {
+        activeSessions.delete(sessionToken);
+      }
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Logout failed" });
+    }
   });
 
   // Settings API
@@ -722,6 +850,33 @@ export async function registerRoutes(
     }
   });
 
+  // Admin endpoint: Get all messages with full history (including original content)
+  // Security: Validates admin role from server-side session store
+  app.get("/api/messages/history", async (req, res) => {
+    try {
+      // Validate session token from header against server session store
+      const sessionToken = req.headers['x-session-token'] as string | undefined;
+      const session = validateSession(sessionToken);
+      let isAdmin = session?.role === 'admin';
+      
+      // Also allow if ADMIN_API_KEY is provided (for API access)
+      const adminKey = process.env.ADMIN_API_KEY;
+      const authHeader = req.headers.authorization;
+      if (adminKey && authHeader === `Bearer ${adminKey}`) {
+        isAdmin = true;
+      }
+      
+      if (!isAdmin) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      
+      const messages = await storage.getAllMessagesWithHistory();
+      res.json(messages);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch message history" });
+    }
+  });
+
   app.post("/api/messages", async (req, res) => {
     try {
       const { senderId, senderName, senderRole, content, recipientId, recipientName } = req.body;
@@ -736,7 +891,7 @@ export async function registerRoutes(
         recipientId: recipientId || null,
         recipientName: recipientName || null
       });
-      broadcast("new_message", message);
+      smartBroadcast("new_message", message);
       res.json(message);
     } catch (error) {
       res.status(500).json({ error: "Failed to create message" });
@@ -753,7 +908,8 @@ export async function registerRoutes(
       if (!message) {
         return res.status(404).json({ error: "Message not found" });
       }
-      broadcast("message_updated", message);
+      // Use smartBroadcast for DM privacy
+      smartBroadcast("message_updated", message);
       res.json(message);
     } catch (error) {
       res.status(500).json({ error: "Failed to update message" });
@@ -762,8 +918,18 @@ export async function registerRoutes(
 
   app.delete("/api/messages/:id", async (req, res) => {
     try {
+      // Get message first to know who should receive the delete notification
+      const messages = await storage.getAllMessages();
+      const msg = messages.find(m => m.id === req.params.id);
+      
       await storage.deleteMessage(req.params.id);
-      broadcast("message_deleted", { id: req.params.id });
+      
+      // Use smartBroadcast for DM privacy
+      if (msg) {
+        smartBroadcast("message_deleted", { id: req.params.id, senderId: msg.senderId, recipientId: msg.recipientId });
+      } else {
+        broadcast("message_deleted", { id: req.params.id });
+      }
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete message" });
