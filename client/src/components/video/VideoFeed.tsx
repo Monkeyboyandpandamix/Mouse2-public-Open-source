@@ -87,10 +87,10 @@ export function VideoFeed() {
   const [showConfigDialog, setShowConfigDialog] = useState(false);
   const [streamUrl, setStreamUrl] = useState(cameraConfig.streamUrl);
   
-  // Draggable position state
+  // Draggable position state - bottom-left corner by default
   const [position, setPosition] = useState(() => {
     const saved = localStorage.getItem('mouse_camera_position');
-    return saved ? JSON.parse(saved) : { x: 20, y: 0 };
+    return saved ? JSON.parse(saved) : { x: 16, y: 220 };
   });
   const [isDraggingPanel, setIsDraggingPanel] = useState(false);
   const [panelDragStart, setPanelDragStart] = useState({ x: 0, y: 0 });
@@ -1039,9 +1039,11 @@ export function VideoFeed() {
     return (
       <button 
         onClick={() => setVisible(true)}
-        className="absolute bottom-32 sm:bottom-52 left-2 sm:left-20 z-[100] bg-primary text-primary-foreground p-2 rounded shadow-lg hover:bg-primary/90"
+        className="absolute bottom-4 left-16 z-[100] bg-primary text-primary-foreground px-3 py-2 rounded-lg shadow-lg hover:bg-primary/90 flex items-center gap-2"
+        data-testid="button-show-camera"
       >
-        <Eye className="h-4 w-4" />
+        <Video className="h-4 w-4" />
+        <span className="text-xs font-medium">Show Camera</span>
       </button>
     );
   }
@@ -1057,7 +1059,7 @@ export function VideoFeed() {
       )}
       style={isMain ? {} : {
         left: position.x,
-        bottom: `calc(100vh - ${position.y + 192}px)`
+        top: position.y
       }}
       onMouseEnter={() => setShowControls(true)}
       onMouseLeave={() => setShowControls(false)}
