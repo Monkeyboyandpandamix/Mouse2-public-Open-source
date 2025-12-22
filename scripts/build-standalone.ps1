@@ -69,38 +69,29 @@ if (Test-Path "README.md") {
     Copy-Item -Path "README.md" -Destination "$OutputDir\$DistName\" -Force
 }
 
-# Create production package.json
+# Create production package.json - extract runtime deps from original
 Write-Host ""
 Write-Host "Step 4: Creating production package.json..."
-$PackageJson = @'
-{
-  "name": "mouse-gcs",
-  "version": "1.0.0",
-  "description": "M.O.U.S.E. Ground Control Station",
-  "type": "module",
-  "license": "MIT",
-  "scripts": {
-    "start": "set NODE_ENV=production && node index.cjs"
+
+# Use Node.js to extract dependencies from original package.json
+$NodeScript = @'
+const pkg = require('./package.json');
+const prodPkg = {
+  name: 'mouse-gcs',
+  version: '1.0.0',
+  description: 'M.O.U.S.E. Ground Control Station',
+  type: 'module',
+  license: 'MIT',
+  scripts: {
+    start: 'set NODE_ENV=production && node index.cjs'
   },
-  "dependencies": {
-    "express": "^4.21.2",
-    "express-session": "^1.18.1",
-    "googleapis": "^148.0.0",
-    "memorystore": "^1.6.7",
-    "passport": "^0.7.0",
-    "passport-local": "^1.0.0",
-    "ws": "^8.18.0",
-    "zod": "^3.25.76",
-    "zod-validation-error": "^3.4.0"
-  },
-  "optionalDependencies": {
-    "bufferutil": "^4.0.8"
-  },
-  "engines": {
-    "node": ">=18.0.0"
-  }
-}
+  dependencies: pkg.dependencies || {},
+  optionalDependencies: pkg.optionalDependencies || {},
+  engines: { node: '>=18.0.0' }
+};
+console.log(JSON.stringify(prodPkg, null, 2));
 '@
+$PackageJson = & node -e $NodeScript
 $PackageJson | Out-File -FilePath "$OutputDir\$DistName\package.json" -Encoding utf8
 
 # Copy launcher scripts
