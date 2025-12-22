@@ -290,6 +290,7 @@ export const userGroupSchema = z.object({
   id: z.string(),
   name: z.string(),
   memberIds: z.array(z.string()), // Array of user IDs
+  defaultRole: z.string().optional(), // Default role for group members (admin, operator, viewer, or custom)
   createdAt: z.string(),
   createdBy: z.string(),
 });

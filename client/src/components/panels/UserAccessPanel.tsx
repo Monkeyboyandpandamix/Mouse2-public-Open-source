@@ -64,6 +64,7 @@ interface UserGroup {
   id: string;
   name: string;
   memberIds: string[];
+  defaultRole?: string; // Default role for group members
   createdAt: string;
   createdBy: string;
 }
@@ -165,6 +166,19 @@ export function UserAccessPanel() {
   const [newGroupName, setNewGroupName] = useState("");
   const [editGroupName, setEditGroupName] = useState("");
   const [selectedGroupMembers, setSelectedGroupMembers] = useState<string[]>([]);
+  const [selectedGroupRole, setSelectedGroupRole] = useState<string>("viewer");
+  
+  // Custom roles state - allows creating additional roles beyond admin/operator/viewer
+  const [customRoles, setCustomRoles] = useState<string[]>(() => {
+    const saved = localStorage.getItem('mouse_gcs_custom_roles');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [newRoleName, setNewRoleName] = useState("");
+  const [editingRoleName, setEditingRoleName] = useState<string | null>(null);
+  const [editRoleValue, setEditRoleValue] = useState("");
+  
+  // All available roles (built-in + custom)
+  const allRoles = ['admin', 'operator', 'viewer', ...customRoles];
 
   useEffect(() => {
     localStorage.setItem('mouse_gcs_users', JSON.stringify(users));
@@ -186,6 +200,19 @@ export function UserAccessPanel() {
   useEffect(() => {
     localStorage.setItem('mouse_gcs_role_permissions', JSON.stringify(rolePermissions));
   }, [rolePermissions]);
+  
+  useEffect(() => {
+    localStorage.setItem('mouse_gcs_custom_roles', JSON.stringify(customRoles));
+    // Initialize permissions for new custom roles
+    customRoles.forEach(role => {
+      if (!rolePermissions[role]) {
+        setRolePermissions(prev => ({
+          ...prev,
+          [role]: ['view_telemetry', 'view_map', 'view_camera'] // Default to viewer-like permissions
+        }));
+      }
+    });
+  }, [customRoles]);
 
   useEffect(() => {
     localStorage.setItem('mouse_gcs_session', JSON.stringify(session));
@@ -442,6 +469,7 @@ export function UserAccessPanel() {
       id: `group_${Date.now()}`,
       name: newGroupName.trim(),
       memberIds: selectedGroupMembers,
+      defaultRole: selectedGroupRole,
       createdAt: new Date().toISOString(),
       createdBy: session.user?.id || 'unknown'
     };
@@ -450,6 +478,7 @@ export function UserAccessPanel() {
     setShowNewGroupDialog(false);
     setNewGroupName("");
     setSelectedGroupMembers([]);
+    setSelectedGroupRole("viewer");
     toast.success(`Group "${newGroup.name}" created`);
   };
   
@@ -457,6 +486,7 @@ export function UserAccessPanel() {
     setSelectedGroup(group);
     setEditGroupName(group.name);
     setSelectedGroupMembers([...group.memberIds]);
+    setSelectedGroupRole(group.defaultRole || "viewer");
     setShowEditGroupDialog(true);
   };
   
@@ -474,13 +504,91 @@ export function UserAccessPanel() {
     
     setGroups(prev => prev.map(g => 
       g.id === selectedGroup.id 
-        ? { ...g, name: editGroupName.trim(), memberIds: selectedGroupMembers }
+        ? { ...g, name: editGroupName.trim(), memberIds: selectedGroupMembers, defaultRole: selectedGroupRole }
         : g
     ));
     
     setShowEditGroupDialog(false);
     setSelectedGroup(null);
     toast.success("Group updated");
+  };
+  
+  // Custom role management handlers
+  const handleAddCustomRole = () => {
+    const roleName = newRoleName.trim().toLowerCase().replace(/\s+/g, '_');
+    if (!roleName) {
+      toast.error("Role name is required");
+      return;
+    }
+    if (allRoles.includes(roleName)) {
+      toast.error("This role already exists");
+      return;
+    }
+    setCustomRoles(prev => [...prev, roleName]);
+    setNewRoleName("");
+    toast.success(`Role "${roleName}" created`);
+  };
+  
+  const handleRenameRole = (oldName: string) => {
+    const newName = editRoleValue.trim().toLowerCase().replace(/\s+/g, '_');
+    if (!newName) {
+      toast.error("Role name is required");
+      return;
+    }
+    if (allRoles.includes(newName) && newName !== oldName) {
+      toast.error("This role already exists");
+      return;
+    }
+    
+    // Update the role name
+    setCustomRoles(prev => prev.map(r => r === oldName ? newName : r));
+    
+    // Update role permissions
+    setRolePermissions(prev => {
+      const newPerms = { ...prev };
+      if (prev[oldName]) {
+        newPerms[newName] = prev[oldName];
+        delete newPerms[oldName];
+      }
+      return newPerms;
+    });
+    
+    // Update users with this role
+    setUsers(prev => prev.map(u => 
+      u.role === oldName ? { ...u, role: newName as 'admin' | 'operator' | 'viewer' } : u
+    ));
+    
+    // Update groups with this default role
+    setGroups(prev => prev.map(g => 
+      g.defaultRole === oldName ? { ...g, defaultRole: newName } : g
+    ));
+    
+    setEditingRoleName(null);
+    setEditRoleValue("");
+    toast.success(`Role renamed to "${newName}"`);
+  };
+  
+  const handleDeleteRole = (roleName: string) => {
+    // Check if any users have this role
+    const usersWithRole = users.filter(u => u.role === roleName);
+    if (usersWithRole.length > 0) {
+      toast.error(`Cannot delete: ${usersWithRole.length} user(s) have this role. Change their role first.`);
+      return;
+    }
+    
+    setCustomRoles(prev => prev.filter(r => r !== roleName));
+    setRolePermissions(prev => {
+      const newPerms = { ...prev };
+      delete newPerms[roleName];
+      return newPerms;
+    });
+    
+    // Update groups with this default role to viewer
+    setGroups(prev => prev.map(g => 
+      g.defaultRole === roleName ? { ...g, defaultRole: 'viewer' } : g
+    ));
+    
+    toast.success(`Role "${roleName}" deleted`);
   };
   
   const handleDeleteGroup = (groupId: string) => {
@@ -632,9 +740,9 @@ export function UserAccessPanel() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="admin">Admin</SelectItem>
-                          <SelectItem value="operator">Operator</SelectItem>
-                          <SelectItem value="viewer">Viewer</SelectItem>
+                          {allRoles.map(role => (
+                            <SelectItem key={role} value={role} className="capitalize">{role}</SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>
@@ -736,9 +844,9 @@ export function UserAccessPanel() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="admin">Admin</SelectItem>
-                            <SelectItem value="operator">Operator</SelectItem>
-                            <SelectItem value="viewer">Viewer</SelectItem>
+                            {allRoles.map(r => (
+                              <SelectItem key={r} value={r} className="capitalize">{r}</SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                         <div className="flex items-center gap-2">
@@ -870,8 +978,22 @@ export function UserAccessPanel() {
                                 />
                               </div>
                               <div className="space-y-2">
+                                <Label>Default Role</Label>
+                                <Select value={selectedGroupRole} onValueChange={setSelectedGroupRole}>
+                                  <SelectTrigger data-testid="select-group-role">
+                                    <SelectValue placeholder="Select role" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {allRoles.map(role => (
+                                      <SelectItem key={role} value={role} className="capitalize">{role}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                <p className="text-xs text-muted-foreground">Default role for group members</p>
+                              </div>
+                              <div className="space-y-2">
                                 <Label>Members ({selectedGroupMembers.length} selected)</Label>
-                                <ScrollArea className="h-40 border rounded-md p-2">
+                                <ScrollArea className="h-32 border rounded-md p-2">
                                   {users.filter(u => u.enabled).map(user => (
                                     <div 
                                       key={user.id} 
@@ -895,6 +1017,7 @@ export function UserAccessPanel() {
                                 setShowNewGroupDialog(false);
                                 setNewGroupName("");
                                 setSelectedGroupMembers([]);
+                                setSelectedGroupRole("viewer");
                               }}>Cancel</Button>
                               <Button onClick={handleCreateGroup} data-testid="button-create-group">
                                 Create Group
@@ -926,6 +1049,11 @@ export function UserAccessPanel() {
                                 <Badge variant="secondary" className="text-[10px]">
                                   {group.memberIds.length} member{group.memberIds.length !== 1 ? 's' : ''}
                                 </Badge>
+                                {group.defaultRole && (
+                                  <Badge variant="outline" className="text-[10px] capitalize">
+                                    Role: {group.defaultRole}
+                                  </Badge>
+                                )}
                               </div>
                               <div className="flex flex-wrap gap-1 mt-2">
                                 {group.memberIds.map(memberId => {
@@ -987,8 +1115,21 @@ export function UserAccessPanel() {
                     />
                   </div>
                   <div className="space-y-2">
+                    <Label>Default Role</Label>
+                    <Select value={selectedGroupRole} onValueChange={setSelectedGroupRole}>
+                      <SelectTrigger data-testid="select-edit-group-role">
+                        <SelectValue placeholder="Select role" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {allRoles.map(role => (
+                          <SelectItem key={role} value={role} className="capitalize">{role}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
                     <Label>Members ({selectedGroupMembers.length} selected)</Label>
-                    <ScrollArea className="h-40 border rounded-md p-2">
+                    <ScrollArea className="h-32 border rounded-md p-2">
                       {users.filter(u => u.enabled).map(user => (
                         <div 
                           key={user.id} 
@@ -1022,11 +1163,117 @@ export function UserAccessPanel() {
             <TabsContent value="permissions" className="space-y-6">
               {isAdmin && (
                 <>
+                  {/* Create Custom Role Section */}
+                  <Card className="border-2 border-green-500/50">
+                    <CardHeader>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <CardTitle className="flex items-center gap-2">
+                            <Plus className="h-5 w-5 text-green-500" />
+                            Create Custom Role
+                          </CardTitle>
+                          <CardDescription>
+                            Add new roles beyond Admin, Operator, and Viewer. Custom roles can be assigned to users and groups.
+                          </CardDescription>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="flex gap-2">
+                        <Input
+                          placeholder="Enter role name (e.g., pilot, observer, mechanic)"
+                          value={newRoleName}
+                          onChange={(e) => setNewRoleName(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && handleAddCustomRole()}
+                          className="flex-1"
+                          data-testid="input-new-role-name"
+                        />
+                        <Button onClick={handleAddCustomRole} data-testid="button-add-role">
+                          <Plus className="h-4 w-4 mr-1" />
+                          Add Role
+                        </Button>
+                      </div>
+                      {customRoles.length > 0 && (
+                        <div className="mt-4 space-y-2">
+                          <Label className="text-sm text-muted-foreground">Custom Roles:</Label>
+                          <div className="flex flex-wrap gap-2">
+                            {customRoles.map(role => (
+                              <div key={role} className="flex items-center gap-1 bg-muted rounded-md px-2 py-1">
+                                {editingRoleName === role ? (
+                                  <>
+                                    <Input
+                                      value={editRoleValue}
+                                      onChange={(e) => setEditRoleValue(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') handleRenameRole(role);
+                                        if (e.key === 'Escape') {
+                                          setEditingRoleName(null);
+                                          setEditRoleValue("");
+                                        }
+                                      }}
+                                      className="h-6 w-24 text-xs"
+                                      autoFocus
+                                      data-testid={`input-rename-role-${role}`}
+                                    />
+                                    <Button 
+                                      variant="ghost" 
+                                      size="icon" 
+                                      className="h-5 w-5"
+                                      onClick={() => handleRenameRole(role)}
+                                    >
+                                      <CheckCircle className="h-3 w-3 text-green-500" />
+                                    </Button>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="icon" 
+                                      className="h-5 w-5"
+                                      onClick={() => {
+                                        setEditingRoleName(null);
+                                        setEditRoleValue("");
+                                      }}
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </Button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="text-sm capitalize">{role}</span>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="icon" 
+                                      className="h-5 w-5"
+                                      onClick={() => {
+                                        setEditingRoleName(role);
+                                        setEditRoleValue(role);
+                                      }}
+                                      data-testid={`button-edit-role-${role}`}
+                                    >
+                                      <Edit className="h-3 w-3" />
+                                    </Button>
+                                    <Button 
+                                      variant="ghost" 
+                                      size="icon" 
+                                      className="h-5 w-5 text-destructive"
+                                      onClick={() => handleDeleteRole(role)}
+                                      data-testid={`button-delete-role-${role}`}
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                  </>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+
                   <Card className="border-2 border-amber-500/50">
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
                         <Settings className="h-5 w-5 text-amber-500" />
-                        Custom Role Permissions
+                        Role Permissions
                       </CardTitle>
                       <CardDescription>
                         Configure what each role can access. Changes apply immediately to all users with that role.
@@ -1034,7 +1281,7 @@ export function UserAccessPanel() {
                     </CardHeader>
                   </Card>
 
-                  {['admin', 'operator', 'viewer'].map(role => {
+                  {allRoles.map(role => {
                     const { color, icon: RoleIcon } = getRoleBadge(role);
                     return (
                       <Card key={role}>
