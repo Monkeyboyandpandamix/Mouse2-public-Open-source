@@ -17,6 +17,15 @@ import {
 import { ZodError } from "zod";
 import { syncDataToSheets, getOrCreateBackupSpreadsheet, getSpreadsheetUrl } from "./googleSheets";
 import { uploadFileToDrive, listDriveFiles, checkDriveConnection, deleteFileFromDrive } from "./googleDrive";
+import { 
+  getAuthUrl, 
+  handleOAuthCallback, 
+  checkConnectionStatus, 
+  getAllAccounts, 
+  switchAccount, 
+  removeAccount,
+  isOAuthConfigured 
+} from "./googleAuth";
 
 // Server-side session store for authenticated users
 // Key: session token, Value: { userId, role, name, createdAt }
@@ -584,6 +593,72 @@ export async function registerRoutes(
     } catch (error: any) {
       res.status(500).json({ success: false, error: error.message });
     }
+  });
+
+  // Google OAuth API for standalone account management
+  app.get("/api/google/status", async (req, res) => {
+    try {
+      const status = await checkConnectionStatus();
+      res.json(status);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/google/auth-url", (req, res) => {
+    const result = getAuthUrl();
+    if ('error' in result) {
+      res.status(400).json({ error: result.error });
+    } else {
+      res.json(result);
+    }
+  });
+
+  app.get("/api/google/callback", async (req, res) => {
+    const code = req.query.code as string;
+    if (!code) {
+      return res.status(400).send('Authorization code missing');
+    }
+    
+    const result = await handleOAuthCallback(code);
+    
+    if (result.success) {
+      // Redirect back to settings with success message
+      res.redirect('/?google_auth=success');
+    } else {
+      res.redirect(`/?google_auth=error&message=${encodeURIComponent(result.error || 'Unknown error')}`);
+    }
+  });
+
+  app.get("/api/google/accounts", (req, res) => {
+    const accounts = getAllAccounts();
+    res.json(accounts);
+  });
+
+  app.post("/api/google/switch", (req, res) => {
+    const { accountId } = req.body;
+    if (!accountId) {
+      return res.status(400).json({ error: 'Account ID required' });
+    }
+    const success = switchAccount(accountId);
+    if (success) {
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: 'Account not found' });
+    }
+  });
+
+  app.delete("/api/google/accounts/:id", (req, res) => {
+    const success = removeAccount(req.params.id);
+    if (success) {
+      res.json({ success: true });
+    } else {
+      res.status(404).json({ error: 'Account not found' });
+    }
+  });
+
+  app.get("/api/google/configured", (req, res) => {
+    res.json({ configured: isOAuthConfigured() });
   });
 
   // Drones API
