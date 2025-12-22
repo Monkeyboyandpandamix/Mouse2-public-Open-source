@@ -770,5 +770,90 @@ export async function registerRoutes(
     }
   });
 
+  // Diagnostic endpoint to verify Google integrations
+  // Access controlled: dev mode only OR requires ADMIN_API_KEY environment variable
+  app.get("/api/integrations/verify", async (req, res) => {
+    const isDev = process.env.NODE_ENV === 'development';
+    
+    // In production, require ADMIN_API_KEY environment variable
+    if (!isDev) {
+      const adminKey = process.env.ADMIN_API_KEY;
+      if (!adminKey) {
+        return res.status(503).json({ error: "Diagnostic endpoint disabled - ADMIN_API_KEY not configured" });
+      }
+      
+      const authHeader = req.headers.authorization;
+      if (authHeader !== `Bearer ${adminKey}`) {
+        return res.status(401).json({ error: "Unauthorized - valid admin key required" });
+      }
+    }
+    
+    const results: any = { driveConnected: false, sheetsConnected: false };
+    
+    try {
+      const driveStatus = await checkDriveConnection();
+      results.driveConnected = driveStatus.connected;
+    } catch (e: any) {
+      results.driveError = "Connection failed";
+    }
+    
+    try {
+      await getOrCreateBackupSpreadsheet();
+      results.sheetsConnected = true;
+    } catch (e: any) {
+      results.sheetsError = "Connection failed";
+    }
+    
+    const fs = await import('fs');
+    const dataDir = process.env.DATA_DIR || './data';
+    results.localDataFilesCount = 0;
+    try {
+      if (fs.existsSync(dataDir)) {
+        results.localDataFilesCount = fs.readdirSync(dataDir).length;
+      }
+    } catch (e) {}
+    
+    res.json({
+      success: results.driveConnected || results.sheetsConnected,
+      ...results
+    });
+  });
+
+  // Endpoint to record flight telemetry (called when drone is armed)
+  app.post("/api/telemetry/record", async (req, res) => {
+    try {
+      const { 
+        missionId, latitude, longitude, altitude, heading, groundSpeed, verticalSpeed,
+        batteryVoltage, batteryCurrent, batteryPercent, gpsFixType, gpsSatellites,
+        flightMode, armed, pitch, roll, yaw
+      } = req.body;
+
+      const flightLog = await storage.createFlightLog({
+        missionId,
+        latitude,
+        longitude,
+        altitude,
+        heading,
+        groundSpeed,
+        verticalSpeed,
+        batteryVoltage,
+        batteryCurrent,
+        batteryPercent,
+        gpsFixType,
+        gpsSatellites,
+        flightMode,
+        armed: armed || false,
+        pitch,
+        roll,
+        yaw
+      });
+
+      broadcast("telemetry_recorded", flightLog);
+      res.json({ success: true, flightLog });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to record telemetry" });
+    }
+  });
+
   return httpServer;
 }
