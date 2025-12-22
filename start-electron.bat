@@ -46,6 +46,6 @@ echo Starting M.O.U.S.E. Desktop Application...
 echo.
 
 REM Run Electron
-call .\node_modules\.bin\electron electron/main.js
+call .\node_modules\.bin\electron electron/main.cjs
 
 pause

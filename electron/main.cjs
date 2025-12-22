@@ -120,8 +120,8 @@ async function startServer() {
 
 function createWindow() {
   const preloadPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'app', 'electron', 'preload.js')
-    : path.join(__dirname, 'preload.js');
+    ? path.join(process.resourcesPath, 'app', 'electron', 'preload.cjs')
+    : path.join(__dirname, 'preload.cjs');
     
   mainWindow = new BrowserWindow({
     width: 1400,

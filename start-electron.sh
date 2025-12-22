@@ -42,4 +42,4 @@ echo "Starting M.O.U.S.E. Desktop Application..."
 echo ""
 
 # Run Electron
-./node_modules/.bin/electron electron/main.js
+./node_modules/.bin/electron electron/main.cjs
