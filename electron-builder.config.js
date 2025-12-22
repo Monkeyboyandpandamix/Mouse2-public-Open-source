@@ -8,14 +8,13 @@ module.exports = {
   files: [
     'dist/**/*',
     'electron/**/*',
-    'package.json'
+    'package.json',
+    '!node_modules/**/*',
+    'node_modules/**/*.node'
   ],
-  extraResources: [
-    {
-      from: 'data',
-      to: 'data',
-      filter: ['**/*']
-    }
+  asar: true,
+  asarUnpack: [
+    '**/*.node'
   ],
   win: {
     target: [

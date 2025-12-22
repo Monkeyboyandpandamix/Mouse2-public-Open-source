@@ -138,6 +138,11 @@ export async function registerRoutes(
     }
   };
 
+  // Health check endpoint for Electron app startup detection
+  app.get("/api/health", (req, res) => {
+    res.status(200).json({ status: "ok", timestamp: Date.now() });
+  });
+
   // Runtime config API - returns device role for Pi vs Ground Control detection
   app.get("/api/runtime-config", async (req, res) => {
     const deviceRole = process.env.DEVICE_ROLE || "GROUND";
