@@ -39,7 +39,7 @@ if not exist node_modules (
 REM Build the application
 echo.
 echo Building application...
-call npm run build
+call npx tsx script/build.ts
 if %ERRORLEVEL% neq 0 (
     echo Build failed! Please check for errors.
     pause

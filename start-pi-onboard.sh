@@ -58,7 +58,7 @@ fi
 # Build the application
 echo ""
 echo "Building application..."
-npm run build
+npx tsx script/build.ts
 if [ $? -ne 0 ]; then
     echo "Build failed! Please check for errors."
     exit 1
