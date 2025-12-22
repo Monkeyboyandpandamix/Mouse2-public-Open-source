@@ -1,0 +1,28 @@
+[
+  {
+    "id": "1766375611439-qu7o47d8d",
+    "missionId": "1766375519854-afe9mjlte",
+    "order": 1,
+    "latitude": 36.07437211197515,
+    "longitude": -79.4710421562195,
+    "altitude": 50,
+    "speed": 5,
+    "action": "hover",
+    "actionParams": {
+      "hoverTime": 5
+    }
+  },
+  {
+    "id": "1766375612301-mbxwyo8vy",
+    "missionId": "1766375519854-afe9mjlte",
+    "order": 2,
+    "latitude": 36.07288057959847,
+    "longitude": -79.47301626205446,
+    "altitude": 50,
+    "speed": 5,
+    "action": "hover",
+    "actionParams": {
+      "hoverTime": 5
+    }
+  }
+]

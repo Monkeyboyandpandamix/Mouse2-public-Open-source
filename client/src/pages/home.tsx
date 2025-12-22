@@ -16,6 +16,7 @@ import { UserAccessPanel } from "@/components/panels/UserAccessPanel";
 import { GeofencingPanel } from "@/components/panels/GeofencingPanel";
 import { GUIConfigPanel } from "@/components/panels/GUIConfigPanel";
 import { DroneSelectionPanel } from "@/components/panels/DroneSelectionPanel";
+import { FlightPathOptimizerPanel } from "@/components/panels/FlightPathOptimizerPanel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, X, Eye, ArrowLeft, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -60,6 +61,13 @@ export default function Home() {
     return null;
   });
 
+  // Preview mode state (for skipping drone selection) - must be before conditional returns
+  const [previewMode, setPreviewMode] = useState(false);
+  
+  // Onboard mode (running on Raspberry Pi) - must be before conditional returns
+  const [isOnboard, setIsOnboard] = useState(false);
+  const [runtimeConfigLoaded, setRuntimeConfigLoaded] = useState(false);
+
   // Listen for session changes (logout from TopBar or UserAccessPanel)
   useEffect(() => {
     const handleSessionChange = (e: CustomEvent<{ isLoggedIn: boolean }>) => {
@@ -91,9 +99,9 @@ export default function Home() {
     };
   }, []);
 
-  // Listen for real system errors from MAVLink/sensors (must be before conditional return)
+  // Listen for real system errors from MAVLink/sensors
   useEffect(() => {
-    if (!isLoggedIn) return; // Only run when logged in
+    if (!isLoggedIn) return;
     
     const handleError = (event: CustomEvent<SystemError>) => {
       setSystemErrors(prev => [...prev, event.detail]);
@@ -106,18 +114,6 @@ export default function Home() {
     };
   }, [isLoggedIn]);
 
-  // If not logged in, show UserAccessPanel (which has the login form)
-  if (!isLoggedIn) {
-    return <UserAccessPanel />;
-  }
-
-  // Preview mode state (for skipping drone selection)
-  const [previewMode, setPreviewMode] = useState(false);
-  
-  // Onboard mode (running on Raspberry Pi)
-  const [isOnboard, setIsOnboard] = useState(false);
-  const [runtimeConfigLoaded, setRuntimeConfigLoaded] = useState(false);
-  
   // Fetch runtime config to detect if running on Pi
   useEffect(() => {
     fetch('/api/runtime-config')
@@ -169,6 +165,11 @@ export default function Home() {
         setRuntimeConfigLoaded(true); // Continue even if fetch fails
       });
   }, []);
+
+  // If not logged in, show UserAccessPanel (which has the login form)
+  if (!isLoggedIn) {
+    return <UserAccessPanel />;
+  }
 
   // Preview drone for preview mode
   const previewDrone: Drone = {
@@ -249,6 +250,12 @@ export default function Home() {
         return (
           <div className="flex-1 relative overflow-hidden">
             <MissionPlanningPanel />
+          </div>
+        );
+      case "optimizer":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <FlightPathOptimizerPanel />
           </div>
         );
       case "tracking":

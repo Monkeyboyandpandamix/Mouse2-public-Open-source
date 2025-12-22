@@ -10,7 +10,8 @@ import {
   Users,
   Terminal,
   Shield,
-  LayoutDashboard
+  LayoutDashboard,
+  Route
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,7 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
   const menuItems = [
     { id: "map", icon: Map, label: "Map View" },
     { id: "mission", icon: Navigation, label: "Mission Plan" },
+    { id: "optimizer", icon: Route, label: "Path Optimizer" },
     { id: "tracking", icon: Target, label: "Object Track" },
     { id: "geofence", icon: Shield, label: "Geofencing" },
     { id: "payload", icon: Volume2, label: "Speaker" },

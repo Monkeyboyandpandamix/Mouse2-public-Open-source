@@ -78,6 +78,7 @@ This application is fully portable and can be deployed without Replit:
 - Flight log management with delete functionality and confirmation dialogs
 - Terminal commands panel with custom command creation and deletion
 - GUI configuration with immediate "Apply Now" functionality
+- **Flight Path Optimizer**: Intelligent route optimization panel that analyzes missions based on real-time weather data (Open-Meteo API), terrain considerations, and waypoint ordering. Provides actionable suggestions for battery savings, time reduction, headwind avoidance, altitude optimization, and safety improvements with estimated savings percentages. Requires mission_planning permission.
 
 ### Hardware Configuration
 - **Companion Computer**: Raspberry Pi 5 (16GB) running Trixie 13.2
