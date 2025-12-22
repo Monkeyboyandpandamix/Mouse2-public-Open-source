@@ -22,12 +22,13 @@ const defaultRolePermissions: RolePermissions = {
     "arm_disarm", "flight_control", "mission_planning", "camera_control",
     "view_telemetry", "view_map", "view_camera", "user_management",
     "system_settings", "delete_records", "delete_flight_data",
-    "automation_scripts", "emergency_override", "object_tracking", "broadcast_audio"
+    "automation_scripts", "emergency_override", "object_tracking", "broadcast_audio",
+    "manage_geofences", "access_flight_recorder", "run_terminal", "configure_gui_advanced"
   ],
   operator: [
     "arm_disarm", "flight_control", "mission_planning", "camera_control",
     "view_telemetry", "view_map", "view_camera", "automation_scripts",
-    "object_tracking", "broadcast_audio"
+    "object_tracking", "broadcast_audio", "manage_geofences", "access_flight_recorder"
   ],
   viewer: ["view_telemetry", "view_map", "view_camera"]
 };

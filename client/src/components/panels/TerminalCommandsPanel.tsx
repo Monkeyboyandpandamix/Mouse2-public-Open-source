@@ -30,6 +30,8 @@ import {
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
+import { usePermissions } from "@/hooks/usePermissions";
+import { Lock } from "lucide-react";
 
 interface SystemCommand {
   id: string;
@@ -843,6 +845,8 @@ const defaultCommands: SystemCommand[] = [
 ];
 
 export function TerminalCommandsPanel() {
+  const { hasPermission } = usePermissions();
+  const canRunTerminal = hasPermission('run_terminal');
   const [commands, setCommands] = useState<SystemCommand[]>(() => {
     const saved = localStorage.getItem('mouse_terminal_commands');
     return saved ? JSON.parse(saved) : defaultCommands;
@@ -940,6 +944,22 @@ export function TerminalCommandsPanel() {
 
   const categories = ['arming', 'flight', 'navigation', 'telemetry', 'camera', 'video', 'system'];
   const filteredCommands = commands.filter(c => c.category === activeCategory);
+
+  // Show permission denied if user doesn't have access
+  if (!canRunTerminal) {
+    return (
+      <div className="h-full flex items-center justify-center p-6 bg-background">
+        <div className="flex flex-col items-center gap-4 text-muted-foreground">
+          <Lock className="h-12 w-12" />
+          <div className="text-center">
+            <h3 className="font-semibold text-lg">Access Restricted</h3>
+            <p className="text-sm">You don't have permission to access terminal commands.</p>
+            <p className="text-xs mt-2">Contact an administrator for access.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex overflow-hidden bg-background">

@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Target, Users, Car, Box, AlertCircle, MapPin, Search, Crosshair, Lock, Unlock, Camera, Play, Square, Loader2, Laptop, Video, Zap } from "lucide-react";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { toast } from "sonner";
+import { usePermissions } from "@/hooks/usePermissions";
 import { MissionMap } from "@/components/map/MissionMap";
 import * as tf from "@tensorflow/tfjs";
 import * as cocoSsd from "@tensorflow-models/coco-ssd";
@@ -50,6 +51,8 @@ const PERSON_CLASSES = ['person'];
 const ALL_TRACKABLE_CLASSES = [...PERSON_CLASSES, ...VEHICLE_CLASSES];
 
 export function TrackingPanel() {
+  const { hasPermission } = usePermissions();
+  const canTrack = hasPermission('object_tracking');
   const [trackingActive, setTrackingActive] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [targetType, setTargetType] = useState("all");
@@ -592,6 +595,22 @@ export function TrackingPanel() {
       default: return <Target className="h-4 w-4" />;
     }
   };
+
+  // Show permission denied if user doesn't have access
+  if (!canTrack) {
+    return (
+      <div className="h-full flex items-center justify-center p-6 bg-background">
+        <div className="flex flex-col items-center gap-4 text-muted-foreground">
+          <Lock className="h-12 w-12" />
+          <div className="text-center">
+            <h3 className="font-semibold text-lg">Access Restricted</h3>
+            <p className="text-sm">You don't have permission to access object tracking.</p>
+            <p className="text-xs mt-2">Contact an administrator for access.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex overflow-hidden">

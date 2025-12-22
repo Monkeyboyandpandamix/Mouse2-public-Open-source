@@ -6,9 +6,10 @@ import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { Volume2, Mic, Play, Square, MessageSquare, Plus, Trash2, Check, Settings2, Radio, Loader2, Usb, Bell, Speaker } from "lucide-react";
+import { Volume2, Mic, Play, Square, MessageSquare, Plus, Trash2, Check, Settings2, Radio, Loader2, Usb, Bell, Speaker, Lock } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
+import { usePermissions } from "@/hooks/usePermissions";
 
 type AudioDevice = 'gpio' | 'usb' | 'buzzer';
 
@@ -33,6 +34,8 @@ interface VoiceOption {
 }
 
 export function SpeakerPanel() {
+  const { hasPermission } = usePermissions();
+  const canBroadcast = hasPermission('broadcast_audio');
   const [isRecording, setIsRecording] = useState(false);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [isPreviewing, setIsPreviewing] = useState(false);
@@ -285,6 +288,22 @@ export function SpeakerPanel() {
     setQuickMessages(quickMessages.filter(m => m.id !== id));
     toast.info("Quick message removed");
   };
+
+  // Show permission denied if user doesn't have access
+  if (!canBroadcast) {
+    return (
+      <div className="h-full flex items-center justify-center p-6 bg-background">
+        <div className="flex flex-col items-center gap-4 text-muted-foreground">
+          <Lock className="h-12 w-12" />
+          <div className="text-center">
+            <h3 className="font-semibold text-lg">Access Restricted</h3>
+            <p className="text-sm">You don't have permission to access the audio broadcast system.</p>
+            <p className="text-xs mt-2">Contact an administrator for access.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full overflow-y-auto p-6 bg-background space-y-6">

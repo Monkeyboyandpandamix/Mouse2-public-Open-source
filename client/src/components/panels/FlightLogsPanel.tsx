@@ -127,6 +127,7 @@ const mockTelemetryData = [
 export function FlightLogsPanel() {
   const { hasPermission } = usePermissions();
   const canDeleteRecords = hasPermission('delete_records');
+  const canAccessFlightRecorder = hasPermission('access_flight_recorder');
   const [selectedSession, setSelectedSession] = useState<FlightSession | null>(null);
   const [logFilter, setLogFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -210,6 +211,22 @@ export function FlightLogsPanel() {
       default: return <Activity className="h-3 w-3" />;
     }
   };
+
+  // Show permission denied if user doesn't have access
+  if (!canAccessFlightRecorder) {
+    return (
+      <div className="h-full flex items-center justify-center p-6 bg-background">
+        <div className="flex flex-col items-center gap-4 text-muted-foreground">
+          <Lock className="h-12 w-12" />
+          <div className="text-center">
+            <h3 className="font-semibold text-lg">Access Restricted</h3>
+            <p className="text-sm">You don't have permission to access flight logs.</p>
+            <p className="text-xs mt-2">Contact an administrator for access.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex overflow-hidden">

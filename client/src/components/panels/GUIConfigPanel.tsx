@@ -18,10 +18,12 @@ import {
   ArrowDown,
   Save,
   RotateCcw,
-  Palette
+  Palette,
+  Lock
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
+import { usePermissions } from "@/hooks/usePermissions";
 
 interface TabConfig {
   id: string;
@@ -71,6 +73,8 @@ const defaultPanels: PanelConfig[] = [
 ];
 
 export function GUIConfigPanel() {
+  const { hasPermission } = usePermissions();
+  const canConfigureGUI = hasPermission('configure_gui_advanced');
   const [tabs, setTabs] = useState<TabConfig[]>(() => {
     const saved = localStorage.getItem('mouse_gui_tabs');
     return saved ? JSON.parse(saved) : defaultTabs;
@@ -240,6 +244,22 @@ export function GUIConfigPanel() {
     }));
     toast.success("Changes applied immediately");
   };
+
+  // Show permission denied if user doesn't have access
+  if (!canConfigureGUI) {
+    return (
+      <div className="h-full flex items-center justify-center p-6 bg-background">
+        <div className="flex flex-col items-center gap-4 text-muted-foreground">
+          <Lock className="h-12 w-12" />
+          <div className="text-center">
+            <h3 className="font-semibold text-lg">Access Restricted</h3>
+            <p className="text-sm">You don't have permission to access GUI configuration.</p>
+            <p className="text-xs mt-2">Contact an administrator for access.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full overflow-y-auto p-6 bg-background">

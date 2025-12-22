@@ -26,6 +26,8 @@ import {
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
+import { usePermissions } from "@/hooks/usePermissions";
+import { Lock } from "lucide-react";
 import { MapContainer, TileLayer, Circle as LeafletCircle, Polygon, Marker, useMapEvents, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -104,6 +106,8 @@ function MapCenterOnZone({ center }: { center?: { lat: number; lng: number } }) 
 }
 
 export function GeofencingPanel() {
+  const { hasPermission } = usePermissions();
+  const canManageGeofences = hasPermission('manage_geofences');
   const [zones, setZones] = useState<GeofenceZone[]>(() => {
     const saved = localStorage.getItem('mouse_geofence_zones');
     return saved ? JSON.parse(saved) : defaultZones;
@@ -341,6 +345,22 @@ export function GeofencingPanel() {
 
   const previewCenter = newZone.lat && newZone.lng ? { lat: parseFloat(newZone.lat), lng: parseFloat(newZone.lng) } : null;
   const previewRadius = parseFloat(newZone.radius) || 500;
+
+  // Show permission denied if user doesn't have access
+  if (!canManageGeofences) {
+    return (
+      <div className="h-full flex items-center justify-center p-6 bg-background">
+        <div className="flex flex-col items-center gap-4 text-muted-foreground">
+          <Lock className="h-12 w-12" />
+          <div className="text-center">
+            <h3 className="font-semibold text-lg">Access Restricted</h3>
+            <p className="text-sm">You don't have permission to access geofencing.</p>
+            <p className="text-xs mt-2">Contact an administrator for access.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full flex overflow-hidden bg-background">
