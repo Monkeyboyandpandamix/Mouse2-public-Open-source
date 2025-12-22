@@ -8,11 +8,12 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Plus, Trash2, Save, Play, MapPin, Navigation, Search, AlertTriangle, Clock, Bell, RotateCcw, Radar, Edit, X, Check } from "lucide-react";
+import { Plus, Trash2, Save, Play, MapPin, Navigation, Search, AlertTriangle, Clock, Bell, RotateCcw, Radar, Edit, X, Check, Lock } from "lucide-react";
 import { useState, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { MissionMap } from "@/components/map/MissionMap";
+import { usePermissions } from "@/hooks/usePermissions";
 
 interface Mission {
   id: number;
@@ -46,6 +47,10 @@ const WAYPOINT_ACTIONS = [
 ];
 
 export function MissionPlanningPanel() {
+  const { hasPermission } = usePermissions();
+  const canPlanMissions = hasPermission('mission_planning');
+  const canDeleteData = hasPermission('delete_flight_data');
+  
   const queryClient = useQueryClient();
   const [selectedMission, setSelectedMission] = useState<number | null>(null);
   const [targetMethod, setTargetMethod] = useState<"map" | "address" | "coordinates">("map");
@@ -344,6 +349,22 @@ export function MissionPlanningPanel() {
     setIsExecuting(false);
     toast.info("Mission stopped - landing");
   };
+
+  // Show permission denied if user doesn't have access
+  if (!canPlanMissions) {
+    return (
+      <Card className="h-full flex items-center justify-center">
+        <CardContent className="flex flex-col items-center gap-4 text-muted-foreground py-12">
+          <Lock className="h-12 w-12" />
+          <div className="text-center">
+            <h3 className="font-semibold text-lg">Access Restricted</h3>
+            <p className="text-sm">You don't have permission to access mission planning.</p>
+            <p className="text-xs mt-2">Contact an administrator for access.</p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <div className="h-full flex">

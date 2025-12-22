@@ -21,10 +21,12 @@ import {
   CheckCircle,
   RefreshCw,
   Upload,
-  Download
+  Download,
+  Lock
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { usePermissions } from "@/hooks/usePermissions";
 
 interface AutomationScript {
   id: string;
@@ -79,11 +81,30 @@ if (!gps.hasSignal) {
 ];
 
 export function AutomationPanel() {
+  const { hasPermission } = usePermissions();
+  const canAutomate = hasPermission('automation_scripts');
+  
   const [scripts, setScripts] = useState<AutomationScript[]>(defaultScripts);
   const [selectedScript, setSelectedScript] = useState<AutomationScript | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedScript, setEditedScript] = useState<AutomationScript | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  // Show permission denied if user doesn't have access
+  if (!canAutomate) {
+    return (
+      <Card className="h-full flex items-center justify-center">
+        <CardContent className="flex flex-col items-center gap-4 text-muted-foreground py-12">
+          <Lock className="h-12 w-12" />
+          <div className="text-center">
+            <h3 className="font-semibold text-lg">Access Restricted</h3>
+            <p className="text-sm">You don't have permission to access automation scripts.</p>
+            <p className="text-xs mt-2">Contact an administrator for access.</p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   const handleCreateNew = () => {
     const newScript: AutomationScript = {

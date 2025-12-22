@@ -11,9 +11,10 @@ import { Progress } from "@/components/ui/progress";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useState, useEffect, useRef } from "react";
-import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cable, Upload, AlertTriangle, CheckCircle, RefreshCw, Cloud, Database, ExternalLink, Cpu, Radio, Terminal, HardDrive, MapPin, Home, Shield, User, LogOut, UserPlus } from "lucide-react";
+import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cable, Upload, AlertTriangle, CheckCircle, RefreshCw, Cloud, Database, ExternalLink, Cpu, Radio, Terminal, HardDrive, MapPin, Home, Shield, User, LogOut, UserPlus, Lock } from "lucide-react";
 import { operationsLog, LogEntry, LogType } from "@/lib/operationsLog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { usePermissions } from "@/hooks/usePermissions";
 
 // Google Account Manager Component for standalone deployments
 function GoogleAccountManager() {
@@ -242,6 +243,9 @@ function GoogleAccountManager() {
 }
 
 export function SettingsPanel() {
+  const { hasPermission } = usePermissions();
+  const canAccessSettings = hasPermission('system_settings');
+  
   const queryClient = useQueryClient();
   const [unsavedChanges, setUnsavedChanges] = useState(false);
   const [firmwareFile, setFirmwareFile] = useState<File | null>(null);
@@ -710,6 +714,22 @@ export function SettingsPanel() {
       setFirmwareFile(null);
     }, 5000);
   };
+
+  // Show permission denied if user doesn't have access
+  if (!canAccessSettings) {
+    return (
+      <div className="h-full flex items-center justify-center p-6 bg-background">
+        <div className="flex flex-col items-center gap-4 text-muted-foreground">
+          <Lock className="h-12 w-12" />
+          <div className="text-center">
+            <h3 className="font-semibold text-lg">Access Restricted</h3>
+            <p className="text-sm">You don't have permission to access system settings.</p>
+            <p className="text-xs mt-2">Contact an administrator for access.</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full overflow-y-auto p-6 bg-background">

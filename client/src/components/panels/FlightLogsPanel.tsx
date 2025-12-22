@@ -27,12 +27,14 @@ import {
   Trash2,
   CheckCircle,
   XCircle,
-  Loader2
+  Loader2,
+  Lock
 } from "lucide-react";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { format } from "date-fns";
+import { usePermissions } from "@/hooks/usePermissions";
 
 interface FlightSession {
   id: number;
@@ -123,6 +125,8 @@ const mockTelemetryData = [
 ];
 
 export function FlightLogsPanel() {
+  const { hasPermission } = usePermissions();
+  const canDeleteRecords = hasPermission('delete_records');
   const [selectedSession, setSelectedSession] = useState<FlightSession | null>(null);
   const [logFilter, setLogFilter] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -251,37 +255,39 @@ export function FlightLogsPanel() {
                           <Badge variant={session.status === 'completed' ? 'default' : 'outline'} className="text-[10px]">
                             {session.status}
                           </Badge>
-                          {deleteConfirmId === session.id ? (
-                            <div className="flex gap-1">
+                          {canDeleteRecords && (
+                            deleteConfirmId === session.id ? (
+                              <div className="flex gap-1">
+                                <Button 
+                                  size="icon" 
+                                  variant="destructive" 
+                                  className="h-5 w-5"
+                                  onClick={(e) => { e.stopPropagation(); handleDeleteSession(session.id); }}
+                                  data-testid={`button-confirm-delete-${session.id}`}
+                                >
+                                  <CheckCircle className="h-3 w-3" />
+                                </Button>
+                                <Button 
+                                  size="icon" 
+                                  variant="outline" 
+                                  className="h-5 w-5"
+                                  onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(null); }}
+                                  data-testid={`button-cancel-delete-${session.id}`}
+                                >
+                                  <XCircle className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            ) : (
                               <Button 
                                 size="icon" 
-                                variant="destructive" 
-                                className="h-5 w-5"
-                                onClick={(e) => { e.stopPropagation(); handleDeleteSession(session.id); }}
-                                data-testid={`button-confirm-delete-${session.id}`}
+                                variant="ghost" 
+                                className="h-5 w-5 text-muted-foreground hover:text-red-500"
+                                onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(session.id); }}
+                                data-testid={`button-delete-flight-${session.id}`}
                               >
-                                <CheckCircle className="h-3 w-3" />
+                                <Trash2 className="h-3 w-3" />
                               </Button>
-                              <Button 
-                                size="icon" 
-                                variant="outline" 
-                                className="h-5 w-5"
-                                onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(null); }}
-                                data-testid={`button-cancel-delete-${session.id}`}
-                              >
-                                <XCircle className="h-3 w-3" />
-                              </Button>
-                            </div>
-                          ) : (
-                            <Button 
-                              size="icon" 
-                              variant="ghost" 
-                              className="h-5 w-5 text-muted-foreground hover:text-red-500"
-                              onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(session.id); }}
-                              data-testid={`button-delete-flight-${session.id}`}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
+                            )
                           )}
                         </div>
                       </div>
