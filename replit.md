@@ -36,10 +36,18 @@ Preferred communication style: Simple, everyday language.
 - **Onboard Mode**: Set `DEVICE_ROLE=ONBOARD` environment variable when running on Raspberry Pi; automatically skips drone selection and connects to local MAVLink at `/dev/ttyACM0`
 - Runtime configuration available via `/api/runtime-config` endpoint
 
+### Standalone Deployment
+This application is fully portable and can be deployed without Replit:
+- **No database required** - uses local JSON files in `./data` directory
+- **Environment template**: Copy `.env.example` to `.env` and customize
+- **Google integration optional** - set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` for cloud backup
+- **Browser auto-launch optional** - set `NO_BROWSER=1` to disable
+
 ### Deployment Scripts
 - **Windows**: `start-windows.bat` - Double-click to launch the ground control station
 - **Linux**: `start-linux.sh` - Run with `./start-linux.sh` to launch
 - **Raspberry Pi (Onboard)**: `start-pi-onboard.sh` - Run with `sudo ./start-pi-onboard.sh` for onboard mode
+- All scripts: Install dependencies, build, and start the production server
 
 ### Key Features
 - **Multi-drone management**: Connect and control multiple drones from a single ground station with drone selection screen after login, real-time status display for all drones on map, individual geofencing per drone, and TopBar logo click to switch between drones
