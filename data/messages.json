@@ -62,5 +62,44 @@
     "originalContent": "whats up",
     "deletedAt": "2025-12-22T02:49:00.763Z",
     "deletedBy": null
+  },
+  {
+    "id": "1766372109329-f17u5fqco",
+    "senderId": "1",
+    "senderName": "admin",
+    "senderRole": "admin",
+    "content": "hello",
+    "recipientId": "1766370467555",
+    "recipientName": "Mickymouse",
+    "timestamp": "2025-12-22T02:55:09.329Z",
+    "editedAt": null,
+    "deleted": false
+  },
+  {
+    "id": "1766372112026-6sf7rhv3p",
+    "senderId": "1",
+    "senderName": "admin",
+    "senderRole": "admin",
+    "content": "d",
+    "recipientId": null,
+    "recipientName": null,
+    "timestamp": "2025-12-22T02:55:12.026Z",
+    "editedAt": null,
+    "deleted": false
+  },
+  {
+    "id": "1766372122599-juufof360",
+    "senderId": "1",
+    "senderName": "admin",
+    "senderRole": "admin",
+    "content": "[Message deleted]",
+    "recipientId": "1766370467555",
+    "recipientName": "Mickymouse",
+    "timestamp": "2025-12-22T02:55:22.599Z",
+    "editedAt": null,
+    "deleted": true,
+    "originalContent": "@viewer1 hello",
+    "deletedAt": "2025-12-22T02:55:29.779Z",
+    "deletedBy": null
   }
 ]
