@@ -11,7 +11,8 @@ import {
   Terminal,
   Shield,
   LayoutDashboard,
-  Route
+  Route,
+  BookOpen
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,7 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
     { id: "payload", icon: Volume2, label: "Speaker" },
     { id: "feeds", icon: Video, label: "Camera Feeds" },
     { id: "logs", icon: FileText, label: "Flight Logs" },
+    { id: "logbook", icon: BookOpen, label: "Logbook" },
     { id: "scripts", icon: Code, label: "Automation" },
     { id: "terminal", icon: Terminal, label: "Commands" },
     { id: "users", icon: Users, label: "User Access" },

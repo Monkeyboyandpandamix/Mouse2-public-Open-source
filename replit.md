@@ -86,6 +86,13 @@ This application is fully portable and can be deployed without Replit:
 - GUI configuration with immediate "Apply Now" functionality, dark/light theme support with automatic persistence, and Google Sheets backup for tabs/panels/widgets
 - **GUI Permission Controls**: Only administrators can create and delete custom tabs/widgets; all users with configure_gui_advanced permission can reorder and toggle visibility
 - **Flight Path Optimizer**: Intelligent route optimization panel that analyzes missions based on real-time weather data (Open-Meteo API), terrain considerations, and waypoint ordering. Provides actionable suggestions for battery savings, time reduction, headwind avoidance, altitude optimization, and safety improvements with estimated savings percentages. Requires mission_planning permission.
+- **Flight Logbook**: Comprehensive mission logging system that automatically records and categorizes all drone flights. Features include:
+  - Mission categorization (training, survey, inspection, emergency, delivery, monitoring, other)
+  - Searchable and filterable flight history with date ranges and category filters
+  - Flight replay with animated map playback showing drone position, telemetry data, and progress slider
+  - Editable flight records with mission names, ratings (1-5 stars), tags, weather conditions, notes, and incident reports
+  - Statistics dashboard showing total flights, flight time, distance, monthly comparisons, and category breakdown
+  - CSV export of filtered logbook data for external analysis
 
 ### Hardware Configuration
 - **Companion Computer**: Raspberry Pi 5 (16GB) running Trixie 13.2

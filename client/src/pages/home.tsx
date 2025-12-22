@@ -10,6 +10,7 @@ import { MissionPlanningPanel } from "@/components/panels/MissionPlanningPanel";
 import { TrackingPanel } from "@/components/panels/TrackingPanel";
 import { SpeakerPanel } from "@/components/panels/SpeakerPanel";
 import { FlightLogsPanel } from "@/components/panels/FlightLogsPanel";
+import { FlightLogbookPanel } from "@/components/panels/FlightLogbookPanel";
 import { AutomationPanel } from "@/components/panels/AutomationPanel";
 import { TerminalCommandsPanel } from "@/components/panels/TerminalCommandsPanel";
 import { UserAccessPanel } from "@/components/panels/UserAccessPanel";
@@ -319,6 +320,12 @@ export default function Home() {
         return (
           <div className="flex-1 relative overflow-hidden">
             <FlightLogsPanel />
+          </div>
+        );
+      case "logbook":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <FlightLogbookPanel />
           </div>
         );
       case "scripts":

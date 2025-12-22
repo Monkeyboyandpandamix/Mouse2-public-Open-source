@@ -62,11 +62,38 @@ export const flightSessionSchema = z.object({
   videoFilePath: z.string().nullable().optional(),
   logFilePath: z.string().nullable().optional(),
   model3dFilePath: z.string().nullable().optional(),
+  category: z.enum(['training', 'survey', 'inspection', 'emergency', 'delivery', 'monitoring', 'other']).nullable().optional(),
+  missionName: z.string().nullable().optional(),
+  pilotName: z.string().nullable().optional(),
+  pilotId: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  weatherConditions: z.string().nullable().optional(),
+  windSpeedAvg: z.number().nullable().optional(),
+  temperatureC: z.number().nullable().optional(),
+  rating: z.number().min(1).max(5).nullable().optional(),
+  tags: z.array(z.string()).nullable().optional(),
+  takeoffLocation: z.string().nullable().optional(),
+  landingLocation: z.string().nullable().optional(),
+  batteryStartPercent: z.number().nullable().optional(),
+  batteryEndPercent: z.number().nullable().optional(),
+  waypointsCompleted: z.number().nullable().optional(),
+  waypointsTotal: z.number().nullable().optional(),
+  incidentReport: z.string().nullable().optional(),
 });
 
 export const insertFlightSessionSchema = flightSessionSchema.omit({ id: true });
 export type InsertFlightSession = z.infer<typeof insertFlightSessionSchema>;
 export type FlightSession = z.infer<typeof flightSessionSchema>;
+
+export const FLIGHT_CATEGORIES = [
+  { value: 'training', label: 'Training', color: 'bg-blue-500' },
+  { value: 'survey', label: 'Survey/Mapping', color: 'bg-green-500' },
+  { value: 'inspection', label: 'Inspection', color: 'bg-orange-500' },
+  { value: 'emergency', label: 'Emergency Response', color: 'bg-red-500' },
+  { value: 'delivery', label: 'Delivery', color: 'bg-purple-500' },
+  { value: 'monitoring', label: 'Monitoring', color: 'bg-cyan-500' },
+  { value: 'other', label: 'Other', color: 'bg-gray-500' },
+] as const;
 
 // Flight Events
 export const flightEventSchema = z.object({
