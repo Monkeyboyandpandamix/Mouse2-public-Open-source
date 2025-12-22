@@ -10,13 +10,26 @@ import * as crypto from 'crypto';
 const DATA_DIR = './data';
 const AUTH_FILE = path.join(DATA_DIR, 'google_auth.json');
 
-// Encryption key derived from environment or generated machine-specific
-const ENCRYPTION_KEY = process.env.GOOGLE_AUTH_ENCRYPTION_KEY || 
-  crypto.createHash('sha256').update(
-    process.env.SESSION_SECRET || 
-    process.env.REPL_ID || 
-    'mouse-gcs-default-key'
-  ).digest();
+// Encryption key derived from environment - REQUIRED for secure operation
+// Falls back to REPL_ID for development in Replit environment
+function getEncryptionKey(): Buffer {
+  const keySource = process.env.GOOGLE_AUTH_ENCRYPTION_KEY || 
+                    process.env.SESSION_SECRET || 
+                    process.env.REPL_ID;
+  
+  if (!keySource) {
+    console.warn('WARNING: No encryption key configured for Google OAuth tokens.');
+    console.warn('Set GOOGLE_AUTH_ENCRYPTION_KEY or SESSION_SECRET for production security.');
+    // Use a machine-derived key for development only
+    return crypto.createHash('sha256').update(
+      crypto.randomBytes(32).toString('hex') + Date.now().toString()
+    ).digest();
+  }
+  
+  return crypto.createHash('sha256').update(keySource).digest();
+}
+
+const ENCRYPTION_KEY = getEncryptionKey();
 
 function encrypt(text: string): string {
   const iv = crypto.randomBytes(16);
@@ -426,13 +439,33 @@ export async function checkConnectionStatus(): Promise<{
   const store = loadAuthStore();
   const activeAccount = store.accounts.find(a => a.id === store.activeAccountId);
   
-  // Only report as connected if we have a valid account with tokens
-  const hasValidAccount = activeAccount && activeAccount.accessToken && activeAccount.refreshToken;
+  // Connected if we have a valid access token (refresh token optional but recommended)
+  const hasValidAccessToken = activeAccount && activeAccount.accessToken;
+  const hasRefreshToken = activeAccount?.refreshToken;
+  const isTokenExpired = activeAccount && activeAccount.expiresAt < Date.now();
+  
+  // Determine connection status and any warnings
+  let connected = false;
+  let error: string | undefined;
+  
+  if (hasValidAccessToken) {
+    if (isTokenExpired && !hasRefreshToken) {
+      connected = false;
+      error = 'Session expired. Please sign in again.';
+    } else {
+      connected = true;
+      if (!hasRefreshToken) {
+        error = 'No refresh token. Session will expire and require re-authentication.';
+      }
+    }
+  } else if (store.accounts.length > 0) {
+    error = 'No active account selected.';
+  }
   
   return {
     mode: 'standalone',
-    connected: !!hasValidAccount,
-    email: hasValidAccount ? activeAccount.email : undefined,
+    connected,
+    email: connected && activeAccount ? activeAccount.email : undefined,
     accounts: store.accounts.map(a => ({
       id: a.id,
       email: a.email,
@@ -440,6 +473,6 @@ export async function checkConnectionStatus(): Promise<{
       picture: a.picture,
       active: a.id === store.activeAccountId
     })),
-    error: store.accounts.length > 0 && !hasValidAccount ? 'Session expired. Please sign in again.' : undefined
+    error
   };
 }
