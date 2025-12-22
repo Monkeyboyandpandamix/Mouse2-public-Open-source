@@ -17,7 +17,7 @@ import { GeofencingPanel } from "@/components/panels/GeofencingPanel";
 import { GUIConfigPanel } from "@/components/panels/GUIConfigPanel";
 import { DroneSelectionPanel } from "@/components/panels/DroneSelectionPanel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertTriangle, X, Eye, ArrowLeft } from "lucide-react";
+import { AlertTriangle, X, Eye, ArrowLeft, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Drone } from "@shared/schema";
 
@@ -129,6 +129,62 @@ export default function Home() {
 
   // Preview mode state (for skipping drone selection)
   const [previewMode, setPreviewMode] = useState(false);
+  
+  // Onboard mode (running on Raspberry Pi)
+  const [isOnboard, setIsOnboard] = useState(false);
+  const [runtimeConfigLoaded, setRuntimeConfigLoaded] = useState(false);
+  
+  // Fetch runtime config to detect if running on Pi
+  useEffect(() => {
+    fetch('/api/runtime-config')
+      .then(res => res.json())
+      .then(config => {
+        setIsOnboard(config.isOnboard);
+        setRuntimeConfigLoaded(true);
+        
+        // If running on Pi, auto-create and select local drone
+        if (config.isOnboard && !selectedDrone) {
+          const onboardDrone: Drone = {
+            id: -1, // Special ID for onboard drone
+            name: "Local Drone",
+            callsign: "ONBOARD",
+            model: "M.O.U.S.E",
+            status: "offline",
+            connectionType: "mavlink",
+            connectionString: config.mavlinkDefaults?.connectionString || "/dev/ttyACM0",
+            latitude: 36.0957,
+            longitude: -79.4378,
+            altitude: 0,
+            heading: 0,
+            batteryPercent: 100,
+            signalStrength: 0,
+            gpsStatus: "no_fix",
+            currentMissionId: null,
+            currentWaypointIndex: null,
+            geofenceEnabled: false,
+            geofenceData: null,
+            motorCount: 4,
+            hasGripper: true,
+            hasCamera: true,
+            hasThermal: true,
+            hasLidar: true,
+            maxSpeed: 15,
+            maxAltitude: 120,
+            rtlAltitude: 50,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            lastSeen: null,
+          };
+          setSelectedDrone(onboardDrone);
+          localStorage.setItem("mouse_selected_drone", JSON.stringify(onboardDrone));
+          // Dispatch event so all components know a drone is selected
+          window.dispatchEvent(new CustomEvent("drone-selected", { detail: onboardDrone }));
+        }
+      })
+      .catch(() => {
+        setRuntimeConfigLoaded(true); // Continue even if fetch fails
+      });
+  }, []);
 
   // Mock drone for preview mode
   const previewDrone: Drone = {
@@ -163,8 +219,21 @@ export default function Home() {
     lastSeen: null,
   };
 
-  // If logged in but no drone selected, show drone selection panel (unless preview mode)
-  if (!selectedDrone && !previewMode) {
+  // Wait for runtime config before deciding what to show
+  if (!runtimeConfigLoaded) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Initializing M.O.U.S.E. Ground Control...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // If logged in but no drone selected, show drone selection panel (unless preview mode or onboard mode)
+  // Note: isOnboard mode auto-selects local drone in useEffect, so this should rarely trigger on Pi
+  if (!selectedDrone && !previewMode && !isOnboard) {
     return (
       <DroneSelectionPanel 
         onDroneSelected={(drone) => setSelectedDrone(drone)} 
@@ -364,6 +433,16 @@ export default function Home() {
             <ArrowLeft className="h-4 w-4 mr-1" />
             Back to Drone Selection
           </Button>
+        </div>
+      )}
+      
+      {/* Onboard Mode Banner (running on Raspberry Pi) */}
+      {isOnboard && selectedDrone?.id === -1 && (
+        <div className="fixed top-0 left-0 right-0 z-[250] bg-green-600 text-white px-4 py-2 flex items-center justify-center">
+          <div className="flex items-center gap-2">
+            <Cpu className="h-4 w-4" />
+            <span className="text-sm font-medium">Onboard Mode - Running on Raspberry Pi (Local MAVLink: {selectedDrone.connectionString})</span>
+          </div>
         </div>
       )}
 

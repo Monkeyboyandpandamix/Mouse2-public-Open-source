@@ -30,8 +30,14 @@ Preferred communication style: Simple, everyday language.
 - **Tables**: Settings, missions, waypoints, flight logs, sensor data, motor telemetry, camera settings, drones
 - **Migrations**: Managed via drizzle-kit with output to `./migrations`
 
+### Deployment Modes
+- **Ground Control Mode** (default): Runs on desktop/laptop, shows drone selection screen after login, requires manual drone connection
+- **Onboard Mode**: Set `DEVICE_ROLE=ONBOARD` environment variable when running on Raspberry Pi; automatically skips drone selection and connects to local MAVLink at `/dev/ttyACM0`
+- Runtime configuration available via `/api/runtime-config` endpoint
+
 ### Key Features
 - **Multi-drone management**: Connect and control multiple drones from a single ground station with drone selection screen after login, real-time status display for all drones on map, individual geofencing per drone, and TopBar logo click to switch between drones
+- **Preview mode**: Explore the interface without connecting a real drone by clicking "Preview Control Page" on drone selection
 - Real-time telemetry panel showing altitude, speed, attitude, and motor data
 - Interactive map with all connected drones visible, waypoints, flight path visualization, address search, and hover tooltips showing drone status/battery/GPS/mission
 - Mission planning with waypoint management and actions (hover, photo, drop/pickup payload, RTL)

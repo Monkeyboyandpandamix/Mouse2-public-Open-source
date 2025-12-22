@@ -46,6 +46,21 @@ export async function registerRoutes(
     });
   };
 
+  // Runtime config API - returns device role for Pi vs Ground Control detection
+  app.get("/api/runtime-config", async (req, res) => {
+    const deviceRole = process.env.DEVICE_ROLE || "GROUND"; // Default to ground control
+    const mavlinkDefaults = deviceRole === "ONBOARD" ? {
+      connectionString: "/dev/ttyACM0",
+      baudRate: 115200,
+    } : null;
+    
+    res.json({
+      deviceRole,
+      mavlinkDefaults,
+      isOnboard: deviceRole === "ONBOARD",
+    });
+  });
+
   // Settings API
   app.get("/api/settings/:category", async (req, res) => {
     try {
