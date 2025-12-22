@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { usePermissions } from "@/hooks/usePermissions";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useState, useEffect } from "react";
+import { useState, useEffect, memo } from "react";
 
 interface SidebarProps {
   activeTab: string;
@@ -44,7 +44,7 @@ interface TabConfig {
   isCustom: boolean;
 }
 
-export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
+export const Sidebar = memo(function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
   const { hasPermission, hasAnyPermission, isLoggedIn } = usePermissions();
   const [tabConfig, setTabConfig] = useState<TabConfig[]>([]);
 
@@ -148,4 +148,4 @@ export function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
       </div>
     </TooltipProvider>
   );
-}
+});

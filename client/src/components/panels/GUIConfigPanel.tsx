@@ -21,9 +21,10 @@ import {
   Palette,
   Lock
 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, memo } from "react";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
+import { debouncedLocalStorageSet } from "@/lib/queryClient";
 
 interface TabConfig {
   id: string;
@@ -143,7 +144,7 @@ export function GUIConfigPanel() {
   });
 
   useEffect(() => {
-    localStorage.setItem('mouse_gui_widgets', JSON.stringify(customWidgets));
+    debouncedLocalStorageSet('mouse_gui_widgets', JSON.stringify(customWidgets));
     window.dispatchEvent(new CustomEvent('gui-config-changed', { detail: { widgets: customWidgets } }));
   }, [customWidgets]);
 
@@ -183,12 +184,12 @@ export function GUIConfigPanel() {
   };
 
   useEffect(() => {
-    localStorage.setItem('mouse_gui_tabs', JSON.stringify(tabs));
+    debouncedLocalStorageSet('mouse_gui_tabs', JSON.stringify(tabs));
     window.dispatchEvent(new CustomEvent('gui-config-changed', { detail: { tabs } }));
   }, [tabs]);
 
   useEffect(() => {
-    localStorage.setItem('mouse_gui_panels', JSON.stringify(panels));
+    debouncedLocalStorageSet('mouse_gui_panels', JSON.stringify(panels));
     window.dispatchEvent(new CustomEvent('gui-config-changed', { detail: { panels } }));
   }, [panels]);
 
@@ -343,14 +344,14 @@ export function GUIConfigPanel() {
             <p className="text-muted-foreground">Customize the interface layout and appearance</p>
           </div>
           <div className="flex gap-2 relative z-50">
-            <Button type="button" variant="outline" onClick={() => { console.log('Reset clicked'); resetToDefaults(); }} data-testid="button-reset-gui">
+            <Button type="button" variant="outline" onClick={resetToDefaults} data-testid="button-reset-gui">
               <RotateCcw className="h-4 w-4 mr-2" />
               Reset
             </Button>
-            <Button type="button" variant="secondary" onClick={() => { console.log('Apply clicked'); applyNow(); }} data-testid="button-apply-gui">
+            <Button type="button" variant="secondary" onClick={applyNow} data-testid="button-apply-gui">
               Apply Now
             </Button>
-            <Button type="button" onClick={() => { console.log('Save clicked'); saveSettings(); }} data-testid="button-save-gui">
+            <Button type="button" onClick={saveSettings} data-testid="button-save-gui">
               <Save className="h-4 w-4 mr-2" />
               Save
             </Button>

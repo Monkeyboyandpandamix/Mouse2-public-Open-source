@@ -199,7 +199,9 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           setMessages(prev => {
             // Avoid duplicates
             if (prev.some(m => m.id === data.id)) return prev;
-            return [...prev, data];
+            // Limit messages to prevent memory bloat (keep last 200)
+            const updated = [...prev, data];
+            return updated.length > 200 ? updated.slice(-200) : updated;
           });
         } else if (type === 'message_updated') {
           setMessages(prev => prev.map(m => m.id === data.id ? data : m));
@@ -410,7 +412,8 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
         const message = await res.json();
         setMessages(prev => {
           if (prev.some(m => m.id === message.id)) return prev;
-          return [...prev, message];
+          const updated = [...prev, message];
+          return updated.length > 200 ? updated.slice(-200) : updated;
         });
         setNewMessage(""); // Clear message but KEEP selectedRecipients (persistent)
         setTimeout(() => scrollRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
@@ -430,7 +433,10 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
         editedAt: null,
         deleted: false
       };
-      setMessages(prev => [...prev, message]);
+      setMessages(prev => {
+        const updated = [...prev, message];
+        return updated.length > 200 ? updated.slice(-200) : updated;
+      });
       setNewMessage(""); // Clear message but KEEP selectedRecipients (persistent)
     }
   };
