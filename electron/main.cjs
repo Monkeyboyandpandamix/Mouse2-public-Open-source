@@ -73,7 +73,7 @@ function findAvailablePort(startPort) {
   });
 }
 
-function waitForServer(port, maxAttempts = 30) {
+function waitForServer(port, maxAttempts = 60) {
   return new Promise((resolve, reject) => {
     let attempts = 0;
     const check = () => {
@@ -82,19 +82,20 @@ function waitForServer(port, maxAttempts = 30) {
         if (res.statusCode === 200) {
           resolve();
         } else if (attempts < maxAttempts) {
-          setTimeout(check, 500);
+          setTimeout(check, 250);
         } else {
           reject(new Error('Server health check failed'));
         }
       }).on('error', () => {
         if (attempts < maxAttempts) {
-          setTimeout(check, 500);
+          setTimeout(check, 250);
         } else {
           reject(new Error('Server not responding'));
         }
       });
     };
-    setTimeout(check, 1000);
+    // Start checking immediately, no delay
+    check();
   });
 }
 
@@ -215,14 +216,37 @@ app.whenReady().then(async () => {
   console.log('Starting M.O.U.S.E. Ground Control Station...');
   console.log('Data directory:', getDataPath());
   
+  // Show splash screen immediately for better perceived performance
+  const splashPath = path.join(__dirname, 'splash.html');
+  mainWindow = new BrowserWindow({
+    width: 500,
+    height: 400,
+    frame: false,
+    transparent: false,
+    resizable: false,
+    center: true,
+    backgroundColor: '#1a1a2e',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  });
+  mainWindow.loadFile(splashPath);
+  mainWindow.show();
+  
   try {
     await startServer();
     console.log('Server started successfully');
+    
+    // Close splash and open main window
+    mainWindow.close();
+    createWindow();
   } catch (error) {
     console.error('Failed to start server:', error);
+    dialog.showErrorBox('Startup Error', `Failed to start server: ${error.message}`);
+    app.quit();
+    return;
   }
-  
-  createWindow();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
