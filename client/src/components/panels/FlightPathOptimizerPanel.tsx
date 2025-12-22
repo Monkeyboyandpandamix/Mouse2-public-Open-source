@@ -32,11 +32,14 @@ import {
   Lock,
   Shield,
   Target,
-  Compass
+  Compass,
+  Upload
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
+import type { Drone } from "@shared/schema";
 
 interface WeatherData {
   temperature: number;
@@ -72,8 +75,15 @@ interface OptimizationResult {
   originalBattery: number;
   optimizedBattery: number;
   suggestions: OptimizationSuggestion[];
-  reorderedWaypoints?: number[];
+  reorderedWaypoints?: { id: number; newOrder: number }[];
   altitudeAdjustments?: { waypointId: number; newAltitude: number; reason: string }[];
+  droneConnected: boolean;
+  droneSpecs?: {
+    batteryPercent: number;
+    motorCount: number;
+    maxSpeed: number;
+    batteryCapacityWh: number;
+  };
 }
 
 interface OptimizationSuggestion {
@@ -98,6 +108,7 @@ const DEFAULT_LNG = -79.4378;
 export function FlightPathOptimizerPanel() {
   const { hasPermission } = usePermissions();
   const canOptimize = hasPermission('mission_planning');
+  const queryClient = useQueryClient();
   
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
@@ -108,6 +119,8 @@ export function FlightPathOptimizerPanel() {
   const [missions, setMissions] = useState<Mission[]>([]);
   const [missionsLoading, setMissionsLoading] = useState(true);
   const [weatherError, setWeatherError] = useState<string | null>(null);
+  const [selectedDrone, setSelectedDrone] = useState<Drone | null>(null);
+  const [isApplying, setIsApplying] = useState(false);
   const [optimizationPreferences, setOptimizationPreferences] = useState({
     prioritizeBattery: true,
     prioritizeTime: false,
@@ -116,6 +129,26 @@ export function FlightPathOptimizerPanel() {
     considerTerrain: true,
     optimizeOrder: true
   });
+
+  useEffect(() => {
+    const loadDrone = () => {
+      const saved = localStorage.getItem('mouse_selected_drone');
+      if (saved) {
+        try {
+          setSelectedDrone(JSON.parse(saved));
+        } catch {
+          setSelectedDrone(null);
+        }
+      }
+    };
+    loadDrone();
+    
+    const handleDroneChange = (e: CustomEvent<Drone | null>) => {
+      setSelectedDrone(e.detail);
+    };
+    window.addEventListener('drone-selected' as any, handleDroneChange);
+    return () => window.removeEventListener('drone-selected' as any, handleDroneChange);
+  }, []);
 
   useEffect(() => {
     const fetchMissions = async () => {
@@ -380,21 +413,55 @@ export function FlightPathOptimizerPanel() {
     await new Promise(r => setTimeout(r, 200));
     setAnalysisProgress(100);
 
-    const avgSpeed = 10;
-    const originalTime = totalOriginalDistance / avgSpeed;
-    const batteryPerMeter = 0.001;
+    const droneConnected = !!selectedDrone && selectedDrone.status !== 'offline';
+    const cruiseSpeed = selectedDrone?.maxSpeed || 10;
+    const motorCount = selectedDrone?.motorCount || 4;
+    const batteryPercent = selectedDrone?.batteryPercent || 100;
+    const batteryCapacityWh = 99.9;
+    const motorPowerW = 150;
+    const totalPowerW = motorCount * motorPowerW * 0.6;
     
-    const timeSavingsPercent = suggestions.filter(s => s.type === 'route').length * 5;
-    const batterySavingsPercent = suggestions.filter(s => s.type === 'altitude' || s.type === 'route').length * 3;
+    let totalAltitudeChange = 0;
+    for (let i = 0; i < waypoints.length - 1; i++) {
+      totalAltitudeChange += Math.abs(waypoints[i + 1].altitude - waypoints[i].altitude);
+    }
+    
+    let windFactor = 1.0;
+    if (weatherData) {
+      const windSpeedMs = weatherData.windSpeed * 0.44704;
+      windFactor = 1 + (windSpeedMs / cruiseSpeed) * 0.3;
+    }
+    
+    const originalFlightTimeSeconds = (totalOriginalDistance / cruiseSpeed) * windFactor;
+    const climbEnergyWh = (totalAltitudeChange * 0.01) * motorCount;
+    const flightEnergyWh = (totalPowerW * originalFlightTimeSeconds / 3600) + climbEnergyWh;
+    const originalBatteryUsage = (flightEnergyWh / batteryCapacityWh) * 100;
+    
+    const routeSuggestions = suggestions.filter(s => s.type === 'route').length;
+    const altitudeSuggestions = suggestions.filter(s => s.type === 'altitude').length;
+    const distanceSavingsPercent = routeSuggestions * 5;
+    const altitudeSavingsPercent = altitudeSuggestions * 3;
+    const totalSavingsPercent = Math.min(distanceSavingsPercent + altitudeSavingsPercent, 25);
+    
+    const optimizedDistance = totalOriginalDistance * (1 - distanceSavingsPercent / 100);
+    const optimizedTime = originalFlightTimeSeconds * (1 - distanceSavingsPercent / 100);
+    const optimizedBattery = originalBatteryUsage * (1 - totalSavingsPercent / 100);
 
     setOptimizationResult({
       originalDistance: Math.round(totalOriginalDistance),
-      optimizedDistance: Math.round(totalOriginalDistance * (1 - timeSavingsPercent/100)),
-      originalTime: Math.round(originalTime),
-      optimizedTime: Math.round(originalTime * (1 - timeSavingsPercent/100)),
-      originalBattery: Math.round(totalOriginalDistance * batteryPerMeter * 100) / 100,
-      optimizedBattery: Math.round(totalOriginalDistance * batteryPerMeter * (1 - batterySavingsPercent/100) * 100) / 100,
-      suggestions
+      optimizedDistance: Math.round(optimizedDistance),
+      originalTime: Math.round(originalFlightTimeSeconds),
+      optimizedTime: Math.round(optimizedTime),
+      originalBattery: Math.round(originalBatteryUsage * 10) / 10,
+      optimizedBattery: Math.round(optimizedBattery * 10) / 10,
+      suggestions,
+      droneConnected,
+      droneSpecs: {
+        batteryPercent,
+        motorCount,
+        maxSpeed: cruiseSpeed,
+        batteryCapacityWh
+      }
     });
 
     setIsAnalyzing(false);
@@ -437,7 +504,82 @@ export function FlightPathOptimizerPanel() {
         )
       };
     });
-    toast.success("Optimization applied to mission");
+    toast.success("Optimization marked for application");
+  };
+
+  const applyOptimizationsToMission = async () => {
+    if (!optimizationResult || !selectedMission) {
+      toast.error("No optimization to apply");
+      return;
+    }
+
+    setIsApplying(true);
+    
+    try {
+      const appliedSuggestions = optimizationResult.suggestions.filter(s => s.applied);
+      
+      if (appliedSuggestions.length === 0) {
+        toast.error("No optimizations selected to apply");
+        setIsApplying(false);
+        return;
+      }
+
+      const waypoints = [...selectedMission.waypoints].sort((a, b) => a.order - b.order);
+      
+      for (const suggestion of appliedSuggestions) {
+        if (suggestion.id === 'terrain-clearance') {
+          for (const wp of waypoints) {
+            if (wp.altitude < 30) {
+              await fetch(`/api/waypoints/${wp.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ altitude: 30 })
+              });
+            }
+          }
+        }
+        
+        if (suggestion.id === 'altitude-optimization') {
+          for (const wp of waypoints) {
+            if (wp.altitude > 100) {
+              const optimalAlt = Math.max(60, wp.altitude * 0.7);
+              await fetch(`/api/waypoints/${wp.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ altitude: Math.round(optimalAlt) })
+              });
+            }
+          }
+        }
+      }
+
+      queryClient.invalidateQueries({ queryKey: ['/api/missions'] });
+      queryClient.invalidateQueries({ queryKey: ['/api/missions', selectedMission.id, 'waypoints'] });
+      
+      window.dispatchEvent(new CustomEvent('mission-updated', { 
+        detail: { missionId: selectedMission.id } 
+      }));
+
+      toast.success("Optimizations applied to mission successfully!");
+      
+      const updatedMissions = await fetch('/api/missions').then(r => r.json());
+      const updatedMission = updatedMissions.find((m: any) => m.id === selectedMission.id);
+      if (updatedMission) {
+        const wpResponse = await fetch(`/api/missions/${updatedMission.id}/waypoints`);
+        const updatedWaypoints = wpResponse.ok ? await wpResponse.json() : [];
+        setSelectedMission({ ...updatedMission, waypoints: updatedWaypoints });
+        setMissions(prev => prev.map(m => 
+          m.id === updatedMission.id ? { ...m, waypoints: updatedWaypoints } : m
+        ));
+      }
+      
+      setOptimizationResult(null);
+    } catch (error) {
+      console.error('Failed to apply optimizations:', error);
+      toast.error("Failed to apply optimizations");
+    } finally {
+      setIsApplying(false);
+    }
   };
 
   const applyAllSuggestions = () => {
@@ -450,7 +592,7 @@ export function FlightPathOptimizerPanel() {
         suggestions: prev.suggestions.map(s => ({ ...s, applied: true }))
       };
     });
-    toast.success("All optimizations applied to mission");
+    toast.success("All optimizations selected - click 'Apply to Mission' to save");
   };
 
   if (!canOptimize) {
@@ -689,12 +831,62 @@ export function FlightPathOptimizerPanel() {
                 <Button variant="outline" onClick={() => setOptimizationResult(null)} data-testid="button-clear-results">
                   Clear
                 </Button>
-                <Button onClick={applyAllSuggestions} data-testid="button-apply-all">
+                <Button variant="outline" onClick={applyAllSuggestions} data-testid="button-apply-all">
                   <CheckCircle className="h-4 w-4 mr-2" />
-                  Apply All
+                  Select All
+                </Button>
+                <Button 
+                  onClick={applyOptimizationsToMission} 
+                  disabled={isApplying || !optimizationResult?.suggestions.some(s => s.applied)}
+                  data-testid="button-apply-to-mission"
+                >
+                  {isApplying ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Applying...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="h-4 w-4 mr-2" />
+                      Apply to Mission
+                    </>
+                  )}
                 </Button>
               </div>
             </div>
+
+            {optimizationResult.droneConnected === false && (
+              <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg" data-testid="drone-status-warning">
+                <p className="text-sm text-amber-500 flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4" />
+                  Drone not connected - calculations based on default specifications
+                </p>
+              </div>
+            )}
+
+            {optimizationResult.droneSpecs && (
+              <div className="mb-4 p-3 bg-muted/30 rounded-lg" data-testid="drone-specs-display">
+                <p className="text-xs text-muted-foreground mb-2">Calculation Parameters:</p>
+                <div className="grid grid-cols-4 gap-2 text-xs">
+                  <div>
+                    <span className="text-muted-foreground">Battery:</span>
+                    <span className="ml-1 font-medium" data-testid="text-battery-percent">{optimizationResult.droneSpecs.batteryPercent}%</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Motors:</span>
+                    <span className="ml-1 font-medium" data-testid="text-motor-count">{optimizationResult.droneSpecs.motorCount}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Max Speed:</span>
+                    <span className="ml-1 font-medium" data-testid="text-max-speed">{optimizationResult.droneSpecs.maxSpeed} m/s</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Capacity:</span>
+                    <span className="ml-1 font-medium" data-testid="text-battery-capacity">{optimizationResult.droneSpecs.batteryCapacityWh} Wh</span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <div className="grid grid-cols-3 gap-4">
               <Card>
