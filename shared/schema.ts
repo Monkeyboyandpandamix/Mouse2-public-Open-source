@@ -255,14 +255,23 @@ export const insertOfflineBacklogSchema = offlineBacklogSchema.omit({ id: true, 
 export type InsertOfflineBacklog = z.infer<typeof insertOfflineBacklogSchema>;
 export type OfflineBacklog = z.infer<typeof offlineBacklogSchema>;
 
+// Message Recipient (for multi-recipient DMs)
+export const messageRecipientSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  type: z.enum(['user', 'group']), // 'user' for individual, 'group' for group
+});
+export type MessageRecipient = z.infer<typeof messageRecipientSchema>;
+
 // User Messages (Team Communication)
 export const userMessageSchema = z.object({
   id: z.string(),
   senderId: z.string(),
   senderName: z.string(),
   senderRole: z.string(),
-  recipientId: z.string().nullable().optional(), // null = broadcast to all
-  recipientName: z.string().nullable().optional(),
+  recipientId: z.string().nullable().optional(), // Legacy: single recipient (null = broadcast)
+  recipientName: z.string().nullable().optional(), // Legacy: single recipient name
+  recipients: z.array(messageRecipientSchema).nullable().optional(), // New: multi-recipient support
   content: z.string(),
   originalContent: z.string().nullable().optional(), // Preserved original before edit
   timestamp: z.string(),
@@ -275,6 +284,16 @@ export const userMessageSchema = z.object({
 export const insertUserMessageSchema = userMessageSchema.omit({ id: true, timestamp: true, editedAt: true, deleted: true });
 export type InsertUserMessage = z.infer<typeof insertUserMessageSchema>;
 export type UserMessage = z.infer<typeof userMessageSchema>;
+
+// User Group (for group messaging)
+export const userGroupSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  memberIds: z.array(z.string()), // Array of user IDs
+  createdAt: z.string(),
+  createdBy: z.string(),
+});
+export type UserGroup = z.infer<typeof userGroupSchema>;
 
 // Chat User (extracted from messages for autocomplete)
 export const chatUserSchema = z.object({
