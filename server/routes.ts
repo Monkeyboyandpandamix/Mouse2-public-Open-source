@@ -11,6 +11,8 @@ import {
   insertMotorTelemetrySchema,
   insertCameraSettingsSchema,
   insertDroneSchema,
+  insertMediaAssetSchema,
+  insertOfflineBacklogSchema,
 } from "@shared/schema";
 import { ZodError } from "zod";
 import { syncDataToSheets, getOrCreateBackupSpreadsheet, getSpreadsheetUrl } from "./googleSheets";
@@ -524,6 +526,168 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete drone" });
+    }
+  });
+
+  // Media Assets API
+  app.get("/api/media", async (req, res) => {
+    try {
+      const { droneId, sessionId, status } = req.query;
+      let assets;
+      
+      if (droneId) {
+        assets = await storage.getMediaAssetsByDrone(parseInt(droneId as string));
+      } else if (sessionId) {
+        assets = await storage.getMediaAssetsBySession(parseInt(sessionId as string));
+      } else if (status === "pending") {
+        assets = await storage.getPendingMediaAssets();
+      } else {
+        assets = await storage.getMediaAssetsByDrone(0, 100);
+      }
+      
+      res.json(assets);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch media assets" });
+    }
+  });
+
+  app.get("/api/media/:id", async (req, res) => {
+    try {
+      const asset = await storage.getMediaAsset(parseInt(req.params.id));
+      if (!asset) {
+        return res.status(404).json({ error: "Media asset not found" });
+      }
+      res.json(asset);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch media asset" });
+    }
+  });
+
+  app.post("/api/media", async (req, res) => {
+    try {
+      const validated = insertMediaAssetSchema.parse(req.body);
+      const asset = await storage.createMediaAsset(validated);
+      broadcast("media_captured", asset);
+      res.json(asset);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        res.status(400).json({ error: error.errors });
+      } else {
+        res.status(500).json({ error: "Failed to create media asset" });
+      }
+    }
+  });
+
+  app.patch("/api/media/:id", async (req, res) => {
+    try {
+      const asset = await storage.updateMediaAsset(parseInt(req.params.id), req.body);
+      if (!asset) {
+        return res.status(404).json({ error: "Media asset not found" });
+      }
+      res.json(asset);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update media asset" });
+    }
+  });
+
+  app.delete("/api/media/:id", async (req, res) => {
+    try {
+      await storage.deleteMediaAsset(parseInt(req.params.id));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete media asset" });
+    }
+  });
+
+  // Offline Backlog API - for syncing data when drone reconnects
+  app.get("/api/backlog", async (req, res) => {
+    try {
+      const { droneId } = req.query;
+      const backlog = await storage.getPendingBacklog(
+        droneId ? parseInt(droneId as string) : undefined
+      );
+      res.json(backlog);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch backlog" });
+    }
+  });
+
+  app.post("/api/backlog", async (req, res) => {
+    try {
+      const validated = insertOfflineBacklogSchema.parse(req.body);
+      const item = await storage.createBacklogItem(validated);
+      res.json(item);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        res.status(400).json({ error: error.errors });
+      } else {
+        res.status(500).json({ error: "Failed to create backlog item" });
+      }
+    }
+  });
+
+  app.post("/api/backlog/sync", async (req, res) => {
+    try {
+      const { items } = req.body;
+      
+      if (!Array.isArray(items)) {
+        return res.status(400).json({ error: "Items must be an array" });
+      }
+      
+      const results = [];
+      for (const item of items) {
+        try {
+          if (item.dataType === "telemetry") {
+            await storage.createFlightLog(item.data);
+          } else if (item.dataType === "sensor") {
+            await storage.createSensorData(item.data);
+          } else if (item.dataType === "media") {
+            await storage.createMediaAsset(item.data);
+          }
+          
+          if (item.id) {
+            await storage.markBacklogSynced(item.id);
+          }
+          results.push({ id: item.id, status: "synced" });
+        } catch (err: any) {
+          results.push({ id: item.id, status: "failed", error: err.message });
+        }
+      }
+      
+      broadcast("backlog_synced", { count: results.filter(r => r.status === "synced").length });
+      res.json({ success: true, results });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to sync backlog" });
+    }
+  });
+
+  app.patch("/api/backlog/:id/synced", async (req, res) => {
+    try {
+      await storage.markBacklogSynced(parseInt(req.params.id));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to mark as synced" });
+    }
+  });
+
+  app.delete("/api/backlog/:id", async (req, res) => {
+    try {
+      await storage.deleteBacklogItem(parseInt(req.params.id));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete backlog item" });
+    }
+  });
+
+  app.delete("/api/backlog/clear", async (req, res) => {
+    try {
+      const { droneId } = req.query;
+      await storage.clearSyncedBacklog(
+        droneId ? parseInt(droneId as string) : undefined
+      );
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to clear synced backlog" });
     }
   });
 

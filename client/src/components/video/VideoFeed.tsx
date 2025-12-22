@@ -892,38 +892,74 @@ export function VideoFeed() {
       }
 
       if (imageData) {
+        const timestamp = Date.now();
+        const filename = `snapshot_${timestamp}.png`;
+        const base64Data = imageData.split(',')[1];
+        
         // Create download link
         const link = document.createElement('a');
-        link.download = `mouse_snapshot_${Date.now()}.png`;
+        link.download = `mouse_${filename}`;
         link.href = imageData;
         link.click();
         
-        // Upload to Google Drive (send base64 data)
-        const base64Data = imageData.split(',')[1];
+        // Get current telemetry for location tagging
+        const currentTelemetry = (window as any).__currentTelemetry || {};
+        
+        // Save to database first
+        let driveFileId: string | undefined;
+        let driveLink: string | undefined;
         
         try {
-          const response = await fetch('/api/drive/upload', {
+          // Upload to Google Drive
+          const driveResponse = await fetch('/api/drive/upload', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              fileName: `snapshot_${Date.now()}.png`,
+              fileName: filename,
               mimeType: 'image/png',
               data: base64Data
             })
           });
           
-          if (response.ok) {
-            const result = await response.json();
-            toast.success("Snapshot saved and uploaded to Google Drive", {
-              description: result.webViewLink ? "Click to view" : undefined,
-              action: result.webViewLink ? {
-                label: "Open",
-                onClick: () => window.open(result.webViewLink, '_blank')
-              } : undefined
-            });
-          } else {
-            toast.success("Snapshot saved locally (Drive upload pending)");
+          if (driveResponse.ok) {
+            const driveResult = await driveResponse.json();
+            driveFileId = driveResult.fileId;
+            driveLink = driveResult.webViewLink;
           }
+        } catch {
+          // Drive upload failed, continue with database save
+        }
+        
+        // Save metadata to database
+        try {
+          await fetch('/api/media', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: thermalMode ? 'thermal_photo' : 'photo',
+              filename,
+              mimeType: 'image/png',
+              fileSize: Math.ceil(base64Data.length * 0.75),
+              driveFileId,
+              driveLink,
+              latitude: currentTelemetry.latitude || null,
+              longitude: currentTelemetry.longitude || null,
+              altitude: currentTelemetry.altitude || null,
+              heading: currentTelemetry.heading || null,
+              cameraMode: activeCam,
+              zoomLevel: zoom[0],
+              syncStatus: driveFileId ? 'synced' : 'pending',
+              capturedAt: new Date().toISOString(),
+            })
+          });
+          
+          toast.success(driveFileId ? "Snapshot saved to database and Google Drive" : "Snapshot saved to database", {
+            description: driveLink ? "Click to view" : undefined,
+            action: driveLink ? {
+              label: "Open",
+              onClick: () => window.open(driveLink, '_blank')
+            } : undefined
+          });
         } catch {
           toast.success("Snapshot saved locally");
         }
@@ -959,29 +995,36 @@ export function VideoFeed() {
           
           mediaRecorder.onstop = async () => {
             const blob = new Blob(chunks, { type: 'video/webm' });
+            const timestamp = Date.now();
+            const filename = `recording_${timestamp}.webm`;
+            const duration = recordingDuration;
             
             // Download locally
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
-            link.download = `mouse_recording_${Date.now()}.webm`;
+            link.download = `mouse_${filename}`;
             link.href = url;
             link.click();
             URL.revokeObjectURL(url);
             
-            // Upload to Google Drive
+            // Get current telemetry for location tagging
+            const currentTelemetry = (window as any).__currentTelemetry || {};
+            
+            // Upload to Google Drive and save to database
             setIsUploading(true);
             try {
-              // Convert blob to base64
               const reader = new FileReader();
               reader.onload = async () => {
                 const base64Data = (reader.result as string).split(',')[1];
+                let driveFileId: string | undefined;
+                let driveLink: string | undefined;
                 
                 try {
                   const response = await fetch('/api/drive/upload', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                      fileName: `recording_${Date.now()}.webm`,
+                      fileName: filename,
                       mimeType: 'video/webm',
                       data: base64Data
                     })
@@ -989,16 +1032,44 @@ export function VideoFeed() {
                   
                   if (response.ok) {
                     const result = await response.json();
-                    toast.success("Recording uploaded to Google Drive", {
-                      description: result.webViewLink ? "Click to view" : undefined,
-                      action: result.webViewLink ? {
-                        label: "Open",
-                        onClick: () => window.open(result.webViewLink, '_blank')
-                      } : undefined
-                    });
-                  } else {
-                    toast.success("Recording saved locally (Drive upload failed)");
+                    driveFileId = result.fileId;
+                    driveLink = result.webViewLink;
                   }
+                } catch {
+                  // Drive upload failed, continue with database save
+                }
+                
+                // Save metadata to database
+                try {
+                  await fetch('/api/media', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      type: thermalMode ? 'thermal_video' : 'video',
+                      filename,
+                      mimeType: 'video/webm',
+                      fileSize: blob.size,
+                      duration,
+                      driveFileId,
+                      driveLink,
+                      latitude: currentTelemetry.latitude || null,
+                      longitude: currentTelemetry.longitude || null,
+                      altitude: currentTelemetry.altitude || null,
+                      heading: currentTelemetry.heading || null,
+                      cameraMode: activeCam,
+                      zoomLevel: zoom[0],
+                      syncStatus: driveFileId ? 'synced' : 'pending',
+                      capturedAt: new Date().toISOString(),
+                    })
+                  });
+                  
+                  toast.success(driveFileId ? "Recording saved to database and Google Drive" : "Recording saved to database", {
+                    description: driveLink ? "Click to view" : undefined,
+                    action: driveLink ? {
+                      label: "Open",
+                      onClick: () => window.open(driveLink, '_blank')
+                    } : undefined
+                  });
                 } catch {
                   toast.success("Recording saved locally");
                 } finally {

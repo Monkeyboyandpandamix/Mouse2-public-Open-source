@@ -1,4 +1,4 @@
-import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, Polygon, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, Polygon, useMap, Tooltip } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { useEffect, useState, useCallback, type MouseEvent } from "react";
@@ -62,6 +62,25 @@ const DroneIcon = L.divIcon({
   iconSize: [32, 32],
   iconAnchor: [16, 16],
 });
+
+// Calculate camera footprint radius based on altitude (meters)
+// Uses approximate 60-degree FOV (typical for drone cameras)
+const calculateCameraFootprint = (altitude: number): number => {
+  if (!altitude || altitude <= 0) return 0;
+  // tan(30°) ≈ 0.577 for 60° FOV
+  return Math.round(altitude * 0.577);
+};
+
+// Calculate map zoom level based on drone altitude for optimal view
+const getOptimalZoom = (altitude: number): number => {
+  if (altitude < 10) return 19;
+  if (altitude < 30) return 18;
+  if (altitude < 50) return 17;
+  if (altitude < 100) return 16;
+  if (altitude < 200) return 15;
+  if (altitude < 500) return 14;
+  return 13;
+};
 
 // Dynamic drone icon based on status
 const createDroneIcon = (status: string, isSelected: boolean) => {
@@ -492,6 +511,26 @@ export function MapInterface() {
                 position={dronePos} 
                 icon={createDroneIcon(drone.status, isSelected)}
               >
+                <Tooltip 
+                  permanent={false} 
+                  direction="top" 
+                  offset={[0, -12]}
+                  className="leaflet-tooltip-drone"
+                >
+                  <div className="font-mono text-[10px] leading-tight whitespace-nowrap">
+                    <strong>{drone.callsign}</strong>
+                    <span className="mx-1">|</span>
+                    ALT: {drone.altitude?.toFixed(0) ?? '--'}m
+                    <span className="mx-1">|</span>
+                    BAT: {drone.batteryPercent ?? '--'}%
+                    {drone.status === 'flying' && (
+                      <>
+                        <span className="mx-1">|</span>
+                        <span className="text-blue-500">FLYING</span>
+                      </>
+                    )}
+                  </div>
+                </Tooltip>
                 <Popup>
                   <div className="font-sans text-sm min-w-[200px]">
                     <div className="flex items-center justify-between mb-2">
@@ -561,6 +600,30 @@ export function MapInterface() {
                   </div>
                 </Popup>
               </Marker>
+              
+              {/* Camera Footprint Visualization - shows camera field of view based on altitude */}
+              {isSelected && drone.altitude && drone.altitude > 0 && hasPosition && (
+                <Circle
+                  center={dronePos}
+                  radius={calculateCameraFootprint(drone.altitude)}
+                  pathOptions={{
+                    color: '#06b6d4',
+                    fillColor: '#06b6d4',
+                    fillOpacity: 0.15,
+                    weight: 1,
+                    dashArray: '3, 6',
+                  }}
+                >
+                  <Popup>
+                    <div className="font-mono text-xs">
+                      <strong>Camera Footprint</strong><br/>
+                      Altitude: {drone.altitude?.toFixed(1)}m<br/>
+                      Coverage: ~{calculateCameraFootprint(drone.altitude) * 2}m diameter<br/>
+                      <span className="text-gray-500">Based on 60° FOV</span>
+                    </div>
+                  </Popup>
+                </Circle>
+              )}
               
               {/* Drone's Geofence Zone (if enabled and has data) */}
               {drone.geofenceEnabled && geofence && (

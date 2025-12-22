@@ -9,6 +9,8 @@ import {
   motorTelemetry,
   cameraSettings,
   drones,
+  mediaAssets,
+  offlineBacklog,
   type Settings,
   type InsertSettings,
   type Mission,
@@ -25,6 +27,10 @@ import {
   type InsertCameraSettings,
   type Drone,
   type InsertDrone,
+  type MediaAsset,
+  type InsertMediaAsset,
+  type OfflineBacklog,
+  type InsertOfflineBacklog,
 } from "@shared/schema";
 import { eq, desc } from "drizzle-orm";
 
@@ -79,6 +85,24 @@ export interface IStorage {
   updateDrone(id: number, drone: Partial<InsertDrone>): Promise<Drone | undefined>;
   updateDroneLocation(id: number, latitude: number, longitude: number, altitude: number, heading: number): Promise<Drone | undefined>;
   deleteDrone(id: number): Promise<void>;
+  
+  // Media Assets
+  getMediaAsset(id: number): Promise<MediaAsset | undefined>;
+  getMediaAssetsByDrone(droneId: number, limit?: number): Promise<MediaAsset[]>;
+  getMediaAssetsBySession(sessionId: number): Promise<MediaAsset[]>;
+  getPendingMediaAssets(): Promise<MediaAsset[]>;
+  createMediaAsset(asset: InsertMediaAsset): Promise<MediaAsset>;
+  updateMediaAsset(id: number, asset: Partial<InsertMediaAsset>): Promise<MediaAsset | undefined>;
+  deleteMediaAsset(id: number): Promise<void>;
+  
+  // Offline Backlog
+  getBacklogItem(id: number): Promise<OfflineBacklog | undefined>;
+  getPendingBacklog(droneId?: number): Promise<OfflineBacklog[]>;
+  createBacklogItem(item: InsertOfflineBacklog): Promise<OfflineBacklog>;
+  updateBacklogItem(id: number, item: Partial<InsertOfflineBacklog>): Promise<OfflineBacklog | undefined>;
+  markBacklogSynced(id: number): Promise<void>;
+  deleteBacklogItem(id: number): Promise<void>;
+  clearSyncedBacklog(droneId?: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -267,6 +291,112 @@ export class DatabaseStorage implements IStorage {
 
   async deleteDrone(id: number): Promise<void> {
     await db.delete(drones).where(eq(drones.id, id));
+  }
+
+  // Media Assets
+  async getMediaAsset(id: number): Promise<MediaAsset | undefined> {
+    const result = await db.select().from(mediaAssets).where(eq(mediaAssets.id, id)).limit(1);
+    return result[0];
+  }
+
+  async getMediaAssetsByDrone(droneId: number, limit: number = 100): Promise<MediaAsset[]> {
+    return await db
+      .select()
+      .from(mediaAssets)
+      .where(eq(mediaAssets.droneId, droneId))
+      .orderBy(desc(mediaAssets.capturedAt))
+      .limit(limit);
+  }
+
+  async getMediaAssetsBySession(sessionId: number): Promise<MediaAsset[]> {
+    return await db
+      .select()
+      .from(mediaAssets)
+      .where(eq(mediaAssets.sessionId, sessionId))
+      .orderBy(desc(mediaAssets.capturedAt));
+  }
+
+  async getPendingMediaAssets(): Promise<MediaAsset[]> {
+    return await db
+      .select()
+      .from(mediaAssets)
+      .where(eq(mediaAssets.syncStatus, "pending"))
+      .orderBy(mediaAssets.capturedAt);
+  }
+
+  async createMediaAsset(asset: InsertMediaAsset): Promise<MediaAsset> {
+    const result = await db.insert(mediaAssets).values(asset).returning();
+    return result[0];
+  }
+
+  async updateMediaAsset(id: number, asset: Partial<InsertMediaAsset>): Promise<MediaAsset | undefined> {
+    const result = await db.update(mediaAssets).set(asset).where(eq(mediaAssets.id, id)).returning();
+    return result[0];
+  }
+
+  async deleteMediaAsset(id: number): Promise<void> {
+    await db.delete(mediaAssets).where(eq(mediaAssets.id, id));
+  }
+
+  // Offline Backlog
+  async getBacklogItem(id: number): Promise<OfflineBacklog | undefined> {
+    const result = await db.select().from(offlineBacklog).where(eq(offlineBacklog.id, id)).limit(1);
+    return result[0];
+  }
+
+  async getPendingBacklog(droneId?: number): Promise<OfflineBacklog[]> {
+    let query = db
+      .select()
+      .from(offlineBacklog)
+      .where(eq(offlineBacklog.syncStatus, "pending"))
+      .orderBy(desc(offlineBacklog.priority), offlineBacklog.recordedAt);
+    
+    if (droneId !== undefined) {
+      return await db
+        .select()
+        .from(offlineBacklog)
+        .where(eq(offlineBacklog.droneId, droneId))
+        .orderBy(desc(offlineBacklog.priority), offlineBacklog.recordedAt);
+    }
+    
+    return await query;
+  }
+
+  async createBacklogItem(item: InsertOfflineBacklog): Promise<OfflineBacklog> {
+    const result = await db.insert(offlineBacklog).values(item).returning();
+    return result[0];
+  }
+
+  async updateBacklogItem(id: number, item: Partial<InsertOfflineBacklog>): Promise<OfflineBacklog | undefined> {
+    const result = await db
+      .update(offlineBacklog)
+      .set({ ...item, lastSyncAttempt: new Date() })
+      .where(eq(offlineBacklog.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async markBacklogSynced(id: number): Promise<void> {
+    await db
+      .update(offlineBacklog)
+      .set({ syncStatus: "synced", syncedAt: new Date() })
+      .where(eq(offlineBacklog.id, id));
+  }
+
+  async deleteBacklogItem(id: number): Promise<void> {
+    await db.delete(offlineBacklog).where(eq(offlineBacklog.id, id));
+  }
+
+  async clearSyncedBacklog(droneId?: number): Promise<void> {
+    if (droneId !== undefined) {
+      await db
+        .delete(offlineBacklog)
+        .where(eq(offlineBacklog.droneId, droneId));
+    } else {
+      await db
+        .delete(offlineBacklog)
+        .where(eq(offlineBacklog.syncStatus, "synced"));
+    }
   }
 }
 

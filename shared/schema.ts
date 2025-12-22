@@ -219,3 +219,67 @@ export const drones = pgTable("drones", {
 export const insertDroneSchema = createInsertSchema(drones).omit({ id: true, createdAt: true, updatedAt: true, lastSeen: true });
 export type InsertDrone = z.infer<typeof insertDroneSchema>;
 export type Drone = typeof drones.$inferSelect;
+
+// Media Assets (Photos/Videos captured by drone)
+export const mediaAssets = pgTable("media_assets", {
+  id: serial("id").primaryKey(),
+  droneId: integer("drone_id").references(() => drones.id, { onDelete: "set null" }),
+  sessionId: integer("session_id").references(() => flightSessions.id, { onDelete: "set null" }),
+  type: text("type").notNull(), // 'photo', 'video', 'thermal_photo', 'thermal_video'
+  filename: text("filename").notNull(),
+  storagePath: text("storage_path"), // Local file path or object storage key
+  driveFileId: text("drive_file_id"), // Google Drive file ID if uploaded
+  driveLink: text("drive_link"), // Google Drive web view link
+  mimeType: text("mime_type").notNull(),
+  fileSize: integer("file_size"), // bytes
+  duration: integer("duration"), // seconds, for video
+  
+  // Location at time of capture
+  latitude: real("latitude"),
+  longitude: real("longitude"),
+  altitude: real("altitude"),
+  heading: real("heading"),
+  
+  // Camera metadata
+  cameraMode: text("camera_mode"), // 'hd', 'thermal', 'fpv'
+  zoomLevel: real("zoom_level"),
+  
+  // Sync status
+  syncStatus: text("sync_status").notNull().default("synced"), // 'pending', 'syncing', 'synced', 'failed'
+  syncError: text("sync_error"),
+  
+  capturedAt: timestamp("captured_at").defaultNow().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertMediaAssetSchema = createInsertSchema(mediaAssets).omit({ id: true, createdAt: true });
+export type InsertMediaAsset = z.infer<typeof insertMediaAssetSchema>;
+export type MediaAsset = typeof mediaAssets.$inferSelect;
+
+// Offline Data Backlog (queued when drone is disconnected)
+export const offlineBacklog = pgTable("offline_backlog", {
+  id: serial("id").primaryKey(),
+  droneId: integer("drone_id").references(() => drones.id, { onDelete: "cascade" }),
+  dataType: text("data_type").notNull(), // 'telemetry', 'media', 'event', 'sensor'
+  data: json("data").notNull(), // The actual data payload
+  priority: integer("priority").notNull().default(1), // Higher = more urgent (1-10)
+  
+  // For media, reference the local file
+  localFilePath: text("local_file_path"),
+  fileChecksum: text("file_checksum"), // MD5/SHA256 for integrity
+  
+  // Sync tracking
+  syncStatus: text("sync_status").notNull().default("pending"), // 'pending', 'syncing', 'synced', 'failed'
+  syncAttempts: integer("sync_attempts").notNull().default(0),
+  lastSyncAttempt: timestamp("last_sync_attempt"),
+  syncError: text("sync_error"),
+  
+  // Timestamps
+  recordedAt: timestamp("recorded_at").notNull(), // When data was originally captured
+  queuedAt: timestamp("queued_at").defaultNow().notNull(),
+  syncedAt: timestamp("synced_at"),
+});
+
+export const insertOfflineBacklogSchema = createInsertSchema(offlineBacklog).omit({ id: true, queuedAt: true, syncedAt: true });
+export type InsertOfflineBacklog = z.infer<typeof insertOfflineBacklogSchema>;
+export type OfflineBacklog = typeof offlineBacklog.$inferSelect;
