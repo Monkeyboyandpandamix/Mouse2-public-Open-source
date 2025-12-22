@@ -54,15 +54,18 @@ interface CustomWidget {
 const defaultTabs: TabConfig[] = [
   { id: "map", name: "Map View", icon: "Map", visible: true, order: 0, isCustom: false },
   { id: "mission", name: "Mission Plan", icon: "Navigation", visible: true, order: 1, isCustom: false },
-  { id: "tracking", name: "Object Track", icon: "Target", visible: true, order: 2, isCustom: false },
-  { id: "geofence", name: "Geofencing", icon: "Shield", visible: true, order: 3, isCustom: false },
-  { id: "payload", name: "Speaker", icon: "Volume2", visible: true, order: 4, isCustom: false },
-  { id: "feeds", name: "Camera Feeds", icon: "Video", visible: true, order: 5, isCustom: false },
-  { id: "logs", name: "Flight Logs", icon: "FileText", visible: true, order: 6, isCustom: false },
-  { id: "scripts", name: "Automation", icon: "Code", visible: true, order: 7, isCustom: false },
-  { id: "terminal", name: "Commands", icon: "Terminal", visible: true, order: 8, isCustom: false },
-  { id: "users", name: "User Access", icon: "Users", visible: true, order: 9, isCustom: false },
-  { id: "settings", name: "Settings", icon: "Settings", visible: true, order: 10, isCustom: false },
+  { id: "optimizer", name: "Path Optimizer", icon: "Route", visible: true, order: 2, isCustom: false },
+  { id: "tracking", name: "Object Track", icon: "Target", visible: true, order: 3, isCustom: false },
+  { id: "geofence", name: "Geofencing", icon: "Shield", visible: true, order: 4, isCustom: false },
+  { id: "payload", name: "Speaker", icon: "Volume2", visible: true, order: 5, isCustom: false },
+  { id: "feeds", name: "Camera Feeds", icon: "Video", visible: true, order: 6, isCustom: false },
+  { id: "logs", name: "Flight Logs", icon: "FileText", visible: true, order: 7, isCustom: false },
+  { id: "logbook", name: "Logbook", icon: "BookOpen", visible: true, order: 8, isCustom: false },
+  { id: "scripts", name: "Automation", icon: "Code", visible: true, order: 9, isCustom: false },
+  { id: "terminal", name: "Commands", icon: "Terminal", visible: true, order: 10, isCustom: false },
+  { id: "users", name: "User Access", icon: "Users", visible: true, order: 11, isCustom: false },
+  { id: "guiconfig", name: "GUI Config", icon: "LayoutDashboard", visible: true, order: 12, isCustom: false },
+  { id: "settings", name: "Settings", icon: "Settings", visible: true, order: 13, isCustom: false },
 ];
 
 const defaultPanels: PanelConfig[] = [
@@ -78,7 +81,20 @@ export function GUIConfigPanel() {
   const canCreateDelete = isAdmin();
   const [tabs, setTabs] = useState<TabConfig[]>(() => {
     const saved = localStorage.getItem('mouse_gui_tabs');
-    return saved ? JSON.parse(saved) : defaultTabs;
+    if (saved) {
+      const savedTabs: TabConfig[] = JSON.parse(saved);
+      // Merge any missing default tabs into saved config
+      const savedIds = new Set(savedTabs.map(t => t.id));
+      const missingTabs = defaultTabs.filter(t => !savedIds.has(t.id));
+      if (missingTabs.length > 0) {
+        const maxOrder = Math.max(...savedTabs.map(t => t.order), -1);
+        const merged = [...savedTabs, ...missingTabs.map((t, i) => ({ ...t, order: maxOrder + 1 + i }))];
+        localStorage.setItem('mouse_gui_tabs', JSON.stringify(merged));
+        return merged;
+      }
+      return savedTabs;
+    }
+    return defaultTabs;
   });
 
   const [panels, setPanels] = useState<PanelConfig[]>(() => {
