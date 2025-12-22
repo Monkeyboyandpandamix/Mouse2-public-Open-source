@@ -49,11 +49,16 @@ This application is fully portable and can be deployed without Replit:
 - **Raspberry Pi (Onboard)**: `start-pi-onboard.sh` - Run with `sudo ./start-pi-onboard.sh` for onboard mode
 - All scripts: Install dependencies, build, and start the production server
 
+### Standalone Build Scripts
+- **Linux/macOS**: `scripts/build-standalone.sh` - Creates a complete distribution package with all dependencies
+- **Windows PowerShell**: `scripts/build-standalone.ps1` - Creates a Windows-ready distribution package
+- Output: `standalone/mouse-gcs-1.0.0/` folder with pre-installed dependencies, launchers, and archives (.tar.gz, .zip)
+
 ### Key Features
 - **Multi-drone management**: Connect and control multiple drones from a single ground station with drone selection screen after login, real-time status display for all drones on map, individual geofencing per drone, and TopBar logo click to switch between drones
 - **Preview mode**: Explore the interface without connecting a real drone by clicking "Preview Control Page" on drone selection
 - Real-time telemetry panel showing altitude, speed, attitude, and motor data
-- Interactive map with all connected drones visible, waypoints, flight path visualization, address search, and hover tooltips showing drone status/battery/GPS/mission
+- Interactive map with all connected drones visible, waypoints, flight path visualization from operator location, address search, hover tooltips showing drone status/battery/GPS/mission, and map controls for centering on drone or operator
 - Mission planning with waypoint management and actions (hover, photo, drop/pickup payload, open gripper, RTL)
 - Advanced AI-powered object tracking using TensorFlow.js COCO-SSD model for detecting stationary and moving objects (people, cars, trucks, motorcycles, bicycles), with multi-object tracking via IoU-based Hungarian assignment, velocity prediction for temporary occlusions, temporal confidence smoothing (0.7 EMA), and fallback motion detection for offline/degraded scenarios
 - Audio broadcast system with Pi GPIO speaker, USB speaker, and Orange Cube+ buzzer support

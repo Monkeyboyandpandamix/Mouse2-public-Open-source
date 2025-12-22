@@ -19,11 +19,12 @@ A comprehensive ground control station for autonomous drone control with Orange 
 9. [User Management](#user-management)
 10. [Operating Instructions](#operating-instructions)
 11. [Flight Controls Reference](#flight-controls-reference)
-12. [Settings Configuration](#settings-configuration)
-13. [Hardware Configuration](#hardware-configuration)
-14. [Project Structure](#project-structure)
-15. [Troubleshooting & Common Errors](#troubleshooting--common-errors)
-16. [Dependency Issues](#dependency-issues)
+12. [Map Controls Reference](#map-controls-reference)
+13. [Settings Configuration](#settings-configuration)
+14. [Hardware Configuration](#hardware-configuration)
+15. [Project Structure](#project-structure)
+16. [Troubleshooting & Common Errors](#troubleshooting--common-errors)
+17. [Dependency Issues](#dependency-issues)
 
 ---
 
@@ -150,20 +151,55 @@ npm run build
 npm start
 ```
 
-### Option 3: Creating a Standalone Executable
+### Option 3: Creating a Standalone Distribution Package
 
-To create a portable executable for distribution:
+Use the included build scripts to create a complete, ready-to-distribute package:
+
+**Linux/macOS:**
+```bash
+# Run the standalone build script
+chmod +x scripts/build-standalone.sh
+./scripts/build-standalone.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+# Run the PowerShell build script
+.\scripts\build-standalone.ps1
+```
+
+The build scripts will:
+1. Install all dependencies
+2. Build the application
+3. Create a `standalone/mouse-gcs-1.0.0/` folder with everything needed
+4. Generate distribution archives (`.tar.gz` for Linux, `.zip` for Windows)
+
+**Distribution package contents:**
+- `index.cjs` - Compiled server application
+- `public/` - Frontend web application
+- `node_modules/` - Pre-installed dependencies
+- `start-windows.bat` - Windows launcher
+- `start-linux.sh` - Linux/macOS launcher
+- `start-pi-onboard.sh` - Raspberry Pi launcher
+- `.env.example` - Configuration template
+- `INSTALL.txt` - Quick installation guide
+- `data/` - Data storage directory (auto-created)
+
+**To deploy the package:**
+1. Copy the archive to target machine
+2. Extract the archive
+3. Install Node.js v18+ if not already installed
+4. Run the appropriate start script for your OS
+
+### Option 4: Creating a Single Executable (Advanced)
+
+To create a single portable executable using `pkg`:
 
 **Windows (.exe):**
 ```bash
-# Install pkg globally
 npm install -g pkg
-
-# Build the executable
 npm run build
 pkg dist/index.cjs --targets node18-win-x64 --output mouse-gcs.exe
-
-# The executable can be distributed with the 'dist/public' folder
 ```
 
 **Linux:**
@@ -173,13 +209,13 @@ npm run build
 pkg dist/index.cjs --targets node18-linux-x64 --output mouse-gcs
 ```
 
-**Note:** When distributing executables, include:
+**Note:** When distributing single executables, include:
 - The executable file
 - The `dist/public/` folder (frontend assets)
 - The `data/` folder (or it will be created automatically)
 - A `.env` file with configuration
 
-### Option 4: Docker Deployment
+### Option 5: Docker Deployment
 
 ```dockerfile
 # Dockerfile
@@ -449,6 +485,46 @@ Create additional roles beyond the three built-in ones:
 | Red DISARM button | System armed (motors hot!) |
 | Pulsing ABORT | Emergency stop active |
 | Amber RTL | Returning to base |
+
+---
+
+## Map Controls Reference
+
+### Map View Controls (Bottom Right)
+
+| Button | Icon | Function | Description |
+|--------|------|----------|-------------|
+| **Zoom In** | + | Increase zoom level | Zoom in on the map |
+| **Zoom Out** | - | Decrease zoom level | Zoom out on the map |
+| **Center on Drone** | Crosshair | Center map on drone | Centers the map on the selected drone's GPS position |
+| **Center on Operator** | Person | Center map on operator | Centers the map on your current location |
+| **Reset View** | Rotate | Reset map view | Resets to drone position or default location |
+
+### Map Layers (Top Right)
+
+| Layer | Description |
+|-------|-------------|
+| **Dark** | Dark-themed street map (default) |
+| **Satellite** | Satellite imagery |
+| **Street** | Standard street map |
+
+### Map Features
+
+- **Drone Markers**: All connected drones shown with status indicators
+- **Home Position**: Green "H" marker at operator's location
+- **Waypoints**: Numbered markers for mission waypoints
+- **Flight Path**: Dashed line from operator to waypoints
+- **Geofence Zones**: Colored circles/polygons showing restricted areas
+- **ADS-B Aircraft**: Aircraft traffic overlay (when enabled)
+- **Address Search**: Search bar to find locations by address
+
+### Map Interactions
+
+- **Pan**: Click and drag to move the map
+- **Zoom**: Scroll wheel or +/- buttons
+- **Click Waypoint**: View waypoint details
+- **Click Drone**: View drone status and telemetry
+- **Hover Drone**: Quick status tooltip
 
 ---
 
