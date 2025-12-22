@@ -91,7 +91,14 @@ function ZoomControls() {
         variant="ghost" 
         size="icon" 
         className="h-8 w-8"
-        onClick={() => map.setView([34.0522, -118.2437], 16)}
+        onClick={() => {
+          if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+              (pos) => map.setView([pos.coords.latitude, pos.coords.longitude], 16),
+              () => map.setView([36.0957, -79.4378], 16)
+            );
+          }
+        }}
       >
         <RotateCcw className="h-4 w-4" />
       </Button>
@@ -100,8 +107,30 @@ function ZoomControls() {
 }
 
 export function MissionMap({ waypoints, homePosition, onMapClick, clickEnabled = false, showClickHint = false }: MissionMapProps) {
-  const defaultPosition: [number, number] = homePosition || [34.0522, -118.2437];
+  const [currentLocation, setCurrentLocation] = useState<[number, number] | null>(null);
   const [mapType, setMapType] = useState<'dark' | 'satellite' | 'street'>('dark');
+
+  // Get user's actual GPS location on mount
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setCurrentLocation([position.coords.latitude, position.coords.longitude]);
+        },
+        (error) => {
+          console.log("Geolocation error:", error.message);
+          // Fallback to Burlington, NC if geolocation fails
+          setCurrentLocation([36.0957, -79.4378]);
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    } else {
+      // Fallback to Burlington, NC
+      setCurrentLocation([36.0957, -79.4378]);
+    }
+  }, []);
+
+  const defaultPosition: [number, number] = homePosition || currentLocation || [36.0957, -79.4378];
 
   const getTileUrl = () => {
     switch(mapType) {

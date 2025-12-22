@@ -352,13 +352,37 @@ export function MissionPlanningPanel() {
         <div className="p-3 border-b border-border">
           <h3 className="font-bold font-sans text-sm mb-2">Flight Missions</h3>
           <Button className="w-full" size="sm" onClick={() => {
-            createMission.mutate({
-              name: `Mission ${missions.length + 1}`,
-              description: "New mission",
-              homeLatitude: 34.0522,
-              homeLongitude: -118.2437,
-              homeAltitude: 0,
-            });
+            // Use current location or default to Burlington, NC
+            if (navigator.geolocation) {
+              navigator.geolocation.getCurrentPosition(
+                (pos) => {
+                  createMission.mutate({
+                    name: `Mission ${missions.length + 1}`,
+                    description: "New mission",
+                    homeLatitude: pos.coords.latitude,
+                    homeLongitude: pos.coords.longitude,
+                    homeAltitude: 0,
+                  });
+                },
+                () => {
+                  createMission.mutate({
+                    name: `Mission ${missions.length + 1}`,
+                    description: "New mission",
+                    homeLatitude: 36.0957,
+                    homeLongitude: -79.4378,
+                    homeAltitude: 0,
+                  });
+                }
+              );
+            } else {
+              createMission.mutate({
+                name: `Mission ${missions.length + 1}`,
+                description: "New mission",
+                homeLatitude: 36.0957,
+                homeLongitude: -79.4378,
+                homeAltitude: 0,
+              });
+            }
           }}>
             <Plus className="h-4 w-4 mr-2" />
             New Mission

@@ -1,7 +1,11 @@
 import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, Polygon, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useState, useCallback, type MouseEvent } from "react";
+
+// Default location - Burlington, NC
+const DEFAULT_LAT = 36.0957;
+const DEFAULT_LNG = -79.4378;
 import { Search, Map as MapIcon, Layers, ZoomIn, ZoomOut, RotateCcw, Crosshair, Plane } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -98,19 +102,39 @@ interface Aircraft {
   verticalRate: number;
 }
 
+// Simulated aircraft near Burlington, NC
 const simulatedAircraft: Aircraft[] = [
-  { id: "UAL123", callsign: "UAL123", lat: 34.0650, lon: -118.2300, altitude: 3500, speed: 250, heading: 180, threat: 'low', verticalRate: -500 },
-  { id: "SWA456", callsign: "SWA456", lat: 34.0400, lon: -118.2600, altitude: 2800, speed: 180, heading: 45, threat: 'medium', verticalRate: 0 },
-  { id: "N789AB", callsign: "N789AB", lat: 34.0550, lon: -118.2380, altitude: 800, speed: 95, heading: 270, threat: 'high', verticalRate: -200 },
-  { id: "DAL789", callsign: "DAL789", lat: 34.0800, lon: -118.2100, altitude: 5200, speed: 300, heading: 135, threat: 'low', verticalRate: 1000 },
+  { id: "UAL123", callsign: "UAL123", lat: DEFAULT_LAT + 0.012, lon: DEFAULT_LNG + 0.013, altitude: 3500, speed: 250, heading: 180, threat: 'low', verticalRate: -500 },
+  { id: "SWA456", callsign: "SWA456", lat: DEFAULT_LAT - 0.012, lon: DEFAULT_LNG - 0.016, altitude: 2800, speed: 180, heading: 45, threat: 'medium', verticalRate: 0 },
+  { id: "N789AB", callsign: "N789AB", lat: DEFAULT_LAT + 0.003, lon: DEFAULT_LNG + 0.006, altitude: 800, speed: 95, heading: 270, threat: 'high', verticalRate: -200 },
+  { id: "DAL789", callsign: "DAL789", lat: DEFAULT_LAT + 0.028, lon: DEFAULT_LNG + 0.034, altitude: 5200, speed: 300, heading: 135, threat: 'low', verticalRate: 1000 },
 ];
 
 function ZoomControls() {
   const map = useMap();
   
   const handleCenterOnDrone = () => {
-    map.setView([34.0522, -118.2437], 18);
-    toast.success("Centered on drone position");
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          map.setView([pos.coords.latitude, pos.coords.longitude], 18);
+          toast.success("Centered on drone position");
+        },
+        () => {
+          map.setView([DEFAULT_LAT, DEFAULT_LNG], 18);
+          toast.success("Centered on default position");
+        }
+      );
+    }
+  };
+
+  const handleResetView = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => map.setView([pos.coords.latitude, pos.coords.longitude], 16),
+        () => map.setView([DEFAULT_LAT, DEFAULT_LNG], 16)
+      );
+    }
   };
   
   return (
@@ -146,7 +170,7 @@ function ZoomControls() {
         variant="ghost" 
         size="icon" 
         className="h-8 w-8"
-        onClick={() => map.setView([34.0522, -118.2437], 16)}
+        onClick={handleResetView}
         title="Reset View"
       >
         <RotateCcw className="h-4 w-4" />
@@ -168,12 +192,24 @@ function MapCenterUpdater({ searchResult }: { searchResult: {lat: number; lon: n
 }
 
 export function MapInterface() {
-  const position: [number, number] = [34.0522, -118.2437];
+  const [currentLocation, setCurrentLocation] = useState<[number, number]>([DEFAULT_LAT, DEFAULT_LNG]);
+  
+  // Get user's actual GPS location on mount
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => setCurrentLocation([pos.coords.latitude, pos.coords.longitude]),
+        () => console.log("Using default map location")
+      );
+    }
+  }, []);
+  
+  const position: [number, number] = currentLocation;
   const flightPath: [number, number][] = [
-    [34.0522, -118.2437],
-    [34.0525, -118.2440],
-    [34.0530, -118.2435],
-    [34.0528, -118.2425],
+    currentLocation,
+    [currentLocation[0] + 0.0003, currentLocation[1] - 0.0003],
+    [currentLocation[0] + 0.0008, currentLocation[1] + 0.0002],
+    [currentLocation[0] + 0.0006, currentLocation[1] + 0.0012],
   ];
 
   const [mapType, setMapType] = useState<'dark' | 'satellite' | 'street'>('dark');

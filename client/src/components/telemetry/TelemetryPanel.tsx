@@ -30,8 +30,23 @@ export function TelemetryPanel() {
   const [altitude, setAltitude] = useState(0);
   const [groundSpeed, setGroundSpeed] = useState(0);
   const [flightMode, setFlightMode] = useState<'idle' | 'takeoff' | 'flying' | 'landing' | 'rtl'>('idle');
-  const [position, setPosition] = useState({ lat: 34.052235, lng: -118.243683 });
-  const [homePosition, setHomePosition] = useState({ lat: 34.052235, lng: -118.243683 });
+  // Default location - Burlington, NC
+  const [position, setPosition] = useState({ lat: 36.0957, lng: -79.4378 });
+  const [homePosition, setHomePosition] = useState({ lat: 36.0957, lng: -79.4378 });
+  
+  // Get user's actual GPS location on mount
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          setPosition(loc);
+          setHomePosition(loc);
+        },
+        () => console.log("Using default telemetry location")
+      );
+    }
+  }, []);
   const [distToHome, setDistToHome] = useState(0);
   
   // Use refs to avoid stale closures

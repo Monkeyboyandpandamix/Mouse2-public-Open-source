@@ -46,6 +46,10 @@ interface GeofenceZone {
 // Helper to check if zone is a custom/polygon type (for legacy compatibility)
 const isCustomZone = (type: string) => type === "custom" || type === "polygon";
 
+// Default location - Burlington, NC
+const DEFAULT_LAT = 36.0957;
+const DEFAULT_LNG = -79.4378;
+
 const defaultZones: GeofenceZone[] = [
   {
     id: "home_zone",
@@ -53,7 +57,7 @@ const defaultZones: GeofenceZone[] = [
     type: "circle",
     enabled: true,
     action: "rtl",
-    center: { lat: 34.0522, lng: -118.2437 },
+    center: { lat: DEFAULT_LAT, lng: DEFAULT_LNG },
     radius: 500,
     maxAltitude: 120,
     minAltitude: 0
@@ -121,8 +125,18 @@ export function GeofencingPanel() {
   });
 
   const [drawingPoints, setDrawingPoints] = useState<{ lat: number; lng: number }[]>([]);
-  const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>({ lat: 34.0522, lng: -118.2437 });
+  const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>({ lat: DEFAULT_LAT, lng: DEFAULT_LNG });
   const [mapStyle, setMapStyle] = useState<"standard" | "dark" | "satellite">("standard");
+
+  // Get user's actual GPS location on mount
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => setMapCenter({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => console.log("Using default location")
+      );
+    }
+  }, []);
 
   // Map tile configurations
   const mapTiles = {

@@ -287,8 +287,8 @@ const defaultCommands: SystemCommand[] = [
     category: "navigation",
     command: "python3 /opt/mouse/nav/dead_reckoning.py --calibrate --lat ${lat} --lon ${lon}",
     parameters: [
-      { name: "lat", description: "Current known latitude", default: "34.0522" },
-      { name: "lon", description: "Current known longitude", default: "-118.2437" }
+      { name: "lat", description: "Current known latitude", default: "36.0957" },
+      { name: "lon", description: "Current known longitude", default: "-79.4378" }
     ]
   },
   {
@@ -421,8 +421,8 @@ const defaultCommands: SystemCommand[] = [
     category: "navigation",
     command: "mavlink_shell 'wp add ${lat} ${lon} ${alt}'",
     parameters: [
-      { name: "lat", description: "Latitude", default: "34.0522" },
-      { name: "lon", description: "Longitude", default: "-118.2437" },
+      { name: "lat", description: "Latitude", default: "36.0957" },
+      { name: "lon", description: "Longitude", default: "-79.4378" },
       { name: "alt", description: "Altitude (m)", default: "30" }
     ]
   },
