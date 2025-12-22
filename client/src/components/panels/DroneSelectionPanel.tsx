@@ -52,17 +52,19 @@ const gpsStatusLabels: Record<string, { label: string; color: string }> = {
 export function DroneSelectionPanel({ onDroneSelected }: DroneSelectionPanelProps) {
   const queryClient = useQueryClient();
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [editingDrone, setEditingDrone] = useState<Drone | null>(null);
   const [newDrone, setNewDrone] = useState({
     name: "",
     callsign: "",
-    model: "Custom",
+    model: "M.O.U.S.E",
     connectionType: "mavlink",
     connectionString: "",
     motorCount: 4,
-    hasGripper: false,
+    hasGripper: true,
     hasCamera: true,
-    hasThermal: false,
-    hasLidar: false,
+    hasThermal: true,
+    hasLidar: true,
     maxSpeed: 15,
     maxAltitude: 120,
     rtlAltitude: 50,
@@ -89,14 +91,14 @@ export function DroneSelectionPanel({ onDroneSelected }: DroneSelectionPanelProp
       setNewDrone({
         name: "",
         callsign: "",
-        model: "Custom",
+        model: "M.O.U.S.E",
         connectionType: "mavlink",
         connectionString: "",
         motorCount: 4,
-        hasGripper: false,
+        hasGripper: true,
         hasCamera: true,
-        hasThermal: false,
-        hasLidar: false,
+        hasThermal: true,
+        hasLidar: true,
         maxSpeed: 15,
         maxAltitude: 120,
         rtlAltitude: 50,
@@ -122,6 +124,38 @@ export function DroneSelectionPanel({ onDroneSelected }: DroneSelectionPanelProp
       toast.error("Failed to remove drone");
     },
   });
+
+  const updateDroneMutation = useMutation({
+    mutationFn: async (drone: Partial<Drone> & { id: number }) => {
+      const res = await fetch(`/api/drones/${drone.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(drone),
+      });
+      if (!res.ok) throw new Error("Failed to update drone");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/drones"] });
+      setShowEditDialog(false);
+      setEditingDrone(null);
+      toast.success("Drone updated successfully");
+    },
+    onError: () => {
+      toast.error("Failed to update drone");
+    },
+  });
+
+  const handleEditDrone = (drone: Drone, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingDrone(drone);
+    setShowEditDialog(true);
+  };
+
+  const handleSaveEdit = () => {
+    if (!editingDrone) return;
+    updateDroneMutation.mutate(editingDrone);
+  };
 
   const handleSelectDrone = (drone: Drone) => {
     localStorage.setItem("mouse_selected_drone", JSON.stringify(drone));
@@ -217,6 +251,7 @@ export function DroneSelectionPanel({ onDroneSelected }: DroneSelectionPanelProp
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
+                        <SelectItem value="M.O.U.S.E">M.O.U.S.E Drone</SelectItem>
                         <SelectItem value="Custom">Custom Build</SelectItem>
                         <SelectItem value="DJI Mavic 3">DJI Mavic 3</SelectItem>
                         <SelectItem value="DJI Phantom 4">DJI Phantom 4</SelectItem>
@@ -243,33 +278,54 @@ export function DroneSelectionPanel({ onDroneSelected }: DroneSelectionPanelProp
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="connection-type">Connection Type</Label>
-                    <Select 
-                      value={newDrone.connectionType} 
-                      onValueChange={(value) => setNewDrone({ ...newDrone, connectionType: value })}
-                    >
-                      <SelectTrigger id="connection-type" data-testid="select-connection-type">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="mavlink">MAVLink</SelectItem>
-                        <SelectItem value="dji_sdk">DJI SDK</SelectItem>
-                        <SelectItem value="custom">Custom Protocol</SelectItem>
-                      </SelectContent>
-                    </Select>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="connection-type">Connection Type</Label>
+                      <Select 
+                        value={newDrone.connectionType} 
+                        onValueChange={(value) => setNewDrone({ ...newDrone, connectionType: value })}
+                      >
+                        <SelectTrigger id="connection-type" data-testid="select-connection-type">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="mavlink">MAVLink</SelectItem>
+                          <SelectItem value="dji_sdk">DJI SDK</SelectItem>
+                          <SelectItem value="custom">Custom Protocol</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="connection-string">Connection String</Label>
+                      <Input
+                        id="connection-string"
+                        placeholder={
+                          newDrone.connectionType === "mavlink" 
+                            ? "udp:192.168.1.100:14550" 
+                            : "connection string"
+                        }
+                        value={newDrone.connectionString}
+                        onChange={(e) => setNewDrone({ ...newDrone, connectionString: e.target.value })}
+                        data-testid="input-connection-string"
+                      />
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="connection-string">Connection String</Label>
-                    <Input
-                      id="connection-string"
-                      placeholder="udp:127.0.0.1:14550"
-                      value={newDrone.connectionString}
-                      onChange={(e) => setNewDrone({ ...newDrone, connectionString: e.target.value })}
-                      data-testid="input-connection-string"
-                    />
-                  </div>
+                  
+                  {newDrone.connectionType === "mavlink" && (
+                    <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-xs space-y-2">
+                      <p className="font-semibold text-blue-400">MAVLink Connection Guide:</p>
+                      <ul className="space-y-1 text-muted-foreground">
+                        <li>• <span className="font-mono text-blue-300">udp:IP:PORT</span> - UDP connection (e.g., udp:192.168.1.100:14550)</li>
+                        <li>• <span className="font-mono text-blue-300">tcp:IP:PORT</span> - TCP connection (e.g., tcp:192.168.1.100:5760)</li>
+                        <li>• <span className="font-mono text-blue-300">serial:/dev/ttyUSB0:57600</span> - Serial port (Linux)</li>
+                        <li>• <span className="font-mono text-blue-300">serial:COM3:57600</span> - Serial port (Windows)</li>
+                      </ul>
+                      <p className="text-muted-foreground mt-2">
+                        For Raspberry Pi hotspot: Connect to the Pi's WiFi network, then use <span className="font-mono text-blue-300">udp:10.42.0.1:14550</span>
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-3 gap-4">
@@ -395,6 +451,15 @@ export function DroneSelectionPanel({ onDroneSelected }: DroneSelectionPanelProp
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
+                            onClick={(e) => handleEditDrone(drone, e)}
+                            data-testid={`button-edit-drone-${drone.id}`}
+                          >
+                            <Settings className="h-4 w-4 text-muted-foreground" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
                             onClick={(e) => {
                               e.stopPropagation();
                               if (confirm(`Remove drone ${drone.name}?`)) {
@@ -483,6 +548,114 @@ export function DroneSelectionPanel({ onDroneSelected }: DroneSelectionPanelProp
             </div>
           </ScrollArea>
         )}
+
+        {/* Edit Drone Dialog */}
+        <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
+          <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Edit Drone: {editingDrone?.name}</DialogTitle>
+              <DialogDescription>Modify hardware features and settings for this drone</DialogDescription>
+            </DialogHeader>
+            
+            {editingDrone && (
+              <div className="grid gap-4 py-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Drone Name</Label>
+                    <Input
+                      value={editingDrone.name}
+                      onChange={(e) => setEditingDrone({ ...editingDrone, name: e.target.value })}
+                      data-testid="input-edit-drone-name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Connection String</Label>
+                    <Input
+                      value={editingDrone.connectionString || ""}
+                      onChange={(e) => setEditingDrone({ ...editingDrone, connectionString: e.target.value })}
+                      placeholder="udp:192.168.1.100:14550"
+                      data-testid="input-edit-connection-string"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>Motor Count</Label>
+                    <Select 
+                      value={editingDrone.motorCount?.toString() || "4"} 
+                      onValueChange={(value) => setEditingDrone({ ...editingDrone, motorCount: parseInt(value) })}
+                    >
+                      <SelectTrigger data-testid="select-edit-motor-count">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="4">4 Motors</SelectItem>
+                        <SelectItem value="6">6 Motors</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Max Speed (m/s)</Label>
+                    <Input
+                      type="number"
+                      value={editingDrone.maxSpeed || 15}
+                      onChange={(e) => setEditingDrone({ ...editingDrone, maxSpeed: parseFloat(e.target.value) || 15 })}
+                      data-testid="input-edit-max-speed"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Max Altitude (m)</Label>
+                    <Input
+                      type="number"
+                      value={editingDrone.maxAltitude || 120}
+                      onChange={(e) => setEditingDrone({ ...editingDrone, maxAltitude: parseFloat(e.target.value) || 120 })}
+                      data-testid="input-edit-max-altitude"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Hardware Features</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { key: "hasCamera", label: "Camera" },
+                      { key: "hasThermal", label: "Thermal" },
+                      { key: "hasLidar", label: "LiDAR" },
+                      { key: "hasGripper", label: "Gripper" },
+                    ].map(({ key, label }) => (
+                      <Button
+                        key={key}
+                        type="button"
+                        variant={(editingDrone as any)[key] ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setEditingDrone({ ...editingDrone, [key]: !(editingDrone as any)[key] })}
+                        data-testid={`button-edit-toggle-${key}`}
+                      >
+                        {label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg text-xs">
+                  <p className="font-semibold text-amber-400 mb-1">Auto Sensor Detection</p>
+                  <p className="text-muted-foreground">
+                    When connected via MAVLink, the system will automatically detect available sensors 
+                    from the flight controller's SYS_STATUS message and update hardware features accordingly.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowEditDialog(false)}>Cancel</Button>
+              <Button onClick={handleSaveEdit} disabled={updateDroneMutation.isPending} data-testid="button-confirm-edit-drone">
+                {updateDroneMutation.isPending ? "Saving..." : "Save Changes"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );

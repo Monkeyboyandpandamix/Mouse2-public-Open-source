@@ -95,6 +95,9 @@ export function SettingsPanel() {
     remoteIp: "",
     syncPort: "8080",
     encryptionEnabled: true,
+    hotspotEnabled: false,
+    hotspotSsid: "MOUSE-GCS",
+    hotspotPassword: "",
   });
 
   const [backupStatus, setBackupStatus] = useState<{
@@ -368,6 +371,9 @@ export function SettingsPanel() {
       remoteIp: "",
       syncPort: "8080",
       encryptionEnabled: true,
+      hotspotEnabled: false,
+      hotspotSsid: "MOUSE-GCS",
+      hotspotPassword: "",
     });
     setUnsavedChanges(true);
     toast.info("Settings reset to defaults");
@@ -2590,6 +2596,79 @@ export function SettingsPanel() {
                     </p>
                   </div>
                 )}
+              </CardContent>
+            </Card>
+
+            <Card className="border-2 border-amber-500/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Wifi className="h-5 w-5" />
+                  Raspberry Pi Hotspot
+                </CardTitle>
+                <CardDescription>Configure the Raspberry Pi to create a WiFi hotspot for direct connection</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-xs space-y-2">
+                  <p className="font-semibold text-blue-400">Why use a hotspot?</p>
+                  <p className="text-muted-foreground">
+                    When no WiFi network is available, the Raspberry Pi can create its own hotspot. 
+                    Connect your laptop/tablet directly to the Pi's WiFi to send commands.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Enable Hotspot Mode</Label>
+                    <Switch 
+                      checked={networkSettings.hotspotEnabled}
+                      onCheckedChange={(checked) => updateSetting(setNetworkSettings, "hotspotEnabled", checked)}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Hotspot SSID</Label>
+                    <Input 
+                      placeholder="MOUSE-GCS"
+                      value={networkSettings.hotspotSsid}
+                      onChange={(e) => updateSetting(setNetworkSettings, "hotspotSsid", e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Hotspot Password</Label>
+                    <Input 
+                      type="password"
+                      placeholder="••••••••"
+                      value={networkSettings.hotspotPassword}
+                      onChange={(e) => updateSetting(setNetworkSettings, "hotspotPassword", e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="p-3 bg-muted/30 rounded-lg text-xs space-y-1">
+                  <p className="font-semibold">Connection Instructions:</p>
+                  <ol className="list-decimal list-inside text-muted-foreground space-y-1">
+                    <li>Enable hotspot mode on the Raspberry Pi</li>
+                    <li>On your laptop, connect to WiFi: <span className="font-mono text-primary">{networkSettings.hotspotSsid || "MOUSE-GCS"}</span></li>
+                    <li>Open the GCS app and use connection string: <span className="font-mono text-primary">udp:10.42.0.1:14550</span></li>
+                    <li>The Pi's IP in hotspot mode is typically: <span className="font-mono text-primary">10.42.0.1</span></li>
+                  </ol>
+                </div>
+
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline" 
+                    className="flex-1"
+                    onClick={() => {
+                      toast.info("Hotspot activation would be sent to Raspberry Pi...");
+                      operationsLog.logSystem('Network', `Hotspot ${networkSettings.hotspotEnabled ? 'enabled' : 'disabled'}: ${networkSettings.hotspotSsid || 'MOUSE-GCS'}`);
+                    }}
+                  >
+                    <Radio className="h-4 w-4 mr-2" />
+                    Apply Hotspot Settings
+                  </Button>
+                </div>
               </CardContent>
             </Card>
 
