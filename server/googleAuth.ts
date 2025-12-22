@@ -10,6 +10,36 @@ import * as crypto from 'crypto';
 const DATA_DIR = './data';
 const AUTH_FILE = path.join(DATA_DIR, 'google_auth.json');
 
+// Encryption key derived from environment or generated machine-specific
+const ENCRYPTION_KEY = process.env.GOOGLE_AUTH_ENCRYPTION_KEY || 
+  crypto.createHash('sha256').update(
+    process.env.SESSION_SECRET || 
+    process.env.REPL_ID || 
+    'mouse-gcs-default-key'
+  ).digest();
+
+function encrypt(text: string): string {
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv('aes-256-cbc', ENCRYPTION_KEY, iv);
+  let encrypted = cipher.update(text, 'utf8', 'hex');
+  encrypted += cipher.final('hex');
+  return iv.toString('hex') + ':' + encrypted;
+}
+
+function decrypt(text: string): string {
+  try {
+    const [ivHex, encryptedHex] = text.split(':');
+    if (!ivHex || !encryptedHex) return text; // Not encrypted (legacy)
+    const iv = Buffer.from(ivHex, 'hex');
+    const decipher = crypto.createDecipheriv('aes-256-cbc', ENCRYPTION_KEY, iv);
+    let decrypted = decipher.update(encryptedHex, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (e) {
+    return text; // Return as-is if decryption fails (legacy data)
+  }
+}
+
 interface GoogleAccount {
   id: string;
   email: string;
@@ -21,9 +51,20 @@ interface GoogleAccount {
   addedAt: string;
 }
 
+interface StoredGoogleAccount {
+  id: string;
+  email: string;
+  name: string;
+  picture?: string;
+  encryptedAccessToken: string;
+  encryptedRefreshToken?: string;
+  expiresAt: number;
+  addedAt: string;
+}
+
 interface AuthStore {
   activeAccountId: string | null;
-  accounts: GoogleAccount[];
+  accounts: StoredGoogleAccount[];
 }
 
 // OAuth 2.0 client credentials (for installed/desktop app flow)
@@ -45,11 +86,43 @@ function ensureDataDir() {
   }
 }
 
-function loadAuthStore(): AuthStore {
+// Convert stored account (encrypted) to runtime account (decrypted)
+function decryptAccount(stored: StoredGoogleAccount): GoogleAccount {
+  return {
+    id: stored.id,
+    email: stored.email,
+    name: stored.name,
+    picture: stored.picture,
+    accessToken: decrypt(stored.encryptedAccessToken),
+    refreshToken: stored.encryptedRefreshToken ? decrypt(stored.encryptedRefreshToken) : undefined,
+    expiresAt: stored.expiresAt,
+    addedAt: stored.addedAt
+  };
+}
+
+// Convert runtime account (decrypted) to stored account (encrypted)
+function encryptAccount(account: GoogleAccount): StoredGoogleAccount {
+  return {
+    id: account.id,
+    email: account.email,
+    name: account.name,
+    picture: account.picture,
+    encryptedAccessToken: encrypt(account.accessToken),
+    encryptedRefreshToken: account.refreshToken ? encrypt(account.refreshToken) : undefined,
+    expiresAt: account.expiresAt,
+    addedAt: account.addedAt
+  };
+}
+
+function loadAuthStore(): { activeAccountId: string | null; accounts: GoogleAccount[] } {
   ensureDataDir();
   if (fs.existsSync(AUTH_FILE)) {
     try {
-      return JSON.parse(fs.readFileSync(AUTH_FILE, 'utf-8'));
+      const stored: AuthStore = JSON.parse(fs.readFileSync(AUTH_FILE, 'utf-8'));
+      return {
+        activeAccountId: stored.activeAccountId,
+        accounts: stored.accounts.map(a => decryptAccount(a))
+      };
     } catch (e) {
       console.error('Failed to load auth store:', e);
     }
@@ -57,9 +130,13 @@ function loadAuthStore(): AuthStore {
   return { activeAccountId: null, accounts: [] };
 }
 
-function saveAuthStore(store: AuthStore) {
+function saveAuthStore(store: { activeAccountId: string | null; accounts: GoogleAccount[] }) {
   ensureDataDir();
-  fs.writeFileSync(AUTH_FILE, JSON.stringify(store, null, 2));
+  const encrypted: AuthStore = {
+    activeAccountId: store.activeAccountId,
+    accounts: store.accounts.map(a => encryptAccount(a))
+  };
+  fs.writeFileSync(AUTH_FILE, JSON.stringify(encrypted, null, 2), { mode: 0o600 });
 }
 
 // Check if running in Replit environment with connectors
@@ -339,22 +416,30 @@ export async function checkConnectionStatus(): Promise<{
   
   // Check standalone OAuth
   if (!isOAuthConfigured()) {
+    // Check if Replit environment without valid token
+    if (isReplitEnvironment()) {
+      return { mode: 'replit', connected: false, error: 'Replit Google integration not connected' };
+    }
     return { mode: 'unconfigured', connected: false };
   }
   
   const store = loadAuthStore();
   const activeAccount = store.accounts.find(a => a.id === store.activeAccountId);
   
+  // Only report as connected if we have a valid account with tokens
+  const hasValidAccount = activeAccount && activeAccount.accessToken && activeAccount.refreshToken;
+  
   return {
     mode: 'standalone',
-    connected: !!activeAccount,
-    email: activeAccount?.email,
+    connected: !!hasValidAccount,
+    email: hasValidAccount ? activeAccount.email : undefined,
     accounts: store.accounts.map(a => ({
       id: a.id,
       email: a.email,
       name: a.name,
       picture: a.picture,
       active: a.id === store.activeAccountId
-    }))
+    })),
+    error: store.accounts.length > 0 && !hasValidAccount ? 'Session expired. Please sign in again.' : undefined
   };
 }

@@ -62,7 +62,7 @@ Preferred communication style: Simple, everyday language.
 - **Team Communication**: Real-time messaging between users in the Comms panel with timestamps, edit/delete functionality, and automatic Google Sheets backup for message history
 - **Direct Messaging**: Type @ in the message input to DM specific users with autocomplete, Enter to confirm selection. DMs are private and only visible to sender and recipient via WebSocket user tracking
 - **Message History**: Admins can view full message history including original content of edited/deleted messages via `/api/messages/history` endpoint (requires admin role)
-- **Google Account Management**: Admins can switch Google accounts for data storage via Replit integrations panel (Settings > Storage)
+- **Google Account Management**: Admins can sign in, switch, and remove Google accounts directly in the app (Settings > Storage). Supports both Replit integration mode and standalone OAuth mode for production deployments. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` environment variables for standalone mode
 - **Server-Side Session Tokens**: Login creates cryptographically secure session tokens (256-bit entropy) stored server-side; tokens required for WebSocket DM routing and admin API access; sessions expire after 24 hours
 - Automation scripts panel for custom flight automation with triggers (takeoff, landing, waypoint, battery low, GPS lost, disconnect)
 - GPS-denied navigation failsafe using visual odometry, dead reckoning, and flight path history

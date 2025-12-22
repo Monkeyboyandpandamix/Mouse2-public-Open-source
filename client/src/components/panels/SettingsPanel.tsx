@@ -11,9 +11,235 @@ import { Progress } from "@/components/ui/progress";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useState, useEffect, useRef } from "react";
-import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cable, Upload, AlertTriangle, CheckCircle, RefreshCw, Cloud, Database, ExternalLink, Cpu, Radio, Terminal, HardDrive, MapPin, Home, Shield } from "lucide-react";
+import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cable, Upload, AlertTriangle, CheckCircle, RefreshCw, Cloud, Database, ExternalLink, Cpu, Radio, Terminal, HardDrive, MapPin, Home, Shield, User, LogOut, UserPlus } from "lucide-react";
 import { operationsLog, LogEntry, LogType } from "@/lib/operationsLog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+
+// Google Account Manager Component for standalone deployments
+function GoogleAccountManager() {
+  const [status, setStatus] = useState<{
+    mode: 'replit' | 'standalone' | 'unconfigured';
+    connected: boolean;
+    email?: string;
+    accounts?: { id: string; email: string; name: string; picture?: string; active: boolean }[];
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [signingIn, setSigningIn] = useState(false);
+
+  // Check if current user is admin
+  const saved = localStorage.getItem('mouse_gcs_session');
+  const session = saved ? JSON.parse(saved) : null;
+  const isAdmin = session?.user?.role === 'admin';
+
+  useEffect(() => {
+    fetchStatus();
+    // Check for OAuth callback result
+    const urlParams = new URLSearchParams(window.location.search);
+    const authResult = urlParams.get('google_auth');
+    if (authResult === 'success') {
+      toast.success('Google account connected successfully!');
+      window.history.replaceState({}, '', window.location.pathname);
+      fetchStatus();
+    } else if (authResult === 'error') {
+      toast.error('Failed to connect Google account: ' + (urlParams.get('message') || 'Unknown error'));
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
+
+  const fetchStatus = async () => {
+    try {
+      const res = await fetch('/api/google/status');
+      const data = await res.json();
+      setStatus(data);
+    } catch (e) {
+      console.error('Failed to fetch Google status:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSignIn = async () => {
+    setSigningIn(true);
+    try {
+      const res = await fetch('/api/google/auth-url');
+      const data = await res.json();
+      if (data.error) {
+        toast.error(data.error);
+      } else {
+        window.location.href = data.url;
+      }
+    } catch (e) {
+      toast.error('Failed to start sign-in process');
+    } finally {
+      setSigningIn(false);
+    }
+  };
+
+  const handleSwitch = async (accountId: string) => {
+    try {
+      const res = await fetch('/api/google/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountId })
+      });
+      if (res.ok) {
+        toast.success('Switched Google account');
+        fetchStatus();
+      } else {
+        toast.error('Failed to switch account');
+      }
+    } catch (e) {
+      toast.error('Failed to switch account');
+    }
+  };
+
+  const handleRemove = async (accountId: string) => {
+    if (!confirm('Remove this Google account? Data will remain in Google Drive/Sheets.')) return;
+    try {
+      const res = await fetch(`/api/google/accounts/${accountId}`, { method: 'DELETE' });
+      if (res.ok) {
+        toast.success('Account removed');
+        fetchStatus();
+      } else {
+        toast.error('Failed to remove account');
+      }
+    } catch (e) {
+      toast.error('Failed to remove account');
+    }
+  };
+
+  if (!isAdmin) return null;
+
+  if (loading) {
+    return (
+      <div className="mt-4 pt-4 border-t border-border">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading account settings...
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-border space-y-4">
+      <div className="flex items-center gap-2">
+        <Shield className="h-5 w-5 text-primary" />
+        <Label className="font-medium">Admin: Google Account Management</Label>
+      </div>
+
+      {status?.mode === 'unconfigured' && (
+        <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Standalone Google OAuth is not configured. To enable account switching without Replit:
+          </p>
+          <div className="text-sm space-y-2">
+            <p className="font-medium">Setup steps:</p>
+            <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
+              <li>Create a Google Cloud project</li>
+              <li>Enable Google Drive and Sheets APIs</li>
+              <li>Create OAuth 2.0 credentials (Desktop app)</li>
+              <li>Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables</li>
+            </ol>
+          </div>
+          <p className="text-xs text-amber-500">
+            Currently using Replit's built-in Google integration (if available).
+          </p>
+        </div>
+      )}
+
+      {status?.mode === 'replit' && (
+        <div className="p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg space-y-3">
+          <div className="flex items-center gap-2">
+            <Cloud className="h-4 w-4 text-blue-500" />
+            <span className="text-sm font-medium">Using Replit Integration</span>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Connected via Replit's Google integration. For production deployment with account switching,
+            configure GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.
+          </p>
+        </div>
+      )}
+
+      {status?.mode === 'standalone' && (
+        <div className="space-y-4">
+          {status.accounts && status.accounts.length > 0 ? (
+            <div className="space-y-2">
+              <Label>Connected Accounts:</Label>
+              {status.accounts.map(account => (
+                <div 
+                  key={account.id} 
+                  className={`flex items-center justify-between p-3 rounded-lg ${
+                    account.active ? 'bg-primary/10 border border-primary/30' : 'bg-muted/30'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    {account.picture ? (
+                      <img src={account.picture} alt="" className="w-8 h-8 rounded-full" />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
+                        <User className="h-4 w-4" />
+                      </div>
+                    )}
+                    <div>
+                      <p className="font-medium text-sm">{account.name}</p>
+                      <p className="text-xs text-muted-foreground">{account.email}</p>
+                    </div>
+                    {account.active && (
+                      <Badge className="bg-emerald-500 ml-2">Active</Badge>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!account.active && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleSwitch(account.id)}
+                      >
+                        Use
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => handleRemove(account.id)}
+                    >
+                      <LogOut className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="p-4 bg-muted/30 rounded-lg text-center">
+              <p className="text-sm text-muted-foreground mb-3">
+                No Google accounts connected. Sign in to enable cloud backup.
+              </p>
+            </div>
+          )}
+
+          <Button
+            onClick={handleSignIn}
+            disabled={signingIn}
+            className="w-full"
+          >
+            {signingIn ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <UserPlus className="h-4 w-4 mr-2" />
+            )}
+            {status.accounts && status.accounts.length > 0 ? 'Add Another Account' : 'Sign in with Google'}
+          </Button>
+
+          <p className="text-xs text-muted-foreground">
+            Note: Switching accounts does not transfer data. Previous data remains in the original account.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function SettingsPanel() {
   const queryClient = useQueryClient();
@@ -1071,41 +1297,7 @@ export function SettingsPanel() {
                 </div>
 
                 {/* Admin-only: Google Account Management */}
-                {(() => {
-                  const saved = localStorage.getItem('mouse_gcs_session');
-                  const session = saved ? JSON.parse(saved) : null;
-                  const isAdmin = session?.user?.role === 'admin';
-                  
-                  if (!isAdmin) return null;
-                  
-                  return (
-                    <div className="mt-4 pt-4 border-t border-border space-y-4">
-                      <div className="flex items-center gap-2">
-                        <Shield className="h-5 w-5 text-primary" />
-                        <Label className="font-medium">Admin: Google Account Settings</Label>
-                      </div>
-                      <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg space-y-3">
-                        <p className="text-sm text-muted-foreground">
-                          To switch to a different Google account for data storage, you need to disconnect 
-                          and reconnect the Google integration from the Replit integrations panel.
-                        </p>
-                        <div className="text-sm space-y-2">
-                          <p className="font-medium">Steps to switch Google account:</p>
-                          <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
-                            <li>Open the Replit workspace panel (left sidebar)</li>
-                            <li>Click on "Integrations" section</li>
-                            <li>Disconnect both Google Drive and Google Sheets</li>
-                            <li>Reconnect with the new Google account</li>
-                            <li>Data will sync to the new account on next backup</li>
-                          </ol>
-                        </div>
-                        <p className="text-xs text-amber-500">
-                          Note: This will not transfer existing data. Previous data remains in the old account.
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })()}
+                <GoogleAccountManager />
               </CardContent>
             </Card>
           </TabsContent>
