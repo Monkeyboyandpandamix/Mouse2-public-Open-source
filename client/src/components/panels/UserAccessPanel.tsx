@@ -26,7 +26,10 @@ import {
   Edit,
   Save,
   RefreshCw,
-  Settings
+  Settings,
+  UsersRound,
+  Plus,
+  X
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
@@ -55,6 +58,14 @@ interface User {
 interface CurrentSession {
   user: User | null;
   isLoggedIn: boolean;
+}
+
+interface UserGroup {
+  id: string;
+  name: string;
+  memberIds: string[];
+  createdAt: string;
+  createdBy: string;
 }
 
 const allPermissions: Permission[] = [
@@ -142,12 +153,35 @@ export function UserAccessPanel() {
   const [newUser, setNewUser] = useState({ username: "", fullName: "", password: "", confirmPassword: "", role: "operator" as const });
   const [editForm, setEditForm] = useState({ username: "", newPassword: "", confirmPassword: "" });
   const [activeTab, setActiveTab] = useState("users");
+  
+  // Group management state
+  const [groups, setGroups] = useState<UserGroup[]>(() => {
+    const saved = localStorage.getItem('mouse_gcs_groups');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [showNewGroupDialog, setShowNewGroupDialog] = useState(false);
+  const [showEditGroupDialog, setShowEditGroupDialog] = useState(false);
+  const [selectedGroup, setSelectedGroup] = useState<UserGroup | null>(null);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [editGroupName, setEditGroupName] = useState("");
+  const [selectedGroupMembers, setSelectedGroupMembers] = useState<string[]>([]);
 
   useEffect(() => {
     localStorage.setItem('mouse_gcs_users', JSON.stringify(users));
     // Dispatch custom event for same-tab listeners (TopBar mention autocomplete)
     window.dispatchEvent(new CustomEvent('users-updated'));
+    // Also update groups to remove deleted users
+    setGroups(prev => prev.map(g => ({
+      ...g,
+      memberIds: g.memberIds.filter(id => users.some(u => u.id === id))
+    })));
   }, [users]);
+  
+  useEffect(() => {
+    localStorage.setItem('mouse_gcs_groups', JSON.stringify(groups));
+    // Dispatch custom event for TopBar group autocomplete
+    window.dispatchEvent(new CustomEvent('groups-updated'));
+  }, [groups]);
 
   useEffect(() => {
     localStorage.setItem('mouse_gcs_role_permissions', JSON.stringify(rolePermissions));
@@ -391,6 +425,75 @@ export function UserAccessPanel() {
       case 'viewer': return { color: "bg-gray-500", icon: Shield };
       default: return { color: "bg-gray-500", icon: Shield };
     }
+  };
+
+  // Group management handlers
+  const handleCreateGroup = () => {
+    if (!newGroupName.trim()) {
+      toast.error("Group name is required");
+      return;
+    }
+    if (groups.some(g => g.name.toLowerCase() === newGroupName.toLowerCase())) {
+      toast.error("A group with this name already exists");
+      return;
+    }
+    
+    const newGroup: UserGroup = {
+      id: `group_${Date.now()}`,
+      name: newGroupName.trim(),
+      memberIds: selectedGroupMembers,
+      createdAt: new Date().toISOString(),
+      createdBy: session.user?.id || 'unknown'
+    };
+    
+    setGroups(prev => [...prev, newGroup]);
+    setShowNewGroupDialog(false);
+    setNewGroupName("");
+    setSelectedGroupMembers([]);
+    toast.success(`Group "${newGroup.name}" created`);
+  };
+  
+  const handleEditGroup = (group: UserGroup) => {
+    setSelectedGroup(group);
+    setEditGroupName(group.name);
+    setSelectedGroupMembers([...group.memberIds]);
+    setShowEditGroupDialog(true);
+  };
+  
+  const handleSaveGroupEdit = () => {
+    if (!selectedGroup) return;
+    
+    if (!editGroupName.trim()) {
+      toast.error("Group name is required");
+      return;
+    }
+    if (groups.some(g => g.name.toLowerCase() === editGroupName.toLowerCase() && g.id !== selectedGroup.id)) {
+      toast.error("A group with this name already exists");
+      return;
+    }
+    
+    setGroups(prev => prev.map(g => 
+      g.id === selectedGroup.id 
+        ? { ...g, name: editGroupName.trim(), memberIds: selectedGroupMembers }
+        : g
+    ));
+    
+    setShowEditGroupDialog(false);
+    setSelectedGroup(null);
+    toast.success("Group updated");
+  };
+  
+  const handleDeleteGroup = (groupId: string) => {
+    setGroups(prev => prev.filter(g => g.id !== groupId));
+    toast.success("Group deleted");
+  };
+  
+  const toggleGroupMember = (userId: string) => {
+    setSelectedGroupMembers(prev => 
+      prev.includes(userId) 
+        ? prev.filter(id => id !== userId)
+        : [...prev, userId]
+    );
   };
 
   const isAdmin = session.user?.role === 'admin';
@@ -660,10 +763,13 @@ export function UserAccessPanel() {
       <div className="flex-1 p-6 overflow-auto">
         <div className="max-w-3xl mx-auto">
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid w-full grid-cols-2 mb-6">
+            <TabsList className="grid w-full grid-cols-3 mb-6">
               <TabsTrigger value="users" data-testid="tab-users">Session & Logout</TabsTrigger>
+              <TabsTrigger value="groups" data-testid="tab-groups" disabled={!isAdmin}>
+                Groups {!isAdmin && "(Admin Only)"}
+              </TabsTrigger>
               <TabsTrigger value="permissions" data-testid="tab-permissions" disabled={!isAdmin}>
-                Role Permissions {!isAdmin && "(Admin Only)"}
+                Permissions {!isAdmin && "(Admin Only)"}
               </TabsTrigger>
             </TabsList>
 
@@ -723,6 +829,195 @@ export function UserAccessPanel() {
                 </CardContent>
               </Card>
             </TabsContent>
+
+            <TabsContent value="groups" className="space-y-6">
+              {isAdmin && (
+                <>
+                  <Card className="border-2 border-blue-500/50">
+                    <CardHeader>
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <CardTitle className="flex items-center gap-2">
+                            <UsersRound className="h-5 w-5 text-blue-500" />
+                            User Groups
+                          </CardTitle>
+                          <CardDescription>
+                            Create groups to message multiple users at once. Use @groupname in chat.
+                          </CardDescription>
+                        </div>
+                        <Dialog open={showNewGroupDialog} onOpenChange={setShowNewGroupDialog}>
+                          <DialogTrigger asChild>
+                            <Button size="sm" data-testid="button-new-group">
+                              <Plus className="h-4 w-4 mr-1" />
+                              New Group
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogHeader>
+                              <DialogTitle>Create New Group</DialogTitle>
+                              <DialogDescription>
+                                Create a group to message multiple users. Select members below.
+                              </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4">
+                              <div className="space-y-2">
+                                <Label>Group Name</Label>
+                                <Input
+                                  placeholder="e.g., Pilots, Ground Crew, Night Shift"
+                                  value={newGroupName}
+                                  onChange={(e) => setNewGroupName(e.target.value)}
+                                  data-testid="input-new-group-name"
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Members ({selectedGroupMembers.length} selected)</Label>
+                                <ScrollArea className="h-40 border rounded-md p-2">
+                                  {users.filter(u => u.enabled).map(user => (
+                                    <div 
+                                      key={user.id} 
+                                      className="flex items-center gap-2 py-1.5 px-2 hover:bg-muted rounded cursor-pointer"
+                                      onClick={() => toggleGroupMember(user.id)}
+                                      data-testid={`checkbox-group-member-${user.id}`}
+                                    >
+                                      <Checkbox 
+                                        checked={selectedGroupMembers.includes(user.id)}
+                                        onCheckedChange={() => toggleGroupMember(user.id)}
+                                      />
+                                      <span className="text-sm flex-1">{user.fullName || user.username}</span>
+                                      <Badge variant="outline" className="text-[10px]">{user.role}</Badge>
+                                    </div>
+                                  ))}
+                                </ScrollArea>
+                              </div>
+                            </div>
+                            <DialogFooter>
+                              <Button variant="outline" onClick={() => {
+                                setShowNewGroupDialog(false);
+                                setNewGroupName("");
+                                setSelectedGroupMembers([]);
+                              }}>Cancel</Button>
+                              <Button onClick={handleCreateGroup} data-testid="button-create-group">
+                                Create Group
+                              </Button>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
+                      </div>
+                    </CardHeader>
+                  </Card>
+
+                  {groups.length === 0 ? (
+                    <Card>
+                      <CardContent className="py-8 text-center text-muted-foreground">
+                        <UsersRound className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                        <p>No groups created yet.</p>
+                        <p className="text-sm">Create a group to message multiple users at once.</p>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    groups.map(group => (
+                      <Card key={group.id}>
+                        <CardContent className="py-4">
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <UsersRound className="h-4 w-4 text-blue-500" />
+                                <span className="font-medium">@{group.name}</span>
+                                <Badge variant="secondary" className="text-[10px]">
+                                  {group.memberIds.length} member{group.memberIds.length !== 1 ? 's' : ''}
+                                </Badge>
+                              </div>
+                              <div className="flex flex-wrap gap-1 mt-2">
+                                {group.memberIds.map(memberId => {
+                                  const member = users.find(u => u.id === memberId);
+                                  return member ? (
+                                    <Badge key={memberId} variant="outline" className="text-[10px]">
+                                      {member.fullName || member.username}
+                                    </Badge>
+                                  ) : null;
+                                })}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Button 
+                                variant="ghost" 
+                                size="icon" 
+                                className="h-8 w-8"
+                                onClick={() => handleEditGroup(group)}
+                                data-testid={`button-edit-group-${group.id}`}
+                              >
+                                <Edit className="h-4 w-4" />
+                              </Button>
+                              <Button 
+                                variant="ghost" 
+                                size="icon" 
+                                className="h-8 w-8 text-destructive hover:text-destructive"
+                                onClick={() => handleDeleteGroup(group.id)}
+                                data-testid={`button-delete-group-${group.id}`}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))
+                  )}
+                </>
+              )}
+            </TabsContent>
+
+            {/* Edit Group Dialog */}
+            <Dialog open={showEditGroupDialog} onOpenChange={setShowEditGroupDialog}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Edit Group</DialogTitle>
+                  <DialogDescription>
+                    Update the group name and members.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label>Group Name</Label>
+                    <Input
+                      placeholder="Group name"
+                      value={editGroupName}
+                      onChange={(e) => setEditGroupName(e.target.value)}
+                      data-testid="input-edit-group-name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Members ({selectedGroupMembers.length} selected)</Label>
+                    <ScrollArea className="h-40 border rounded-md p-2">
+                      {users.filter(u => u.enabled).map(user => (
+                        <div 
+                          key={user.id} 
+                          className="flex items-center gap-2 py-1.5 px-2 hover:bg-muted rounded cursor-pointer"
+                          onClick={() => toggleGroupMember(user.id)}
+                          data-testid={`checkbox-edit-group-member-${user.id}`}
+                        >
+                          <Checkbox 
+                            checked={selectedGroupMembers.includes(user.id)}
+                            onCheckedChange={() => toggleGroupMember(user.id)}
+                          />
+                          <span className="text-sm flex-1">{user.fullName || user.username}</span>
+                          <Badge variant="outline" className="text-[10px]">{user.role}</Badge>
+                        </div>
+                      ))}
+                    </ScrollArea>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => {
+                    setShowEditGroupDialog(false);
+                    setSelectedGroup(null);
+                  }}>Cancel</Button>
+                  <Button onClick={handleSaveGroupEdit} data-testid="button-save-group">
+                    Save Changes
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
 
             <TabsContent value="permissions" className="space-y-6">
               {isAdmin && (
