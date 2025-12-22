@@ -6,7 +6,7 @@ import { useEffect, useState, useCallback, type MouseEvent } from "react";
 // Default location - Burlington, NC
 const DEFAULT_LAT = 36.0957;
 const DEFAULT_LNG = -79.4378;
-import { Search, Map as MapIcon, Layers, ZoomIn, ZoomOut, RotateCcw, Crosshair, Plane, Battery, Signal, Radio } from "lucide-react";
+import { Search, Map as MapIcon, Layers, ZoomIn, ZoomOut, RotateCcw, Crosshair, Plane, Battery, Signal, Radio, User } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -152,7 +152,7 @@ interface Aircraft {
 // Empty by default until real data arrives from ADS-B receiver
 const defaultAircraft: Aircraft[] = [];
 
-function ZoomControls({ dronePosition }: { dronePosition?: [number, number] | null }) {
+function ZoomControls({ dronePosition, operatorPosition }: { dronePosition?: [number, number] | null; operatorPosition?: [number, number] }) {
   const map = useMap();
   
   const handleCenterOnDrone = () => {
@@ -164,9 +164,20 @@ function ZoomControls({ dronePosition }: { dronePosition?: [number, number] | nu
     }
   };
 
+  const handleCenterOnOperator = () => {
+    if (operatorPosition && operatorPosition[0] !== 0 && operatorPosition[1] !== 0) {
+      map.setView(operatorPosition, 18);
+      toast.success("Centered on operator location");
+    } else {
+      toast.error("Operator location not available");
+    }
+  };
+
   const handleResetView = () => {
     if (dronePosition && dronePosition[0] !== 0 && dronePosition[1] !== 0) {
       map.setView(dronePosition, 16);
+    } else if (operatorPosition) {
+      map.setView(operatorPosition, 16);
     } else {
       map.setView([DEFAULT_LAT, DEFAULT_LNG], 16);
     }
@@ -180,6 +191,7 @@ function ZoomControls({ dronePosition }: { dronePosition?: [number, number] | nu
         className="h-8 w-8"
         onClick={() => map.zoomIn()}
         title="Zoom In"
+        data-testid="button-zoom-in"
       >
         <ZoomIn className="h-4 w-4" />
       </Button>
@@ -189,6 +201,7 @@ function ZoomControls({ dronePosition }: { dronePosition?: [number, number] | nu
         className="h-8 w-8"
         onClick={() => map.zoomOut()}
         title="Zoom Out"
+        data-testid="button-zoom-out"
       >
         <ZoomOut className="h-4 w-4" />
       </Button>
@@ -198,6 +211,7 @@ function ZoomControls({ dronePosition }: { dronePosition?: [number, number] | nu
         className="h-8 w-8"
         onClick={handleCenterOnDrone}
         title="Center on Drone"
+        data-testid="button-center-drone"
       >
         <Crosshair className="h-4 w-4" />
       </Button>
@@ -205,8 +219,19 @@ function ZoomControls({ dronePosition }: { dronePosition?: [number, number] | nu
         variant="ghost" 
         size="icon" 
         className="h-8 w-8"
+        onClick={handleCenterOnOperator}
+        title="Center on Operator"
+        data-testid="button-center-operator"
+      >
+        <User className="h-4 w-4" />
+      </Button>
+      <Button 
+        variant="ghost" 
+        size="icon" 
+        className="h-8 w-8"
         onClick={handleResetView}
         title="Reset View"
+        data-testid="button-reset-view"
       >
         <RotateCcw className="h-4 w-4" />
       </Button>
@@ -511,7 +536,7 @@ export function MapInterface() {
           url={getTileUrl()}
         />
         
-        <ZoomControls dronePosition={selectedDronePosition} />
+        <ZoomControls dronePosition={selectedDronePosition} operatorPosition={currentLocation} />
         <MapCenterPersist />
         <MapCenterUpdater searchResult={searchResult} />
         
@@ -734,10 +759,10 @@ export function MapInterface() {
           </Marker>
         ))}
 
-        {/* Mission Flight Path */}
+        {/* Mission Flight Path - from operator location to waypoints */}
         {missionWaypoints.length > 0 && (
           <Polyline 
-            positions={[[34.0520, -118.2435], ...missionWaypoints.map(wp => [wp.latitude, wp.longitude] as [number, number])]} 
+            positions={[currentLocation, ...missionWaypoints.map(wp => [wp.latitude, wp.longitude] as [number, number])]} 
             pathOptions={{ color: 'hsl(190 90% 50%)', weight: 2, dashArray: '5, 10' }} 
           />
         )}
