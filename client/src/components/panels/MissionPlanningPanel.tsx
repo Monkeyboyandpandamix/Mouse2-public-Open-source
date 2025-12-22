@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Plus, Trash2, Save, Play, MapPin, Navigation, Search, AlertTriangle, Clock, Bell, RotateCcw, Radar } from "lucide-react";
+import { Plus, Trash2, Save, Play, MapPin, Navigation, Search, AlertTriangle, Clock, Bell, RotateCcw, Radar, Edit, X, Check } from "lucide-react";
 import { useState, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -60,6 +60,14 @@ export function MissionPlanningPanel() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [missionToDelete, setMissionToDelete] = useState<Mission | null>(null);
   const [isSearching, setIsSearching] = useState(false);
+  const [editingWaypoint, setEditingWaypoint] = useState<Waypoint | null>(null);
+  const [editWaypointData, setEditWaypointData] = useState({
+    altitude: "",
+    action: "flythrough",
+    address: "",
+    hoverTime: "5",
+    patrolRadius: "20"
+  });
 
   const { data: missions = [] } = useQuery<Mission[]>({
     queryKey: ["/api/missions"],
@@ -244,6 +252,47 @@ export function MissionPlanningPanel() {
   };
 
   const selectedMissionData = missions.find(m => m.id === selectedMission);
+
+  const startEditWaypoint = (wp: Waypoint) => {
+    setEditingWaypoint(wp);
+    const params = wp.actionParams || {};
+    setEditWaypointData({
+      altitude: String(wp.altitude),
+      action: wp.action || "flythrough",
+      address: wp.address || "",
+      hoverTime: params.hoverTime ? String(params.hoverTime) : "5",
+      patrolRadius: params.patrolRadius ? String(params.patrolRadius) : "20"
+    });
+  };
+
+  const saveEditWaypoint = () => {
+    if (!editingWaypoint) return;
+    
+    const actionParams = editWaypointData.action === 'hover' 
+      ? { hoverTime: parseInt(editWaypointData.hoverTime) }
+      : editWaypointData.action === 'patrol' 
+        ? { patrolRadius: parseInt(editWaypointData.patrolRadius) }
+        : editWaypointData.action === 'alert' 
+          ? { message: 'Waypoint reached' } 
+          : {};
+    
+    updateWaypoint.mutate({
+      id: editingWaypoint.id,
+      data: {
+        altitude: parseFloat(editWaypointData.altitude) || editingWaypoint.altitude,
+        action: editWaypointData.action,
+        address: editWaypointData.address || null,
+        actionParams
+      }
+    });
+    
+    setEditingWaypoint(null);
+    toast.success("Waypoint updated");
+  };
+
+  const cancelEditWaypoint = () => {
+    setEditingWaypoint(null);
+  };
 
   return (
     <div className="h-full flex">
@@ -475,39 +524,156 @@ export function MissionPlanningPanel() {
                     
                     {waypoints.map((wp) => {
                       const actionInfo = WAYPOINT_ACTIONS.find(a => a.value === wp.action) || WAYPOINT_ACTIONS[0];
+                      const isEditing = editingWaypoint?.id === wp.id;
+                      
                       return (
-                        <Card key={wp.id} className="border-l-4 border-l-primary">
+                        <Card key={wp.id} className={`border-l-4 ${isEditing ? 'border-l-amber-500 bg-amber-500/5' : 'border-l-primary'}`}>
                           <CardContent className="p-2">
-                            <div className="flex items-start gap-2">
-                              <div className="flex items-center justify-center w-6 h-6 rounded-full bg-primary text-primary-foreground font-bold text-xs shrink-0">
-                                {wp.order}
-                              </div>
-                              <div className="flex-1 min-w-0 space-y-1">
-                                <div className="text-xs font-mono">
-                                  {wp.latitude.toFixed(5)}, {wp.longitude.toFixed(5)}
+                            {isEditing ? (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <div className="flex items-center justify-center w-6 h-6 rounded-full bg-amber-500 text-white font-bold text-xs shrink-0">
+                                    {wp.order}
+                                  </div>
+                                  <span className="text-xs font-bold">Editing Waypoint</span>
                                 </div>
-                                {wp.address && (
-                                  <div className="text-[10px] text-muted-foreground truncate">
-                                    {wp.address}
+                                
+                                <div className="space-y-1">
+                                  <Label className="text-[10px]">Address/Name</Label>
+                                  <Input
+                                    value={editWaypointData.address}
+                                    onChange={(e) => setEditWaypointData(prev => ({ ...prev, address: e.target.value }))}
+                                    placeholder="Optional address label"
+                                    className="h-7 text-xs"
+                                    data-testid="input-edit-waypoint-address"
+                                  />
+                                </div>
+                                
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div className="space-y-1">
+                                    <Label className="text-[10px]">Altitude (m)</Label>
+                                    <Input
+                                      type="number"
+                                      value={editWaypointData.altitude}
+                                      onChange={(e) => setEditWaypointData(prev => ({ ...prev, altitude: e.target.value }))}
+                                      className="h-7 text-xs"
+                                      data-testid="input-edit-waypoint-altitude"
+                                    />
+                                  </div>
+                                  <div className="space-y-1">
+                                    <Label className="text-[10px]">Action</Label>
+                                    <Select 
+                                      value={editWaypointData.action} 
+                                      onValueChange={(v) => setEditWaypointData(prev => ({ ...prev, action: v }))}
+                                    >
+                                      <SelectTrigger className="h-7 text-xs" data-testid="select-edit-waypoint-action">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {WAYPOINT_ACTIONS.map(action => (
+                                          <SelectItem key={action.value} value={action.value}>
+                                            <span className="flex items-center gap-1">
+                                              <action.icon className="h-3 w-3" />
+                                              {action.label}
+                                            </span>
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                </div>
+                                
+                                {editWaypointData.action === 'hover' && (
+                                  <div className="space-y-1">
+                                    <Label className="text-[10px]">Hover Time (sec)</Label>
+                                    <Input
+                                      type="number"
+                                      value={editWaypointData.hoverTime}
+                                      onChange={(e) => setEditWaypointData(prev => ({ ...prev, hoverTime: e.target.value }))}
+                                      className="h-7 text-xs"
+                                      data-testid="input-edit-hover-time"
+                                    />
                                   </div>
                                 )}
-                                <div className="flex items-center gap-1">
-                                  <Badge variant="outline" className="text-[10px] h-4">
-                                    <actionInfo.icon className="h-2 w-2 mr-1" />
-                                    {actionInfo.label}
-                                  </Badge>
-                                  <span className="text-[10px] text-muted-foreground">{wp.altitude}m</span>
+                                
+                                {editWaypointData.action === 'patrol' && (
+                                  <div className="space-y-1">
+                                    <Label className="text-[10px]">Patrol Radius (m)</Label>
+                                    <Input
+                                      type="number"
+                                      value={editWaypointData.patrolRadius}
+                                      onChange={(e) => setEditWaypointData(prev => ({ ...prev, patrolRadius: e.target.value }))}
+                                      className="h-7 text-xs"
+                                      data-testid="input-edit-patrol-radius"
+                                    />
+                                  </div>
+                                )}
+                                
+                                <div className="flex gap-1 pt-1">
+                                  <Button 
+                                    size="sm" 
+                                    className="flex-1 h-7 text-xs" 
+                                    onClick={saveEditWaypoint}
+                                    data-testid="button-save-waypoint"
+                                  >
+                                    <Check className="h-3 w-3 mr-1" />
+                                    Save
+                                  </Button>
+                                  <Button 
+                                    size="sm" 
+                                    variant="outline" 
+                                    className="h-7 text-xs" 
+                                    onClick={cancelEditWaypoint}
+                                    data-testid="button-cancel-edit-waypoint"
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </Button>
                                 </div>
                               </div>
-                              <Button 
-                                variant="ghost" 
-                                size="icon" 
-                                className="h-6 w-6 shrink-0"
-                                onClick={() => deleteWaypoint.mutate(wp.id)}
-                              >
-                                <Trash2 className="h-3 w-3 text-destructive" />
-                              </Button>
-                            </div>
+                            ) : (
+                              <div className="flex items-start gap-2">
+                                <div className="flex items-center justify-center w-6 h-6 rounded-full bg-primary text-primary-foreground font-bold text-xs shrink-0">
+                                  {wp.order}
+                                </div>
+                                <div className="flex-1 min-w-0 space-y-1">
+                                  <div className="text-xs font-mono">
+                                    {wp.latitude.toFixed(5)}, {wp.longitude.toFixed(5)}
+                                  </div>
+                                  {wp.address && (
+                                    <div className="text-[10px] text-muted-foreground truncate">
+                                      {wp.address}
+                                    </div>
+                                  )}
+                                  <div className="flex items-center gap-1">
+                                    <Badge variant="outline" className="text-[10px] h-4">
+                                      <actionInfo.icon className="h-2 w-2 mr-1" />
+                                      {actionInfo.label}
+                                    </Badge>
+                                    <span className="text-[10px] text-muted-foreground">{wp.altitude}m</span>
+                                  </div>
+                                </div>
+                                <div className="flex gap-1 shrink-0">
+                                  <Button 
+                                    variant="ghost" 
+                                    size="icon" 
+                                    className="h-6 w-6"
+                                    onClick={() => startEditWaypoint(wp)}
+                                    data-testid={`button-edit-waypoint-${wp.id}`}
+                                  >
+                                    <Edit className="h-3 w-3 text-muted-foreground" />
+                                  </Button>
+                                  <Button 
+                                    variant="ghost" 
+                                    size="icon" 
+                                    className="h-6 w-6"
+                                    onClick={() => deleteWaypoint.mutate(wp.id)}
+                                    data-testid={`button-delete-waypoint-${wp.id}`}
+                                  >
+                                    <Trash2 className="h-3 w-3 text-destructive" />
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
                           </CardContent>
                         </Card>
                       );

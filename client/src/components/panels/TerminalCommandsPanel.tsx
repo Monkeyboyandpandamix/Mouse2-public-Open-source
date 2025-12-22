@@ -109,6 +109,232 @@ const defaultCommands: SystemCommand[] = [
     command: "mavlink_shell 'status proximity'",
   },
 
+  // Camera-Based Obstacle Detection
+  {
+    id: "camera_obstacle_enable",
+    name: "Enable Camera Obstacle Detection",
+    description: "Activates visual obstacle detection using onboard camera with OpenCV/TensorFlow processing",
+    category: "navigation",
+    command: "python3 /opt/mouse/vision/obstacle_detect.py --enable --camera ${camera_id} --threshold ${confidence}",
+    parameters: [
+      { name: "camera_id", description: "Camera device (main, thermal)", default: "main" },
+      { name: "confidence", description: "Detection confidence 0.1-1.0", default: "0.7" }
+    ]
+  },
+  {
+    id: "camera_obstacle_disable",
+    name: "Disable Camera Obstacle Detection",
+    description: "Deactivates visual obstacle detection system",
+    category: "navigation",
+    command: "python3 /opt/mouse/vision/obstacle_detect.py --disable",
+  },
+  {
+    id: "camera_obstacle_reroute",
+    name: "Configure Obstacle Rerouting",
+    description: "Sets automatic rerouting behavior when camera detects obstacles",
+    category: "navigation",
+    command: "python3 /opt/mouse/vision/obstacle_detect.py --reroute-mode ${mode} --safe-distance ${distance}",
+    parameters: [
+      { name: "mode", description: "Reroute mode (left, right, up, auto)", default: "auto" },
+      { name: "distance", description: "Safe clearance distance in meters", default: "3" }
+    ]
+  },
+  {
+    id: "camera_detect_status",
+    name: "Camera Detection Status",
+    description: "Shows current camera obstacle detection status and recent detections",
+    category: "navigation",
+    command: "python3 /opt/mouse/vision/obstacle_detect.py --status",
+  },
+
+  // LiDAR-Based Navigation
+  {
+    id: "lidar_enable",
+    name: "Enable LiDAR Navigation",
+    description: "Activates LW20/HA LiDAR for precision altitude and forward obstacle detection",
+    category: "navigation",
+    command: "mavlink_shell 'param set RNGFND1_TYPE 8' && mavlink_shell 'param set PRX_TYPE 4'",
+  },
+  {
+    id: "lidar_disable",
+    name: "Disable LiDAR",
+    description: "Deactivates LiDAR sensor to conserve power",
+    category: "navigation",
+    command: "mavlink_shell 'param set RNGFND1_TYPE 0' && mavlink_shell 'param set PRX_TYPE 0'",
+  },
+  {
+    id: "lidar_mount_config",
+    name: "Configure LiDAR Mount Orientation",
+    description: "Sets LiDAR mounting direction (forward, down, or multi-axis)",
+    category: "navigation",
+    command: "mavlink_shell 'param set RNGFND1_ORIENT ${orient}' && mavlink_shell 'param set RNGFND1_POS_X ${x}' && mavlink_shell 'param set RNGFND1_POS_Y ${y}' && mavlink_shell 'param set RNGFND1_POS_Z ${z}'",
+    parameters: [
+      { name: "orient", description: "Orientation (0=fwd, 25=down)", default: "25" },
+      { name: "x", description: "X offset from CG (meters)", default: "0" },
+      { name: "y", description: "Y offset from CG (meters)", default: "0" },
+      { name: "z", description: "Z offset from CG (meters)", default: "-0.1" }
+    ]
+  },
+  {
+    id: "lidar_forward_mode",
+    name: "LiDAR Forward Obstacle Mode",
+    description: "Configures LiDAR for forward-facing obstacle avoidance",
+    category: "navigation",
+    command: "mavlink_shell 'param set RNGFND1_ORIENT 0' && mavlink_shell 'param set AVOID_ENABLE 1' && mavlink_shell 'param set PRX_TYPE 4'",
+  },
+  {
+    id: "lidar_status",
+    name: "LiDAR Status",
+    description: "Shows LiDAR health, current distance readings, and configuration",
+    category: "navigation",
+    command: "mavlink_shell 'status rangefinder' && mavlink_shell 'param show RNGFND1*'",
+  },
+
+  // Sensor Fusion & Multi-Sensor Verification
+  {
+    id: "sensor_fusion_enable",
+    name: "Enable Full Sensor Fusion",
+    description: "Activates fusion of all sensors (GPS, compass, barometers, IMUs) for accurate positioning",
+    category: "navigation",
+    command: "mavlink_shell 'param set AHRS_EKF_TYPE 3' && mavlink_shell 'param set EK3_ENABLE 1' && mavlink_shell 'param set EK3_SRC1_POSXY 3' && mavlink_shell 'param set EK3_SRC1_VELXY 3'",
+  },
+  {
+    id: "sensor_fusion_status",
+    name: "Sensor Fusion Status",
+    description: "Shows EKF filter status and sensor health for all inputs",
+    category: "navigation",
+    command: "mavlink_shell 'status ekf' && mavlink_shell 'status sensors'",
+  },
+  {
+    id: "verify_position",
+    name: "Verify Position (Multi-Sensor)",
+    description: "Cross-checks position using multiple GPS modules, compass, and visual odometry",
+    category: "navigation",
+    command: "python3 /opt/mouse/nav/verify_position.py --gps-count 2 --compass-verify --baro-verify --report",
+  },
+  {
+    id: "verify_altitude",
+    name: "Verify Altitude (Multi-Sensor)",
+    description: "Cross-references altitude from barometers, GPS, and LiDAR for accuracy",
+    category: "navigation",
+    command: "python3 /opt/mouse/nav/verify_altitude.py --sources baro1,baro2,gps,lidar --tolerance ${tolerance}",
+    parameters: [{ name: "tolerance", description: "Max variance tolerance in meters", default: "2" }]
+  },
+  {
+    id: "compass_verify",
+    name: "Verify Compass Heading",
+    description: "Cross-checks heading using multiple compasses and GPS track",
+    category: "navigation",
+    command: "mavlink_shell 'status compass' && python3 /opt/mouse/nav/verify_heading.py --tolerance ${degrees}",
+    parameters: [{ name: "degrees", description: "Max variance in degrees", default: "10" }]
+  },
+  {
+    id: "dual_gps_mode",
+    name: "Enable Dual GPS Blending",
+    description: "Activates blending of Here3+ GPS with secondary GPS for redundancy",
+    category: "navigation",
+    command: "mavlink_shell 'param set GPS_AUTO_SWITCH 2' && mavlink_shell 'param set GPS_BLEND_MASK 5'",
+  },
+  {
+    id: "barometer_calibrate",
+    name: "Calibrate Barometers",
+    description: "Recalibrates all barometers using ground pressure reference",
+    category: "navigation",
+    command: "mavlink_shell 'baro calibrate' && mavlink_shell 'status baro'",
+  },
+
+  // GPS-Denied Navigation
+  {
+    id: "gps_denied_enable",
+    name: "Enable GPS-Denied Navigation",
+    description: "Activates visual odometry, dead reckoning, and compass-based navigation for GPS-denied environments",
+    category: "navigation",
+    command: "python3 /opt/mouse/nav/gps_denied.py --enable --mode ${mode}",
+    parameters: [{ name: "mode", description: "Mode: visual, deadreck, fusion", default: "fusion" }]
+  },
+  {
+    id: "gps_denied_disable",
+    name: "Disable GPS-Denied Navigation",
+    description: "Returns to normal GPS-based navigation",
+    category: "navigation",
+    command: "python3 /opt/mouse/nav/gps_denied.py --disable && mavlink_shell 'param set EK3_SRC1_POSXY 3'",
+  },
+  {
+    id: "visual_odometry_enable",
+    name: "Enable Visual Odometry",
+    description: "Uses camera footage to estimate position and movement without GPS",
+    category: "navigation",
+    command: "python3 /opt/mouse/nav/visual_odom.py --enable --camera main --feature-tracking on",
+  },
+  {
+    id: "visual_odometry_status",
+    name: "Visual Odometry Status",
+    description: "Shows visual odometry health, feature count, and position estimate",
+    category: "navigation",
+    command: "python3 /opt/mouse/nav/visual_odom.py --status",
+  },
+  {
+    id: "dead_reckoning_enable",
+    name: "Enable Dead Reckoning",
+    description: "Calculates position from compass heading, speed, and flight time when GPS is unavailable",
+    category: "navigation",
+    command: "python3 /opt/mouse/nav/dead_reckoning.py --enable --use-compass --use-airspeed",
+  },
+  {
+    id: "dead_reckoning_calibrate",
+    name: "Calibrate Dead Reckoning",
+    description: "Calibrates dead reckoning with current known position",
+    category: "navigation",
+    command: "python3 /opt/mouse/nav/dead_reckoning.py --calibrate --lat ${lat} --lon ${lon}",
+    parameters: [
+      { name: "lat", description: "Current known latitude", default: "34.0522" },
+      { name: "lon", description: "Current known longitude", default: "-118.2437" }
+    ]
+  },
+  {
+    id: "flight_path_history",
+    name: "Use Flight Path History",
+    description: "Enables return navigation using recorded flight path when GPS is lost",
+    category: "navigation",
+    command: "python3 /opt/mouse/nav/path_history.py --enable --record-interval 1 --max-points 1000",
+  },
+  {
+    id: "terrain_following",
+    name: "Enable Terrain Following",
+    description: "Uses LiDAR/barometer for terrain-relative altitude hold without GPS altitude",
+    category: "navigation",
+    command: "mavlink_shell 'param set TERRAIN_FOLLOW 1' && mavlink_shell 'param set RNGFND_LANDING 1'",
+  },
+  {
+    id: "gps_denied_status",
+    name: "GPS-Denied Navigation Status",
+    description: "Shows status of all GPS-denied navigation systems and estimated accuracy",
+    category: "navigation",
+    command: "python3 /opt/mouse/nav/gps_denied.py --status --show-accuracy",
+  },
+
+  // Autonomous Safety & Failsafe
+  {
+    id: "failsafe_gps_lost",
+    name: "Configure GPS Lost Failsafe",
+    description: "Sets behavior when GPS signal is lost (land, rtl_visual, hover, continue)",
+    category: "navigation",
+    command: "mavlink_shell 'param set FS_EKF_ACTION ${action}' && python3 /opt/mouse/nav/failsafe.py --gps-lost ${action}",
+    parameters: [{ name: "action", description: "Action: land, hover, rtl_visual", default: "hover" }]
+  },
+  {
+    id: "failsafe_sensor_redundancy",
+    name: "Configure Sensor Redundancy",
+    description: "Sets minimum sensor count required before triggering failsafe",
+    category: "navigation",
+    command: "python3 /opt/mouse/nav/failsafe.py --min-gps ${gps} --min-compass ${compass} --min-baro ${baro}",
+    parameters: [
+      { name: "gps", description: "Minimum GPS modules", default: "1" },
+      { name: "compass", description: "Minimum compasses", default: "1" },
+      { name: "baro", description: "Minimum barometers", default: "1" }
+    ]
+  },
+
   // Arming Commands
   {
     id: "arm_system",
