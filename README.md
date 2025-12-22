@@ -9,17 +9,16 @@ A comprehensive ground control station for autonomous drone control with Orange 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Hardware Requirements](#hardware-requirements)
-3. [Installation Without Replit](#installation-without-replit)
-4. [Hardware Input Configuration](#hardware-input-configuration)
-5. [Project Structure](#project-structure)
-6. [File Reference Guide](#file-reference-guide)
-7. [Frontend Components](#frontend-components)
-8. [Backend Services](#backend-services)
-9. [Database Schema](#database-schema)
-10. [Terminal Commands Reference](#terminal-commands-reference)
-11. [Configuration Files](#configuration-files)
-12. [Troubleshooting](#troubleshooting)
+2. [Key Features](#key-features)
+3. [Quick Start](#quick-start)
+4. [Standalone Deployment](#standalone-deployment)
+5. [Hardware Requirements](#hardware-requirements)
+6. [Hardware Input Configuration](#hardware-input-configuration)
+7. [Project Structure](#project-structure)
+8. [Environment Variables](#environment-variables)
+9. [Google Integration Setup](#google-integration-setup)
+10. [Running as a Service](#running-as-a-service)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -28,7 +27,7 @@ A comprehensive ground control station for autonomous drone control with Orange 
 M.O.U.S.E is designed for:
 - Real-time telemetry monitoring and display
 - Mission planning with waypoint management
-- Object tracking with motion detection
+- Object tracking with AI-powered motion detection (TensorFlow.js COCO-SSD)
 - Geofencing with breach actions
 - Two-way audio communication
 - ADS-B aircraft traffic awareness
@@ -36,6 +35,117 @@ M.O.U.S.E is designed for:
 - Multi-sensor verification (dual GPS, multiple compasses, barometers)
 - Camera-based and LiDAR obstacle detection with automatic rerouting
 - Custom automation scripts
+- Multi-drone management from a single ground station
+- Team communication with direct messaging
+
+**Storage**: This application uses **offline-first local JSON storage** (no database required). Data is stored in the `./data` directory and can optionally sync to Google Drive/Sheets when online.
+
+---
+
+## Key Features
+
+- **Offline-First**: Works without internet connection, syncs when online
+- **No Database Required**: All data stored in local JSON files
+- **Dual Deployment Modes**: Ground control (desktop/laptop) or Onboard (Raspberry Pi)
+- **Multi-Drone Support**: Connect and manage multiple drones simultaneously
+- **AI Object Tracking**: TensorFlow.js COCO-SSD model for detecting people, vehicles, etc.
+- **Team Communication**: Real-time messaging with DM support
+- **Role-Based Access**: Admin, operator, viewer + custom roles
+- **Google Backup**: Optional sync to Google Drive/Sheets
+
+---
+
+## Quick Start
+
+### Windows
+1. Download and install [Node.js](https://nodejs.org/) (v18 or later, LTS recommended)
+2. Double-click `start-windows.bat`
+3. The app will open in your browser at `http://localhost:5000`
+
+### Linux / macOS
+1. Install Node.js (v18 or later)
+2. Run: `chmod +x start-linux.sh && ./start-linux.sh`
+3. The app will open in your browser at `http://localhost:5000`
+
+### Raspberry Pi (Onboard Mode)
+1. Install Node.js: `sudo apt install nodejs npm`
+2. Run: `sudo ./start-pi-onboard.sh`
+3. Access from another device at `http://<pi-ip>:5000`
+
+---
+
+## Standalone Deployment
+
+This application is fully portable and can be deployed anywhere without Replit.
+
+### Prerequisites
+
+- **Node.js** v18 or higher - [Download](https://nodejs.org/)
+- **Git** (optional, for cloning) - [Download](https://git-scm.com/)
+
+**No database required** - the app uses local JSON files for storage.
+
+### Step 1: Get the Code
+
+```bash
+# Clone or download the repository
+git clone https://github.com/your-repo/mouse-gcs.git
+cd mouse-gcs
+
+# Or download as ZIP and extract
+```
+
+### Step 2: Configure Environment (Optional)
+
+Copy the example environment file:
+```bash
+cp .env.example .env
+```
+
+Edit `.env` to customize settings (see [Environment Variables](#environment-variables)).
+
+### Step 3: Run the Application
+
+**Option A: Use the startup scripts (recommended)**
+
+```bash
+# Windows
+start-windows.bat
+
+# Linux / macOS
+./start-linux.sh
+
+# Raspberry Pi (onboard mode)
+sudo ./start-pi-onboard.sh
+```
+
+**Option B: Manual commands**
+
+```bash
+# Install dependencies
+npm install
+
+# Build for production
+npm run build
+
+# Start the server
+npm start
+```
+
+**Option C: Development mode**
+
+```bash
+npm install
+npm run dev
+```
+
+### Step 4: Access the Application
+
+Open your browser to `http://localhost:5000`
+
+Default credentials:
+- **Admin**: username `admin`, password `admin123`
+- **Demo**: username `demo`, password `demo123`
 
 ---
 
@@ -52,143 +162,9 @@ M.O.U.S.E is designed for:
 
 ---
 
-## Installation Without Replit
-
-### Prerequisites
-
-Before installing, ensure you have the following on your system:
-
-1. **Node.js** (v18 or higher) - [Download](https://nodejs.org/)
-2. **PostgreSQL** (v14 or higher) - [Download](https://www.postgresql.org/download/)
-3. **Git** - [Download](https://git-scm.com/)
-
-### Step 1: Clone the Repository
-
-```bash
-git clone https://github.com/your-repo/mouse-gcs.git
-cd mouse-gcs
-```
-
-### Step 2: Install Dependencies
-
-```bash
-npm install
-```
-
-### Step 3: Set Up PostgreSQL Database
-
-1. Start PostgreSQL service:
-   ```bash
-   # Linux
-   sudo systemctl start postgresql
-   
-   # macOS (Homebrew)
-   brew services start postgresql
-   
-   # Windows - Start from Services panel
-   ```
-
-2. Create a database:
-   ```bash
-   sudo -u postgres psql
-   CREATE DATABASE mouse_gcs;
-   CREATE USER mouse_user WITH PASSWORD 'your_password';
-   GRANT ALL PRIVILEGES ON DATABASE mouse_gcs TO mouse_user;
-   \q
-   ```
-
-### Step 4: Configure Environment Variables
-
-Create a `.env` file in the project root:
-
-```bash
-# Database connection
-DATABASE_URL=postgresql://mouse_user:your_password@localhost:5432/mouse_gcs
-
-# Server configuration
-PORT=5000
-NODE_ENV=development
-
-# Optional: Google API keys for Sheets/Drive backup
-GOOGLE_CLIENT_ID=your_client_id
-GOOGLE_CLIENT_SECRET=your_client_secret
-```
-
-### Step 5: Initialize the Database
-
-```bash
-npm run db:push
-```
-
-### Step 6: Run the Application
-
-**Development mode** (with hot reload):
-```bash
-npm run dev
-```
-
-**Production mode**:
-```bash
-npm run build
-npm start
-```
-
-The application will be available at `http://localhost:5000`
-
-### Running on Raspberry Pi
-
-For deployment on Raspberry Pi 5:
-
-1. Install Node.js on Pi:
-   ```bash
-   curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
-   sudo apt-get install -y nodejs
-   ```
-
-2. Install PostgreSQL:
-   ```bash
-   sudo apt install postgresql postgresql-contrib
-   ```
-
-3. Clone and set up as above, then create a systemd service:
-   ```bash
-   sudo nano /etc/systemd/system/mouse-gcs.service
-   ```
-
-   Add:
-   ```ini
-   [Unit]
-   Description=M.O.U.S.E Ground Control Station
-   After=network.target postgresql.service
-
-   [Service]
-   Type=simple
-   User=pi
-   WorkingDirectory=/home/pi/mouse-gcs
-   ExecStart=/usr/bin/npm start
-   Restart=on-failure
-   Environment=NODE_ENV=production
-   Environment=DATABASE_URL=postgresql://mouse_user:password@localhost:5432/mouse_gcs
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-
-4. Enable and start:
-   ```bash
-   sudo systemctl enable mouse-gcs
-   sudo systemctl start mouse-gcs
-   ```
-
----
-
 ## Hardware Input Configuration
 
-The Terminal Commands panel contains all commands for configuring hardware inputs. Each command uses specific device addresses that you need to update based on your hardware setup.
-
 ### Serial Port Configuration
-
-Hardware devices connect via serial ports. Common port paths:
 
 | Device | Linux Path | Description |
 |--------|------------|-------------|
@@ -197,63 +173,7 @@ Hardware devices connect via serial ports. Common port paths:
 | LW20/HA LiDAR | `/dev/ttyUSB1` or I2C | Serial or I2C connection |
 | Skydroid C12 | RTSP stream | Network stream |
 
-### Configuring Device Addresses
-
-#### 1. Flight Controller (MAVLink)
-
-Edit the connection in **Settings > Hardware Configuration**:
-
-```
-Connection Type: Serial
-Port: /dev/ttyUSB0
-Baud Rate: 115200
-Protocol: MAVLink 2.0
-```
-
-Or use terminal commands:
-```bash
-mavlink_shell 'param set SERIAL1_BAUD 115200'
-mavlink_shell 'param set SERIAL1_PROTOCOL 2'
-```
-
-#### 2. LiDAR Configuration
-
-**Serial Connection** (default):
-```bash
-# Set serial port
-mavlink_shell 'param set RNGFND1_TYPE 8'        # LW20 type
-mavlink_shell 'param set SERIAL4_PROTOCOL 9'    # Rangefinder protocol
-mavlink_shell 'param set SERIAL4_BAUD 115200'   # Baud rate
-```
-
-**I2C Connection**:
-```bash
-# Use I2C address 0x66 (default for LW20)
-mavlink_shell 'param set RNGFND1_TYPE 7'        # I2C type
-mavlink_shell 'param set RNGFND1_ADDR 0x66'     # I2C address
-```
-
-**Mounting Direction**:
-```bash
-# Forward facing (for obstacle avoidance)
-mavlink_shell 'param set RNGFND1_ORIENT 0'
-
-# Downward facing (for altitude)
-mavlink_shell 'param set RNGFND1_ORIENT 25'
-```
-
-#### 3. GPS Configuration (Here3+ CAN)
-
-The Here3+ connects via CAN bus. Configure in terminal:
-```bash
-mavlink_shell 'param set CAN_P1_DRIVER 1'
-mavlink_shell 'param set GPS_TYPE 9'            # UAVCAN
-mavlink_shell 'param set GPS_TYPE2 9'           # Secondary GPS
-```
-
-#### 4. Camera/Video Stream
-
-Configure in **Settings > Camera Configuration** or via RTSP:
+### Camera Stream URLs
 
 | Camera Type | Address Format |
 |-------------|----------------|
@@ -261,50 +181,6 @@ Configure in **Settings > Camera Configuration** or via RTSP:
 | Skydroid C12 Thermal | `rtsp://192.168.1.1:8554/thermal` |
 | USB Webcam | Device index (0, 1, 2...) |
 | Network IP Cam | `rtsp://user:pass@ip:port/stream` |
-
-#### 5. ADS-B Receiver
-
-```bash
-mavlink_shell 'param set ADSB_TYPE 1'           # MAVLink
-mavlink_shell 'param set ADSB_LIST_MAX 25'      # Max tracked aircraft
-```
-
-### Common Terminal Address Parameters
-
-Many terminal commands accept device addresses as parameters. Examples:
-
-```bash
-# Specify camera device
-python3 /opt/mouse/vision/obstacle_detect.py --camera /dev/video0
-
-# Specify serial port for telemetry
-python3 /opt/mouse/telemetry/stream.py --port /dev/ttyUSB0 --baud 115200
-
-# Specify I2C bus for sensors
-python3 /opt/mouse/sensors/read_baro.py --bus 1 --address 0x77
-```
-
-### Environment Variables for Hardware
-
-Set these in your `.env` file or system environment:
-
-```bash
-# MAVLink connection
-MAVLINK_PORT=/dev/ttyUSB0
-MAVLINK_BAUD=115200
-
-# Camera stream
-CAMERA_RTSP_URL=rtsp://192.168.1.1:8554/main
-CAMERA_THERMAL_URL=rtsp://192.168.1.1:8554/thermal
-
-# LiDAR
-LIDAR_PORT=/dev/ttyUSB1
-LIDAR_I2C_BUS=1
-LIDAR_I2C_ADDR=0x66
-
-# GPS
-GPS_CAN_INTERFACE=can0
-```
 
 ---
 
@@ -315,303 +191,193 @@ mouse-gcs/
 ├── client/                    # React frontend application
 │   └── src/
 │       ├── components/        # UI components
-│       │   ├── controls/      # Flight control components
-│       │   ├── layout/        # Page layout components
-│       │   ├── map/           # Map and mission components
-│       │   ├── panels/        # Feature panels (settings, logs, etc.)
-│       │   ├── telemetry/     # Telemetry display components
-│       │   ├── ui/            # Reusable UI primitives (shadcn/ui)
-│       │   └── video/         # Camera feed components
 │       ├── hooks/             # React hooks
 │       ├── lib/               # Utility libraries
 │       └── pages/             # Route pages
 ├── server/                    # Express backend
+│   ├── index.ts               # Main entry point
+│   ├── routes.ts              # API endpoints
+│   ├── storage.ts             # Local JSON storage
+│   ├── googleAuth.ts          # Google OAuth handler
+│   ├── googleDrive.ts         # Google Drive integration
+│   └── googleSheets.ts        # Google Sheets integration
 ├── shared/                    # Shared types and schema
-└── attached_assets/           # Images and documentation
+│   └── schema.ts              # Zod schemas and types
+├── data/                      # Local JSON data storage (auto-created)
+│   ├── settings.json
+│   ├── missions.json
+│   ├── waypoints.json
+│   └── ...
+├── start-windows.bat          # Windows startup script
+├── start-linux.sh             # Linux/macOS startup script
+├── start-pi-onboard.sh        # Raspberry Pi onboard mode script
+├── .env.example               # Environment variable template
+└── package.json               # Dependencies and scripts
 ```
 
 ---
 
-## File Reference Guide
+## Environment Variables
 
-### Root Configuration Files
+Copy `.env.example` to `.env` and customize:
 
-| File | Purpose | When to Modify |
-|------|---------|----------------|
-| `package.json` | Dependencies and npm scripts | Adding new packages |
-| `vite.config.ts` | Vite build configuration, plugins, aliases | Changing build behavior |
-| `tsconfig.json` | TypeScript compiler settings | TypeScript configuration |
-| `drizzle.config.ts` | Database ORM configuration | Database connection changes |
-| `postcss.config.js` | PostCSS/Tailwind processing | CSS processing changes |
-| `components.json` | shadcn/ui component config | UI library settings |
-| `.env` | Environment variables | Secrets, database URL, ports |
-
-### Server Files (`server/`)
-
-| File | Purpose | Key Functions |
-|------|---------|---------------|
-| `index.ts` | **Main entry point** - Creates Express server, initializes WebSocket for real-time telemetry, starts listening on port 5000 | `createServer()`, WebSocket handlers |
-| `routes.ts` | **API route definitions** - All REST endpoints for CRUD operations on missions, waypoints, settings, users, flight logs | `registerRoutes()` |
-| `storage.ts` | **Database layer** - All Drizzle ORM queries, implements IStorage interface for data persistence | `getSettings()`, `createMission()`, `getWaypoints()` |
-| `googleSheets.ts` | **Google Sheets integration** - Backup/sync mission data to Google Sheets | `syncToSheets()`, `importFromSheets()` |
-| `googleDrive.ts` | **Google Drive integration** - Upload/download flight videos and logs | `uploadVideo()`, `listFiles()` |
-| `static.ts` | **Static file serving** - Serves built frontend assets in production | `serveStatic()` |
-| `vite.ts` | **Dev server proxy** - Proxies requests to Vite dev server during development | `setupVite()` |
-
-### Shared Files (`shared/`)
-
-| File | Purpose | Contents |
-|------|---------|----------|
-| `schema.ts` | **Database schema** - Drizzle table definitions, Zod validation schemas, TypeScript types | All table definitions, insert/select types |
-
-### Client Application (`client/src/`)
-
-| File | Purpose |
-|------|---------|
-| `main.tsx` | React app entry point, renders App component |
-| `App.tsx` | Main app component with routing (wouter) |
-| `index.css` | Global CSS styles, Tailwind imports |
-
-### Client Pages (`client/src/pages/`)
-
-| File | Purpose |
-|------|---------|
-| `home.tsx` | Main dashboard page - Contains all panels, map, telemetry, controls. Handles session authentication state |
-| `not-found.tsx` | 404 error page |
-
-### Client Libraries (`client/src/lib/`)
-
-| File | Purpose |
-|------|---------|
-| `api.ts` | API client functions for backend communication |
-| `queryClient.ts` | TanStack Query client configuration |
-| `operationsLog.ts` | Operations console logging utilities |
-| `utils.ts` | Utility functions (cn for classnames, etc.) |
-
-### Client Hooks (`client/src/hooks/`)
-
-| File | Purpose |
-|------|---------|
-| `use-mobile.tsx` | Detects mobile viewport for responsive design |
-| `use-toast.ts` | Toast notification hook |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | 5000 | Server port |
+| `NODE_ENV` | production | Environment mode |
+| `DATA_DIR` | ./data | Directory for JSON data files |
+| `DEVICE_ROLE` | (empty) | Set to `ONBOARD` for Raspberry Pi mode |
+| `NO_BROWSER` | (empty) | Set to `1` to disable auto-opening browser |
+| `SESSION_SECRET` | (generated) | Secret for session encryption |
+| `GOOGLE_CLIENT_ID` | (empty) | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | (empty) | Google OAuth client secret |
+| `GOOGLE_REDIRECT_URI` | localhost | OAuth callback URL |
 
 ---
 
-## Frontend Components
+## Google Integration Setup
 
-### Layout Components (`client/src/components/layout/`)
+The Google Drive/Sheets backup is optional. To enable it:
 
-| File | Purpose | Key Features |
-|------|---------|--------------|
-| `TopBar.tsx` | Main navigation bar | System status, diagnostics, connection indicators, user menu, theme toggle |
-| `Sidebar.tsx` | Vertical navigation tabs | Switches between panels (Map, Mission, Tracking, etc.), collapsible |
+### 1. Create Google Cloud Project
 
-### Control Components (`client/src/components/controls/`)
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project
+3. Enable the Google Drive API and Google Sheets API
 
-| File | Purpose | Key Features |
-|------|---------|--------------|
-| `ControlDeck.tsx` | Bottom flight control bar | ARM/DISARM toggle, Takeoff/Land buttons, RTL, Abort (emergency stop), Gripper open/close. Dispatches flight-command events |
+### 2. Create OAuth Credentials
 
-### Map Components (`client/src/components/map/`)
+1. Go to APIs & Services > Credentials
+2. Click "Create Credentials" > "OAuth client ID"
+3. Select "Web application"
+4. Add authorized redirect URI: `http://localhost:5000/api/google/oauth/callback`
+5. Copy the Client ID and Client Secret
 
-| File | Purpose | Key Features |
-|------|---------|--------------|
-| `MapInterface.tsx` | Main Leaflet map | Drone position marker, waypoint display, flight path polyline, address search, layer switching (Satellite/2D/Hybrid), geofence visualization |
-| `MissionMap.tsx` | Mission planning map | Click-to-add waypoints, waypoint markers with order numbers, home position, route lines |
+### 3. Configure Environment
 
-### Panel Components (`client/src/components/panels/`)
+Add to your `.env` file:
+```bash
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
+GOOGLE_REDIRECT_URI=http://localhost:5000/api/google/oauth/callback
+```
 
-| File | Purpose | Key Features |
-|------|---------|--------------|
-| `SettingsPanel.tsx` | System configuration | Connection settings (MAVLink port/baud), sensor config, camera presets (Skydroid C12, LW20 LiDAR, Here3+ GPS), hardware ports, base RTL location, Google Sheets/Drive integration, motor count |
-| `MissionPlanningPanel.tsx` | Mission waypoint management | Create/select missions, add waypoints via map click/address/coordinates, set waypoint actions (flythrough, hover, alert, patrol, RTL), edit/delete waypoints, execute missions |
-| `TrackingPanel.tsx` | Object tracking | Motion-based detection, IoU (Intersection over Union) tracking for stable object IDs, target lock/follow, bounding box display |
-| `SpeakerPanel.tsx` | Audio broadcast | Text-to-speech, audio file playback, volume control, supports Pi GPIO speaker, USB speaker, Orange Cube+ buzzer |
-| `FlightLogsPanel.tsx` | Flight history | View past flights with duration/distance/altitude, export logs as JSON/CSV, delete with confirmation dialog, filter by date |
-| `AutomationPanel.tsx` | Custom automation scripts | Create trigger-based scripts, triggers: takeoff, landing, waypoint reached, battery low, GPS lost, disconnect. Actions: execute commands, change modes, send alerts |
-| `TerminalCommandsPanel.tsx` | Command reference and execution | 80+ commands organized by category (arming, flight, navigation, telemetry, camera, video, system, payload). Camera obstacle detection, LiDAR config, sensor fusion, GPS-denied navigation, multi-sensor verification commands |
-| `UserAccessPanel.tsx` | User management | Login/logout, role-based access (admin, operator, viewer), user creation/editing, session management, displays full name |
-| `GeofencingPanel.tsx` | Flight boundaries | Create circular/polygon zones, enter by address or coordinates, set breach actions (RTL, land, hover, warn), configure altitude limits per zone |
-| `GUIConfigPanel.tsx` | Interface customization | Show/hide sidebar tabs, reorder tabs, panel positions, enable/disable panel dragging, theme selection (light/dark/system) |
+### 4. Authorize in App
 
-### Telemetry Components (`client/src/components/telemetry/`)
-
-| File | Purpose | Key Features |
-|------|---------|--------------|
-| `TelemetryPanel.tsx` | Main telemetry display | Altitude, ground speed, vertical speed, battery voltage/percentage, GPS coordinates, satellite count, distance to home, motor RPM/temp for all motors (4-6), flight mode indicator. Responds to flight-command events with simulated telemetry |
-| `AttitudeIndicator.tsx` | Artificial horizon | SVG-based pitch and roll visualization, sky/ground gradient, pitch ladder |
-| `GyroscopeIndicator.tsx` | Gyroscope visualization | Shows angular velocity on X/Y/Z axes |
-
-### Video Components (`client/src/components/video/`)
-
-| File | Purpose | Key Features |
-|------|---------|--------------|
-| `VideoFeed.tsx` | Camera feed display | Mode switching (gimbal/thermal/FPV/webcam), zoom controls, recording toggle, RTSP stream support, snapshot capture, thermal color palettes |
-
-### UI Components (`client/src/components/ui/`)
-
-Reusable shadcn/ui primitives: Button, Card, Dialog, Input, Select, Tabs, Toast, Accordion, Badge, Checkbox, Dropdown, Popover, Progress, ScrollArea, Separator, Slider, Switch, Table, Textarea, Tooltip, etc.
+1. Go to Settings > Storage in the app
+2. Click "Sign in with Google"
+3. Complete the OAuth flow
 
 ---
 
-## Backend Services
+## Running as a Service
 
-### API Endpoints
+### Linux (systemd)
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/api/settings` | GET | Get all settings |
-| `/api/settings` | POST | Create new setting |
-| `/api/settings/:key` | GET | Get specific setting |
-| `/api/settings/:key` | PUT | Update setting |
-| `/api/settings/:key` | DELETE | Delete setting |
-| `/api/missions` | GET | List all missions |
-| `/api/missions` | POST | Create new mission |
-| `/api/missions/:id` | GET | Get mission details |
-| `/api/missions/:id` | PUT | Update mission |
-| `/api/missions/:id` | DELETE | Delete mission |
-| `/api/missions/:id/waypoints` | GET | Get waypoints for mission |
-| `/api/waypoints` | POST | Create waypoint |
-| `/api/waypoints/:id` | PATCH | Update waypoint |
-| `/api/waypoints/:id` | DELETE | Delete waypoint |
-| `/api/flight-logs` | GET | List flight logs |
-| `/api/flight-logs` | POST | Create flight log |
-| `/api/flight-logs/:id` | DELETE | Delete flight log |
-| `/api/users` | GET | List users |
-| `/api/users` | POST | Create user |
-| `/api/users/:id` | PUT | Update user |
-| `/api/auth/login` | POST | User login |
-| `/api/auth/logout` | POST | User logout |
-| `/api/auth/session` | GET | Get current session |
+Create `/etc/systemd/system/mouse-gcs.service`:
 
-### WebSocket Events
+```ini
+[Unit]
+Description=M.O.U.S.E Ground Control Station
+After=network.target
 
-| Event | Direction | Purpose |
-|-------|-----------|---------|
-| `telemetry` | Server → Client | Real-time telemetry data stream |
-| `mission-execute` | Client → Server | Start mission execution |
-| `flight-command` | Client → Server | Flight control commands |
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/mouse-gcs
+ExecStart=/usr/bin/node dist/index.cjs
+Restart=on-failure
+RestartSec=10
+Environment=NODE_ENV=production
+Environment=PORT=5000
+Environment=DATA_DIR=/home/pi/mouse-gcs/data
 
----
+[Install]
+WantedBy=multi-user.target
+```
 
-## Database Schema
+Then enable and start:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable mouse-gcs
+sudo systemctl start mouse-gcs
+```
 
-Located in `shared/schema.ts`:
+### Raspberry Pi (Onboard Mode)
 
-| Table | Purpose | Key Fields |
-|-------|---------|------------|
-| `settings` | Key-value configuration | key, value, category |
-| `missions` | Mission definitions | name, status, homeLatitude, homeLongitude, homeAltitude |
-| `waypoints` | Waypoint data | missionId, order, latitude, longitude, altitude, speed, action, actionParams, address |
-| `flightLogs` | Flight history | startTime, endTime, duration, distance, maxAltitude, flightPath |
-| `users` | User accounts | username, password, fullName, role, isActive |
-| `sensorData` | Sensor readings | timestamp, sensorType, value, unit |
-| `motorTelemetry` | Motor data | motorId, rpm, temperature, current |
-| `cameraSettings` | Camera config | name, streamUrl, resolution, frameRate |
+Same as above, but add:
+```ini
+Environment=DEVICE_ROLE=ONBOARD
+```
 
----
+### Windows (Task Scheduler)
 
-## Terminal Commands Reference
-
-The Terminal Commands panel includes 80+ commands organized by category:
-
-### Navigation Commands
-
-| Command | Purpose | Parameters |
-|---------|---------|------------|
-| Enable Camera Obstacle Detection | Activates visual obstacle detection | camera_id (main/thermal), confidence (0.1-1.0) |
-| Configure Obstacle Rerouting | Sets auto-reroute behavior | mode (left/right/up/auto), distance |
-| Enable LiDAR Navigation | Activates LW20/HA LiDAR | - |
-| Configure LiDAR Mount | Sets mounting direction | orient (0=fwd, 25=down), x/y/z offsets |
-| Enable Sensor Fusion | Activates all sensor fusion | - |
-| Verify Position (Multi-Sensor) | Cross-checks position with GPS/compass/visual | - |
-| Verify Altitude (Multi-Sensor) | Cross-references altitude sources | tolerance (meters) |
-| Enable GPS-Denied Navigation | Activates visual odometry/dead reckoning | mode (visual/deadreck/fusion) |
-| Enable Visual Odometry | Uses camera for position estimation | - |
-| Enable Dead Reckoning | Compass + speed based navigation | - |
-| Use Flight Path History | Enables return via recorded path | - |
-
-### Flight Commands
-
-| Command | Purpose |
-|---------|---------|
-| Arm System | Arms motors for flight |
-| Disarm System | Disarms motors |
-| Takeoff | Initiates automatic takeoff |
-| Land | Controlled landing |
-| Return to Launch | Returns to home and lands |
-| Emergency Stop | Immediately kills motors |
-
-### System Commands
-
-| Command | Purpose |
-|---------|---------|
-| Reboot Flight Controller | Restarts Orange Cube+ |
-| Save to EEPROM | Persists parameter changes |
-| Calibrate Accelerometer | Runs accel calibration |
-| Calibrate Compass | Runs magnetometer calibration |
-| Calibrate Barometers | Recalibrates pressure sensors |
-
----
-
-## Configuration Files
-
-| File | Purpose |
-|------|---------|
-| `vite.config.ts` | Vite build configuration with plugins |
-| `tsconfig.json` | TypeScript compiler settings |
-| `drizzle.config.ts` | Drizzle ORM database configuration |
-| `postcss.config.js` | PostCSS processing for Tailwind |
-| `components.json` | shadcn/ui component configuration |
-| `package.json` | Dependencies and scripts |
+1. Open Task Scheduler
+2. Create Basic Task
+3. Set trigger: "When the computer starts"
+4. Action: Start a program
+5. Program: `node.exe`
+6. Arguments: `dist/index.cjs`
+7. Start in: `C:\path\to\mouse-gcs`
 
 ---
 
 ## Troubleshooting
 
-### Connection Issues
+### Application Won't Start
 
-1. Verify `DATABASE_URL` is set correctly
-2. Check flight controller is connected via USB/UART
-3. Ensure WebSocket port is not blocked
-4. Verify serial port permissions: `sudo usermod -a -G dialout $USER`
+1. Check Node.js version: `node -v` (must be v18+)
+2. Delete `node_modules` and run `npm install` again
+3. Check for port conflicts: `lsof -i :5000`
 
-### Camera Feed
+### Build Fails
 
-1. For laptop webcam: Grant browser camera permissions
-2. For RTSP streams: Verify network connectivity to camera
-3. For Skydroid C12: Connect to camera WiFi network first
+1. Ensure all dependencies installed: `npm install` (not `npm install --production`)
+2. Check TypeScript errors: `npm run check`
 
-### GPS/Sensors
+### Serial Port Access (Linux/Pi)
 
-1. Verify CAN bus connections for Here3+
-2. Check I2C address for LW20/HA LiDAR (default 0x66)
-3. Run sensor calibration commands if readings are erratic
-4. Check `dmesg` for USB device detection
+Add your user to the dialout group:
+```bash
+sudo usermod -a -G dialout $USER
+# Log out and back in
+```
 
-### Database Issues
+### Camera Feed Not Working
 
-1. Ensure PostgreSQL is running: `sudo systemctl status postgresql`
-2. Check database exists: `psql -l`
-3. Run migrations: `npm run db:push`
+1. For webcam: Grant browser camera permissions
+2. For RTSP: Verify network connectivity
+3. For Skydroid C12: Connect to camera WiFi first
+
+### Data Not Persisting
+
+1. Check `DATA_DIR` environment variable
+2. Ensure write permissions on data directory
+3. Check disk space
+
+### Google Sync Not Working
+
+1. Verify OAuth credentials in `.env`
+2. Check redirect URI matches exactly
+3. Re-authorize in Settings > Storage
 
 ---
 
 ## Local Storage Keys
 
-The application uses localStorage for client-side persistence:
+Client-side storage (browser localStorage):
 
 | Key | Purpose |
 |-----|---------|
-| `mouse_geofence_zones` | Geofence zone definitions |
-| `mouse_gui_tabs` | Sidebar tab configuration |
-| `mouse_gui_panels` | Panel position/visibility settings |
-| `mouse_camera_config` | Camera stream settings |
-| `mouse_theme` | UI theme preference |
-| `mouse_base_location` | RTL base coordinates |
-| `mouse_automation_scripts` | Custom automation scripts |
-| `mouse_terminal_commands` | User-added terminal commands |
-| `mouse_drone_armed` | Current arm state |
+| `mouse_gcs_users` | User accounts |
+| `mouse_gcs_session` | Current session |
+| `mouse_gcs_groups` | User groups |
+| `mouse_gcs_custom_roles` | Custom role definitions |
+| `mouse_gcs_role_permissions` | Role permissions |
+| `mouse_geofence_zones` | Geofence definitions |
+| `mouse_gui_tabs` | Sidebar configuration |
+| `mouse_camera_config` | Camera settings |
+| `mouse_base_location` | RTL coordinates |
 
 ---
 
@@ -620,8 +386,9 @@ The application uses localStorage for client-side persistence:
 - **v1.0** - Initial release with core GCS functionality
 - **v1.1** - Added geofencing, GUI configuration, expanded terminal commands
 - **v1.2** - Camera integration, RTSP support, improved HUD overlays
-- **v1.3** - GPS-denied navigation, multi-sensor verification, obstacle detection commands
+- **v1.3** - GPS-denied navigation, multi-sensor verification, obstacle detection
 - **v1.4** - Mission execution, waypoint editing, comprehensive terminal commands
+- **v1.5** - Standalone deployment support, local JSON storage, Google backup
 
 ---
 
