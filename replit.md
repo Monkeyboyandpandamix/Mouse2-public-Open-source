@@ -54,6 +54,14 @@ This application is fully portable and can be deployed without Replit:
 - **Windows PowerShell**: `scripts/build-standalone.ps1` - Creates a Windows-ready distribution package
 - Output: `standalone/mouse-gcs-1.0.0/` folder with pre-installed dependencies, launchers, and archives (.tar.gz, .zip)
 
+### Desktop Application (Electron)
+The application can be run as a native desktop app using Electron:
+- **Run Desktop App**: `./start-electron.sh` (Linux/macOS) or `start-electron.bat` (Windows)
+- **Build Installers**: `./build-electron.sh` creates platform-specific installers in `electron-dist/`
+- **Supported Platforms**: Windows (.exe installer, portable), macOS (.dmg), Linux (.AppImage, .deb)
+- **Data Location**: User data stored in OS-specific app data directory (auto-created)
+- **Features**: Native window, auto-starts embedded server, works completely offline
+
 ### Key Features
 - **Multi-drone management**: Connect and control multiple drones from a single ground station with drone selection screen after login, real-time status display for all drones on map, individual geofencing per drone, and TopBar logo click to switch between drones
 - **Preview mode**: Explore the interface without connecting a real drone by clicking "Preview Control Page" on drone selection
@@ -108,6 +116,7 @@ This application is fully portable and can be deployed without Replit:
 - `shared/` - Shared TypeScript types and Zod schemas
 - `data/` - Local JSON data storage (created automatically)
 - `scripts/` - Build and deployment scripts
+- `electron/` - Electron main process, preload scripts, and icons
 - `attached_assets/` - Project requirements and reference documents
 
 ## External Dependencies
@@ -128,6 +137,7 @@ This application is fully portable and can be deployed without Replit:
 - Vite for frontend development and bundling
 - esbuild for server-side bundling
 - TypeScript for type checking across the codebase
+- Electron + electron-builder for desktop application packaging
 
 ### Real-time Communication
 - WebSocket (ws) for live telemetry streaming between drone and ground station
