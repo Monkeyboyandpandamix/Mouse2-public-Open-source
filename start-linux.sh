@@ -44,15 +44,13 @@ if [ ! -d "node_modules" ]; then
     npm install
 fi
 
-# Build if not already built
-if [ ! -f "dist/index.cjs" ]; then
-    echo ""
-    echo "Building application..."
-    npm run build
-    if [ $? -ne 0 ]; then
-        echo "Build failed! Please check for errors."
-        exit 1
-    fi
+# Build the application
+echo ""
+echo "Building application..."
+npm run build
+if [ $? -ne 0 ]; then
+    echo "Build failed! Please check for errors."
+    exit 1
 fi
 
 echo ""

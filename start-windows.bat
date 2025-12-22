@@ -36,16 +36,14 @@ if not exist node_modules (
     call npm install
 )
 
-REM Check if build exists, if not build
-if not exist dist\index.cjs (
-    echo.
-    echo Building application...
-    call npm run build
-    if %ERRORLEVEL% neq 0 (
-        echo Build failed! Please check for errors.
-        pause
-        exit /b 1
-    )
+REM Build the application
+echo.
+echo Building application...
+call npm run build
+if %ERRORLEVEL% neq 0 (
+    echo Build failed! Please check for errors.
+    pause
+    exit /b 1
 )
 
 echo.
