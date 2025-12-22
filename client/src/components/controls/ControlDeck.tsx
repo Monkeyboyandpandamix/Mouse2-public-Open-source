@@ -1,8 +1,9 @@
 import { Button } from "@/components/ui/button";
-import { Hand, ArrowUpCircle, ArrowDownCircle, Power, AlertOctagon, Navigation, Zap } from "lucide-react";
+import { Hand, ArrowUpCircle, ArrowDownCircle, Power, AlertOctagon, Navigation, Zap, Lock } from "lucide-react";
 import { useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { usePermissions } from "@/hooks/usePermissions";
 
 interface BaseLocation {
   lat: number;
@@ -24,6 +25,12 @@ interface ControlDeckProps {
 }
 
 export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
+  const { hasPermission, isLoggedIn, getRole } = usePermissions();
+  
+  const canArmDisarm = hasPermission('arm_disarm');
+  const canFlightControl = hasPermission('flight_control');
+  const hasAnyControlPermission = canArmDisarm || canFlightControl;
+  
   const [isArmed, setIsArmed] = useState(() => {
     const saved = localStorage.getItem('mouse_drone_armed');
     return saved ? JSON.parse(saved) : false;
@@ -91,6 +98,10 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
   const pageWidgets = customWidgets.filter(w => w.targetPage === activeTab);
 
   const handleReturnToBase = () => {
+    if (!canFlightControl) {
+      toast.error("You don't have flight control permission");
+      return;
+    }
     if (!baseLocation) {
       toast.error("No base location set. Configure in Settings.");
       return;
@@ -105,6 +116,19 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
     setTimeout(() => setIsReturning(false), 3000);
   };
 
+  // Show restricted view for users without control permissions
+  if (!hasAnyControlPermission) {
+    return (
+      <div className="h-auto min-h-[120px] sm:min-h-[140px] lg:h-40 border-t border-border bg-card/80 backdrop-blur-md p-2 sm:p-4 flex items-center justify-center shrink-0 z-50">
+        <div className="flex flex-col items-center gap-2 text-muted-foreground">
+          <Lock className="h-8 w-8" />
+          <span className="text-sm font-medium">View-Only Mode</span>
+          <span className="text-xs">Flight controls require operator or admin permissions</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="h-auto min-h-[120px] sm:min-h-[140px] lg:h-40 border-t border-border bg-card/80 backdrop-blur-md p-2 sm:p-4 flex flex-wrap sm:flex-nowrap gap-2 sm:gap-4 shrink-0 z-50 overflow-x-auto">
       
@@ -115,14 +139,19 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
           variant="outline" 
           className={cn(
             "h-full flex flex-col gap-1 border-2",
+            !canArmDisarm && "opacity-50 cursor-not-allowed",
             isArmed 
               ? "bg-destructive/10 border-destructive text-destructive hover:bg-destructive/20 hover:text-destructive" 
               : "bg-emerald-500/10 border-emerald-500 text-emerald-500 hover:bg-emerald-500/20 hover:text-emerald-500"
           )}
+          disabled={!canArmDisarm}
           onClick={() => {
+            if (!canArmDisarm) {
+              toast.error("You don't have permission to arm/disarm");
+              return;
+            }
             const newArmed = !isArmed;
             setIsArmed(newArmed);
-            // Persist arm state and notify other components
             localStorage.setItem('mouse_drone_armed', JSON.stringify(newArmed));
             window.dispatchEvent(new CustomEvent('arm-state-changed', { detail: { armed: newArmed } }));
           }}
@@ -139,9 +168,16 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 h-full">
           <Button 
             variant="secondary" 
-            className="h-full flex flex-col gap-1 hover:bg-primary/20 hover:text-primary transition-colors p-2"
-            disabled={!isArmed}
+            className={cn(
+              "h-full flex flex-col gap-1 hover:bg-primary/20 hover:text-primary transition-colors p-2",
+              !canFlightControl && "opacity-50 cursor-not-allowed"
+            )}
+            disabled={!isArmed || !canFlightControl}
             onClick={() => {
+              if (!canFlightControl) {
+                toast.error("You don't have flight control permission");
+                return;
+              }
               toast.success("Initiating takeoff sequence...");
               window.dispatchEvent(new CustomEvent('flight-command', { detail: { command: 'takeoff' } }));
             }}
@@ -155,11 +191,12 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
             variant="secondary" 
             className={cn(
               "h-full flex flex-col gap-1 hover:bg-primary/20 hover:text-primary transition-colors p-2",
-              isReturning && "bg-amber-500/20 border-amber-500 text-amber-500"
+              isReturning && "bg-amber-500/20 border-amber-500 text-amber-500",
+              !canFlightControl && "opacity-50 cursor-not-allowed"
             )}
-            disabled={!isArmed || !baseLocation}
+            disabled={!isArmed || !baseLocation || !canFlightControl}
             onClick={handleReturnToBase}
-            title={baseLocation ? `Return to: ${baseLocation.name}` : "Configure base in Settings"}
+            title={!canFlightControl ? "No flight control permission" : (baseLocation ? `Return to: ${baseLocation.name}` : "Configure base in Settings")}
             data-testid="button-rtl"
           >
             <Navigation className={cn("h-5 w-5", isReturning && "animate-pulse")} />
@@ -168,9 +205,16 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
           
           <Button 
             variant="secondary" 
-            className="h-full flex flex-col gap-1 hover:bg-primary/20 hover:text-primary transition-colors p-2"
-            disabled={!isArmed}
+            className={cn(
+              "h-full flex flex-col gap-1 hover:bg-primary/20 hover:text-primary transition-colors p-2",
+              !canFlightControl && "opacity-50 cursor-not-allowed"
+            )}
+            disabled={!isArmed || !canFlightControl}
             onClick={() => {
+              if (!canFlightControl) {
+                toast.error("You don't have flight control permission");
+                return;
+              }
               toast.success("Initiating landing sequence...");
               window.dispatchEvent(new CustomEvent('flight-command', { detail: { command: 'land' } }));
             }}
@@ -182,11 +226,19 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
 
           <Button 
             variant="destructive" 
-            className="h-full flex flex-col gap-1 bg-destructive text-destructive-foreground hover:bg-destructive/90 animate-pulse p-2"
+            className={cn(
+              "h-full flex flex-col gap-1 bg-destructive text-destructive-foreground hover:bg-destructive/90 p-2",
+              canFlightControl && "animate-pulse",
+              !canFlightControl && "opacity-50 cursor-not-allowed"
+            )}
+            disabled={!canFlightControl}
             onClick={() => {
+              if (!canFlightControl) {
+                toast.error("You don't have flight control permission");
+                return;
+              }
               toast.error("EMERGENCY STOP ACTIVATED - Motors killed!", { duration: 5000 });
               window.dispatchEvent(new CustomEvent('flight-command', { detail: { command: 'abort' } }));
-              // Force disarm
               setIsArmed(false);
               localStorage.setItem('mouse_drone_armed', JSON.stringify(false));
               window.dispatchEvent(new CustomEvent('arm-state-changed', { detail: { armed: false } }));
@@ -206,9 +258,17 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
           variant="outline"
           className={cn(
             "h-full flex flex-col gap-1 relative overflow-hidden",
+            !canFlightControl && "opacity-50 cursor-not-allowed",
             gripperOpen ? "border-amber-500 text-amber-500" : "border-primary text-primary"
           )}
-          onClick={() => setGripperOpen(!gripperOpen)}
+          disabled={!canFlightControl}
+          onClick={() => {
+            if (!canFlightControl) {
+              toast.error("You don't have flight control permission");
+              return;
+            }
+            setGripperOpen(!gripperOpen);
+          }}
           data-testid="button-gripper"
         > 
           <div className={cn(
