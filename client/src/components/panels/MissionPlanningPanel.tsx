@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Plus, Trash2, Save, Play, MapPin, Navigation, Search, AlertTriangle, Clock, Bell, RotateCcw, Radar, Edit, X, Check, Lock } from "lucide-react";
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { MissionMap } from "@/components/map/MissionMap";
@@ -74,6 +74,22 @@ export function MissionPlanningPanel() {
     patrolRadius: "20"
   });
   const [isExecuting, setIsExecuting] = useState(false);
+
+  useEffect(() => {
+    const handleMissionUpdated = (e: CustomEvent<{ missionId: number }>) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/missions"] });
+      if (e.detail?.missionId) {
+        queryClient.invalidateQueries({ queryKey: ["/api/missions", e.detail.missionId, "waypoints"] });
+      }
+      if (selectedMission) {
+        queryClient.invalidateQueries({ queryKey: ["/api/missions", selectedMission, "waypoints"] });
+      }
+      toast.info("Mission updated from optimizer");
+    };
+    
+    window.addEventListener('mission-updated' as any, handleMissionUpdated);
+    return () => window.removeEventListener('mission-updated' as any, handleMissionUpdated);
+  }, [queryClient, selectedMission]);
 
   const { data: missions = [] } = useQuery<Mission[]>({
     queryKey: ["/api/missions"],
