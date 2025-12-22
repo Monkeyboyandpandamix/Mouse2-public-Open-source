@@ -54,7 +54,7 @@ This application is fully portable and can be deployed without Replit:
 - **Preview mode**: Explore the interface without connecting a real drone by clicking "Preview Control Page" on drone selection
 - Real-time telemetry panel showing altitude, speed, attitude, and motor data
 - Interactive map with all connected drones visible, waypoints, flight path visualization, address search, and hover tooltips showing drone status/battery/GPS/mission
-- Mission planning with waypoint management and actions (hover, photo, drop/pickup payload, RTL)
+- Mission planning with waypoint management and actions (hover, photo, drop/pickup payload, open gripper, RTL)
 - Advanced AI-powered object tracking using TensorFlow.js COCO-SSD model for detecting stationary and moving objects (people, cars, trucks, motorcycles, bicycles), with multi-object tracking via IoU-based Hungarian assignment, velocity prediction for temporary occlusions, temporal confidence smoothing (0.7 EMA), and fallback motion detection for offline/degraded scenarios
 - Audio broadcast system with Pi GPIO speaker, USB speaker, and Orange Cube+ buzzer support
 - Flight controls including arm/disarm, takeoff, land, RTL, and emergency stop
@@ -77,7 +77,8 @@ This application is fully portable and can be deployed without Replit:
 - Autonomous mission completion on ground control disconnect with configurable RTL/hover/land actions
 - Flight log management with delete functionality and confirmation dialogs
 - Terminal commands panel with custom command creation and deletion
-- GUI configuration with immediate "Apply Now" functionality
+- GUI configuration with immediate "Apply Now" functionality, dark/light theme support with automatic persistence, and Google Sheets backup for tabs/panels/widgets
+- **GUI Permission Controls**: Only administrators can create and delete custom tabs/widgets; all users with configure_gui_advanced permission can reorder and toggle visibility
 - **Flight Path Optimizer**: Intelligent route optimization panel that analyzes missions based on real-time weather data (Open-Meteo API), terrain considerations, and waypoint ordering. Provides actionable suggestions for battery savings, time reduction, headwind avoidance, altitude optimization, and safety improvements with estimated savings percentages. Requires mission_planning permission.
 
 ### Hardware Configuration
