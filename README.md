@@ -441,16 +441,6 @@ Create additional roles beyond the three built-in ones:
 | **ABORT** | Emergency stop | None | Immediately kills motors! |
 | **GRIPPER** | Toggle payload gripper | None | GRAB/RELEASE for payloads |
 
-### Keyboard Shortcuts
-
-| Key | Action |
-|-----|--------|
-| `Space` | Toggle ARM/DISARM |
-| `T` | Takeoff |
-| `L` | Land |
-| `R` | Return to Launch |
-| `Esc` | Emergency Abort |
-
 ### Status Indicators
 
 | Indicator | Meaning |
