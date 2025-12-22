@@ -27,14 +27,15 @@ Preferred communication style: Simple, everyday language.
 ### Data Storage
 - **Database**: PostgreSQL with Drizzle ORM
 - **Schema Location**: `shared/schema.ts` contains all table definitions
-- **Tables**: Settings, missions, waypoints, flight logs, sensor data, motor telemetry, camera settings
+- **Tables**: Settings, missions, waypoints, flight logs, sensor data, motor telemetry, camera settings, drones
 - **Migrations**: Managed via drizzle-kit with output to `./migrations`
 
 ### Key Features
+- **Multi-drone management**: Connect and control multiple drones from a single ground station with drone selection screen after login, real-time status display for all drones on map, individual geofencing per drone, and TopBar logo click to switch between drones
 - Real-time telemetry panel showing altitude, speed, attitude, and motor data
-- Interactive map with drone position, waypoints, flight path visualization, and address search
+- Interactive map with all connected drones visible, waypoints, flight path visualization, address search, and hover tooltips showing drone status/battery/GPS/mission
 - Mission planning with waypoint management and actions (hover, photo, drop/pickup payload, RTL)
-- Object tracking panel with motion-based detection and IoU tracking for stable object IDs
+- Advanced object tracking with multi-scale detection (8px/16px/32px blocks), background subtraction for static objects, global motion compensation, IoU + color histogram matching, velocity prediction, and click-to-lock persistent tracking
 - Audio broadcast system with Pi GPIO speaker, USB speaker, and Orange Cube+ buzzer support
 - Flight controls including arm/disarm, takeoff, land, RTL, and emergency stop
 - Gripper control for payload drop/pickup operations

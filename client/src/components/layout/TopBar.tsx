@@ -15,7 +15,8 @@ import {
   LogOut,
   User,
   Plane,
-  ChevronDown
+  ChevronDown,
+  RefreshCw
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import {
@@ -27,6 +28,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { Drone } from "@shared/schema";
 
 interface UserSession {
   user: { id: string; username: string; role: string } | null;
@@ -58,6 +61,12 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     return saved ? JSON.parse(saved) : { user: null, isLoggedIn: false };
   });
   
+  // Selected drone state
+  const [selectedDrone, setSelectedDrone] = useState<Drone | null>(() => {
+    const saved = localStorage.getItem('mouse_selected_drone');
+    return saved ? JSON.parse(saved) : null;
+  });
+  
   // Listen for session changes
   useEffect(() => {
     const handleSessionChange = (e: CustomEvent<UserSession>) => {
@@ -67,11 +76,27 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     return () => window.removeEventListener('session-change' as any, handleSessionChange);
   }, []);
 
+  // Listen for drone selection changes
+  useEffect(() => {
+    const handleDroneChange = (e: CustomEvent<Drone>) => {
+      setSelectedDrone(e.detail);
+    };
+    window.addEventListener('drone-selected' as any, handleDroneChange);
+    return () => window.removeEventListener('drone-selected' as any, handleDroneChange);
+  }, []);
+
   const handleLogout = () => {
     localStorage.removeItem('mouse_gcs_session');
+    localStorage.removeItem('mouse_selected_drone');
     setSession({ user: null, isLoggedIn: false });
+    setSelectedDrone(null);
     window.dispatchEvent(new CustomEvent('session-change', { detail: { user: null, isLoggedIn: false } }));
     toast.info("Logged out successfully");
+  };
+
+  const handleSwitchDrone = () => {
+    window.dispatchEvent(new CustomEvent('show-drone-selection'));
+    toast.info("Select a different drone");
   };
   
   // Simulated diagnostics - in real implementation, would come from WebSocket
@@ -112,14 +137,49 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
   return (
     <header className="h-14 border-b border-border bg-card/80 backdrop-blur-md px-2 sm:px-4 flex items-center justify-between shrink-0 z-50 relative">
       <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-        <div className="flex items-center gap-2 shrink-0">
-          <Gamepad2 className="h-5 w-5 sm:h-6 sm:w-6 text-primary animate-pulse" />
-          <h1 className="text-base sm:text-xl font-bold tracking-wider text-foreground font-sans whitespace-nowrap">
-            <span className="hidden sm:inline">M.O.U.S.E.</span>
-            <span className="sm:hidden">MOUSE</span>
-            <span className="text-muted-foreground text-xs sm:text-sm font-normal hidden md:inline"> GCS v1.0</span>
-          </h1>
-        </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={handleSwitchDrone}
+              className="flex items-center gap-2 shrink-0 hover:opacity-80 transition-opacity cursor-pointer"
+              data-testid="button-switch-drone"
+            >
+              <Gamepad2 className="h-5 w-5 sm:h-6 sm:w-6 text-primary animate-pulse" />
+              <h1 className="text-base sm:text-xl font-bold tracking-wider text-foreground font-sans whitespace-nowrap">
+                <span className="hidden sm:inline">M.O.U.S.E.</span>
+                <span className="sm:hidden">MOUSE</span>
+                <span className="text-muted-foreground text-xs sm:text-sm font-normal hidden md:inline"> GCS v1.0</span>
+              </h1>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <p>Click to switch drones</p>
+          </TooltipContent>
+        </Tooltip>
+        
+        {selectedDrone && (
+          <>
+            <div className="h-6 w-px bg-border mx-1" />
+            <div className="flex items-center gap-2 px-2 py-1 bg-primary/10 rounded-md">
+              <Plane className="h-4 w-4 text-primary" />
+              <div className="text-xs">
+                <span className="font-bold">{selectedDrone.callsign}</span>
+                <span className="text-muted-foreground ml-2 hidden sm:inline">{selectedDrone.name}</span>
+              </div>
+              <Badge 
+                variant="outline" 
+                className={`text-[10px] px-1.5 py-0 ${
+                  selectedDrone.status === 'flying' ? 'text-blue-500 border-blue-500' :
+                  selectedDrone.status === 'online' ? 'text-emerald-500 border-emerald-500' :
+                  selectedDrone.status === 'armed' ? 'text-amber-500 border-amber-500' :
+                  'text-gray-500 border-gray-500'
+                }`}
+              >
+                {selectedDrone.status?.toUpperCase() || 'OFFLINE'}
+              </Badge>
+            </div>
+          </>
+        )}
         <div className="h-6 w-px bg-border mx-1 sm:mx-2 hidden sm:block" />
         
         {/* System Ready Status with Popover for manual override */}

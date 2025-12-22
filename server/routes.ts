@@ -10,6 +10,7 @@ import {
   insertSensorDataSchema,
   insertMotorTelemetrySchema,
   insertCameraSettingsSchema,
+  insertDroneSchema,
 } from "@shared/schema";
 import { ZodError } from "zod";
 import { syncDataToSheets, getOrCreateBackupSpreadsheet, getSpreadsheetUrl } from "./googleSheets";
@@ -428,6 +429,86 @@ export async function registerRoutes(
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Drones API
+  app.get("/api/drones", async (req, res) => {
+    try {
+      const drones = await storage.getAllDrones();
+      res.json(drones);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch drones" });
+    }
+  });
+
+  app.get("/api/drones/:id", async (req, res) => {
+    try {
+      const drone = await storage.getDrone(parseInt(req.params.id));
+      if (!drone) {
+        return res.status(404).json({ error: "Drone not found" });
+      }
+      res.json(drone);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch drone" });
+    }
+  });
+
+  app.post("/api/drones", async (req, res) => {
+    try {
+      const validated = insertDroneSchema.parse(req.body);
+      const drone = await storage.createDrone(validated);
+      broadcast("drone_added", drone);
+      res.json(drone);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        res.status(400).json({ error: error.errors });
+      } else {
+        res.status(500).json({ error: "Failed to create drone" });
+      }
+    }
+  });
+
+  app.patch("/api/drones/:id", async (req, res) => {
+    try {
+      const drone = await storage.updateDrone(parseInt(req.params.id), req.body);
+      if (!drone) {
+        return res.status(404).json({ error: "Drone not found" });
+      }
+      broadcast("drone_updated", drone);
+      res.json(drone);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update drone" });
+    }
+  });
+
+  app.patch("/api/drones/:id/location", async (req, res) => {
+    try {
+      const { latitude, longitude, altitude, heading } = req.body;
+      const drone = await storage.updateDroneLocation(
+        parseInt(req.params.id),
+        latitude,
+        longitude,
+        altitude,
+        heading
+      );
+      if (!drone) {
+        return res.status(404).json({ error: "Drone not found" });
+      }
+      broadcast("drone_location", { id: drone.id, latitude, longitude, altitude, heading });
+      res.json(drone);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update drone location" });
+    }
+  });
+
+  app.delete("/api/drones/:id", async (req, res) => {
+    try {
+      await storage.deleteDrone(parseInt(req.params.id));
+      broadcast("drone_removed", { id: parseInt(req.params.id) });
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete drone" });
     }
   });
 

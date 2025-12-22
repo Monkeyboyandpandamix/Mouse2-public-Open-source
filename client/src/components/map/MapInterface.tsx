@@ -6,7 +6,7 @@ import { useEffect, useState, useCallback, type MouseEvent } from "react";
 // Default location - Burlington, NC
 const DEFAULT_LAT = 36.0957;
 const DEFAULT_LNG = -79.4378;
-import { Search, Map as MapIcon, Layers, ZoomIn, ZoomOut, RotateCcw, Crosshair, Plane } from "lucide-react";
+import { Search, Map as MapIcon, Layers, ZoomIn, ZoomOut, RotateCcw, Crosshair, Plane, Battery, Signal, Radio } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
+import type { Drone } from "@shared/schema";
 
 interface GeofenceZone {
   id: string;
@@ -61,6 +62,32 @@ const DroneIcon = L.divIcon({
   iconSize: [32, 32],
   iconAnchor: [16, 16],
 });
+
+// Dynamic drone icon based on status
+const createDroneIcon = (status: string, isSelected: boolean) => {
+  const colors: Record<string, { bg: string; glow: string }> = {
+    flying: { bg: '#3b82f6', glow: 'rgba(59,130,246,0.8)' },
+    online: { bg: '#22c55e', glow: 'rgba(34,197,94,0.8)' },
+    armed: { bg: '#f59e0b', glow: 'rgba(245,158,11,0.8)' },
+    error: { bg: '#ef4444', glow: 'rgba(239,68,68,0.8)' },
+    maintenance: { bg: '#f97316', glow: 'rgba(249,115,22,0.8)' },
+    offline: { bg: '#6b7280', glow: 'rgba(107,114,128,0.5)' },
+  };
+  const { bg, glow } = colors[status] || colors.offline;
+  const size = isSelected ? 'w-10 h-10' : 'w-8 h-8';
+  const innerSize = isSelected ? 'w-5 h-5' : 'w-4 h-4';
+  const ringClass = isSelected ? 'ring-2 ring-white ring-offset-2 ring-offset-transparent' : '';
+  
+  return L.divIcon({
+    className: "bg-transparent",
+    html: `<div class="relative flex items-center justify-center ${size}">
+            ${status === 'flying' || status === 'armed' ? `<div class="absolute w-full h-full rounded-full animate-ping" style="background: ${bg}33"></div>` : ''}
+            <div class="${innerSize} ${ringClass} rounded-full border-2 border-white" style="background: ${bg}; box-shadow: 0 0 10px ${glow}"></div>
+           </div>`,
+    iconSize: isSelected ? [40, 40] : [32, 32],
+    iconAnchor: isSelected ? [20, 20] : [16, 16],
+  });
+};
 
 const HomeIcon = L.divIcon({
   className: "bg-transparent",
@@ -249,6 +276,39 @@ export function MapInterface() {
       return res.json();
     },
   });
+
+  // Fetch all drones for map display
+  const { data: allDrones = [] } = useQuery<Drone[]>({
+    queryKey: ["/api/drones"],
+    queryFn: async () => {
+      const res = await fetch("/api/drones");
+      if (!res.ok) return [];
+      return res.json();
+    },
+    refetchInterval: 3000, // Refresh every 3 seconds for real-time positions
+  });
+
+  // Get selected drone from localStorage
+  const [selectedDroneId, setSelectedDroneId] = useState<number | null>(() => {
+    const saved = localStorage.getItem('mouse_selected_drone');
+    if (saved) {
+      try {
+        return JSON.parse(saved).id;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+
+  // Listen for drone selection changes
+  useEffect(() => {
+    const handleDroneChange = (e: CustomEvent<Drone>) => {
+      setSelectedDroneId(e.detail?.id || null);
+    };
+    window.addEventListener('drone-selected' as any, handleDroneChange);
+    return () => window.removeEventListener('drone-selected' as any, handleDroneChange);
+  }, []);
   
   // Load geofence zones from localStorage and listen for updates
   useEffect(() => {
@@ -414,20 +474,150 @@ export function MapInterface() {
           </Marker>
         )}
         
-        {/* Drone Position */}
-        <Marker position={position} icon={DroneIcon}>
-          <Popup>
-            <div className="font-mono text-sm">
-              <strong>M.O.U.S.E Drone</strong><br/>
-              Status: Airborne<br/>
-              Alt: 45m
+        {/* All Connected Drones */}
+        {allDrones.map((drone) => {
+          const hasPosition = drone.latitude && drone.longitude;
+          const dronePos: [number, number] = hasPosition 
+            ? [drone.latitude!, drone.longitude!] 
+            : position; // Fall back to current location for drones without position
+          const isSelected = drone.id === selectedDroneId;
+          
+          // Parse geofence data for this drone
+          const geofence = drone.geofenceData as { 
+            type?: 'circle' | 'polygon'; 
+            center?: { lat: number; lng: number }; 
+            radius?: number; 
+            points?: { lat: number; lng: number }[];
+            maxAltitude?: number;
+          } | null;
+          
+          return (
+            <div key={drone.id}>
+              {/* Drone Marker */}
+              <Marker 
+                position={dronePos} 
+                icon={createDroneIcon(drone.status, isSelected)}
+              >
+                <Popup>
+                  <div className="font-sans text-sm min-w-[200px]">
+                    <div className="flex items-center justify-between mb-2">
+                      <strong className="text-base">{drone.callsign}</strong>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                        drone.status === 'flying' ? 'bg-blue-100 text-blue-700' :
+                        drone.status === 'online' ? 'bg-emerald-100 text-emerald-700' :
+                        drone.status === 'armed' ? 'bg-amber-100 text-amber-700' :
+                        drone.status === 'error' ? 'bg-red-100 text-red-700' :
+                        'bg-gray-100 text-gray-700'
+                      }`}>{drone.status}</span>
+                    </div>
+                    <div className="text-xs text-gray-600 mb-2">{drone.name}</div>
+                    
+                    <div className="grid grid-cols-2 gap-2 text-xs mb-2">
+                      <div className="flex items-center gap-1">
+                        <span className="text-gray-500">Battery:</span>
+                        <span className={`font-medium ${
+                          (drone.batteryPercent || 0) > 50 ? 'text-emerald-600' :
+                          (drone.batteryPercent || 0) > 20 ? 'text-amber-600' :
+                          'text-red-600'
+                        }`}>{drone.batteryPercent ?? '--'}%</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-gray-500">Signal:</span>
+                        <span className="font-medium">{drone.signalStrength ?? '--'}%</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-gray-500">Alt:</span>
+                        <span className="font-medium">{drone.altitude?.toFixed(1) ?? '--'}m</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-gray-500">GPS:</span>
+                        <span className={`font-medium ${
+                          drone.gpsStatus === '3d_fix' || drone.gpsStatus === 'rtk_fixed' ? 'text-emerald-600' :
+                          drone.gpsStatus === '2d_fix' ? 'text-amber-600' :
+                          'text-red-600'
+                        }`}>{drone.gpsStatus?.replace('_', ' ') || 'No Fix'}</span>
+                      </div>
+                    </div>
+                    
+                    <div className="text-xs border-t pt-2 mt-2">
+                      <div className="flex items-center gap-1 mb-1">
+                        <span className="text-gray-500">Model:</span>
+                        <span>{drone.model} ({drone.motorCount}M)</span>
+                      </div>
+                      {drone.currentMissionId && (
+                        <div className="flex items-center gap-1 text-blue-600">
+                          <span>Mission #{drone.currentMissionId}</span>
+                          {drone.currentWaypointIndex && (
+                            <span>• WP {drone.currentWaypointIndex}</span>
+                          )}
+                        </div>
+                      )}
+                      {drone.geofenceEnabled && (
+                        <div className="flex items-center gap-1 text-amber-600">
+                          <span>Geofence Active</span>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {isSelected && (
+                      <div className="mt-2 pt-2 border-t text-center text-xs font-medium text-primary">
+                        Currently Controlled
+                      </div>
+                    )}
+                  </div>
+                </Popup>
+              </Marker>
+              
+              {/* Drone's Geofence Zone (if enabled and has data) */}
+              {drone.geofenceEnabled && geofence && (
+                <>
+                  {geofence.type === 'circle' && geofence.center && geofence.radius && (
+                    <Circle
+                      center={[geofence.center.lat, geofence.center.lng]}
+                      radius={geofence.radius}
+                      pathOptions={{
+                        color: isSelected ? '#f59e0b' : '#94a3b8',
+                        fillColor: isSelected ? '#f59e0b' : '#94a3b8',
+                        fillOpacity: 0.1,
+                        weight: isSelected ? 2 : 1,
+                        dashArray: '5, 5',
+                      }}
+                    />
+                  )}
+                  {geofence.type === 'polygon' && geofence.points && geofence.points.length >= 3 && (
+                    <Polygon
+                      positions={geofence.points.map(p => [p.lat, p.lng] as [number, number])}
+                      pathOptions={{
+                        color: isSelected ? '#f59e0b' : '#94a3b8',
+                        fillColor: isSelected ? '#f59e0b' : '#94a3b8',
+                        fillOpacity: 0.1,
+                        weight: isSelected ? 2 : 1,
+                        dashArray: '5, 5',
+                      }}
+                    />
+                  )}
+                </>
+              )}
             </div>
-          </Popup>
-        </Marker>
+          );
+        })}
+
+        {/* Fallback: Show current position if no drones */}
+        {allDrones.length === 0 && (
+          <Marker position={position} icon={DroneIcon}>
+            <Popup>
+              <div className="font-mono text-sm">
+                <strong>M.O.U.S.E GCS</strong><br/>
+                No drones connected<br/>
+                Add a drone to get started
+              </div>
+            </Popup>
+          </Marker>
+        )}
 
         {/* Home Position */}
-        <Marker position={[34.0520, -118.2435]} icon={HomeIcon}>
-           <Popup>Home Point</Popup>
+        <Marker position={currentLocation} icon={HomeIcon}>
+           <Popup>Home Point (Operator Location)</Popup>
         </Marker>
 
         {/* Mission Waypoints */}

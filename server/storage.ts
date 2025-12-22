@@ -8,6 +8,7 @@ import {
   sensorData,
   motorTelemetry,
   cameraSettings,
+  drones,
   type Settings,
   type InsertSettings,
   type Mission,
@@ -22,6 +23,8 @@ import {
   type InsertMotorTelemetry,
   type CameraSettings,
   type InsertCameraSettings,
+  type Drone,
+  type InsertDrone,
 } from "@shared/schema";
 import { eq, desc } from "drizzle-orm";
 
@@ -67,6 +70,15 @@ export interface IStorage {
   // Camera Settings
   getCameraSettings(): Promise<CameraSettings | undefined>;
   updateCameraSettings(settings: Partial<InsertCameraSettings>): Promise<CameraSettings>;
+  
+  // Drones
+  getDrone(id: number): Promise<Drone | undefined>;
+  getDroneByCallsign(callsign: string): Promise<Drone | undefined>;
+  getAllDrones(): Promise<Drone[]>;
+  createDrone(drone: InsertDrone): Promise<Drone>;
+  updateDrone(id: number, drone: Partial<InsertDrone>): Promise<Drone | undefined>;
+  updateDroneLocation(id: number, latitude: number, longitude: number, altitude: number, heading: number): Promise<Drone | undefined>;
+  deleteDrone(id: number): Promise<void>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -213,6 +225,48 @@ export class DatabaseStorage implements IStorage {
     }
     const result = await db.insert(cameraSettings).values(settings).returning();
     return result[0];
+  }
+
+  // Drones
+  async getDrone(id: number): Promise<Drone | undefined> {
+    const result = await db.select().from(drones).where(eq(drones.id, id)).limit(1);
+    return result[0];
+  }
+
+  async getDroneByCallsign(callsign: string): Promise<Drone | undefined> {
+    const result = await db.select().from(drones).where(eq(drones.callsign, callsign)).limit(1);
+    return result[0];
+  }
+
+  async getAllDrones(): Promise<Drone[]> {
+    return await db.select().from(drones).orderBy(desc(drones.updatedAt));
+  }
+
+  async createDrone(drone: InsertDrone): Promise<Drone> {
+    const result = await db.insert(drones).values(drone).returning();
+    return result[0];
+  }
+
+  async updateDrone(id: number, drone: Partial<InsertDrone>): Promise<Drone | undefined> {
+    const result = await db
+      .update(drones)
+      .set({ ...drone, updatedAt: new Date() })
+      .where(eq(drones.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async updateDroneLocation(id: number, latitude: number, longitude: number, altitude: number, heading: number): Promise<Drone | undefined> {
+    const result = await db
+      .update(drones)
+      .set({ latitude, longitude, altitude, heading, lastSeen: new Date(), updatedAt: new Date() })
+      .where(eq(drones.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async deleteDrone(id: number): Promise<void> {
+    await db.delete(drones).where(eq(drones.id, id));
   }
 }
 

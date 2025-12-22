@@ -169,3 +169,53 @@ export const cameraSettings = pgTable("camera_settings", {
 export const insertCameraSettingsSchema = createInsertSchema(cameraSettings).omit({ id: true, updatedAt: true });
 export type InsertCameraSettings = z.infer<typeof insertCameraSettingsSchema>;
 export type CameraSettings = typeof cameraSettings.$inferSelect;
+
+// Connected Drones
+export const drones = pgTable("drones", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  callsign: text("callsign").notNull().unique(), // Unique identifier like "ALPHA-1", "BRAVO-2"
+  model: text("model").notNull().default("Custom"), // "DJI Mavic", "Custom Hexacopter", etc.
+  status: text("status").notNull().default("offline"), // 'online', 'offline', 'armed', 'flying', 'error', 'maintenance'
+  connectionType: text("connection_type").notNull().default("mavlink"), // 'mavlink', 'dji_sdk', 'custom'
+  connectionString: text("connection_string"), // UDP/TCP endpoint, serial port, etc.
+  
+  // Current location (updated in real-time)
+  latitude: real("latitude"),
+  longitude: real("longitude"),
+  altitude: real("altitude"),
+  heading: real("heading"),
+  
+  // Battery and health
+  batteryPercent: integer("battery_percent"),
+  signalStrength: integer("signal_strength"), // 0-100
+  gpsStatus: text("gps_status").default("no_fix"), // 'no_fix', '2d_fix', '3d_fix', 'dgps', 'rtk_fixed'
+  
+  // Current mission info
+  currentMissionId: integer("current_mission_id").references(() => missions.id, { onDelete: "set null" }),
+  currentWaypointIndex: integer("current_waypoint_index"),
+  
+  // Geofencing
+  geofenceEnabled: boolean("geofence_enabled").default(false),
+  geofenceData: json("geofence_data"), // { type: 'circle' | 'polygon', center?, radius?, points?, maxAltitude?, minAltitude? }
+  
+  // Hardware configuration
+  motorCount: integer("motor_count").default(4), // 4 or 6 motors
+  hasGripper: boolean("has_gripper").default(false),
+  hasCamera: boolean("has_camera").default(true),
+  hasThermal: boolean("has_thermal").default(false),
+  hasLidar: boolean("has_lidar").default(false),
+  
+  // Settings specific to this drone
+  maxSpeed: real("max_speed").default(15), // m/s
+  maxAltitude: real("max_altitude").default(120), // meters
+  rtlAltitude: real("rtl_altitude").default(50), // meters
+  
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  lastSeen: timestamp("last_seen"),
+});
+
+export const insertDroneSchema = createInsertSchema(drones).omit({ id: true, createdAt: true, updatedAt: true, lastSeen: true });
+export type InsertDrone = z.infer<typeof insertDroneSchema>;
+export type Drone = typeof drones.$inferSelect;

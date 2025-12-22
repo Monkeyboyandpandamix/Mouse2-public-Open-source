@@ -15,9 +15,11 @@ import { TerminalCommandsPanel } from "@/components/panels/TerminalCommandsPanel
 import { UserAccessPanel } from "@/components/panels/UserAccessPanel";
 import { GeofencingPanel } from "@/components/panels/GeofencingPanel";
 import { GUIConfigPanel } from "@/components/panels/GUIConfigPanel";
+import { DroneSelectionPanel } from "@/components/panels/DroneSelectionPanel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import type { Drone } from "@shared/schema";
 
 interface SystemError {
   id: string;
@@ -45,13 +47,48 @@ export default function Home() {
     return false;
   });
 
+  // Selected drone state
+  const [selectedDrone, setSelectedDrone] = useState<Drone | null>(() => {
+    const saved = localStorage.getItem('mouse_selected_drone');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  });
+
   // Listen for session changes (logout from TopBar or UserAccessPanel)
   useEffect(() => {
     const handleSessionChange = (e: CustomEvent<{ isLoggedIn: boolean }>) => {
       setIsLoggedIn(e.detail.isLoggedIn);
+      // Clear selected drone on logout
+      if (!e.detail.isLoggedIn) {
+        setSelectedDrone(null);
+        localStorage.removeItem('mouse_selected_drone');
+      }
     };
     window.addEventListener('session-change' as any, handleSessionChange);
     return () => window.removeEventListener('session-change' as any, handleSessionChange);
+  }, []);
+
+  // Listen for drone selection changes (from TopBar logo click)
+  useEffect(() => {
+    const handleDroneChange = (e: CustomEvent<Drone | null>) => {
+      setSelectedDrone(e.detail);
+    };
+    const handleShowDroneSelection = () => {
+      setSelectedDrone(null);
+      localStorage.removeItem('mouse_selected_drone');
+    };
+    window.addEventListener('drone-selected' as any, handleDroneChange);
+    window.addEventListener('show-drone-selection' as any, handleShowDroneSelection);
+    return () => {
+      window.removeEventListener('drone-selected' as any, handleDroneChange);
+      window.removeEventListener('show-drone-selection' as any, handleShowDroneSelection);
+    };
   }, []);
 
   // Listen for system errors from various sources (must be before conditional return)
@@ -88,6 +125,11 @@ export default function Home() {
   // If not logged in, show UserAccessPanel (which has the login form)
   if (!isLoggedIn) {
     return <UserAccessPanel />;
+  }
+
+  // If logged in but no drone selected, show drone selection panel
+  if (!selectedDrone) {
+    return <DroneSelectionPanel onDroneSelected={(drone) => setSelectedDrone(drone)} />;
   }
 
   const dismissError = (id: string) => {
