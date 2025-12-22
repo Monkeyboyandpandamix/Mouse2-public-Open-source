@@ -89,11 +89,15 @@ interface OptimizationResult {
 interface OptimizationSuggestion {
   id: string;
   type: 'route' | 'altitude' | 'weather' | 'terrain' | 'safety';
-  severity: 'info' | 'warning' | 'critical';
+  severity: 'info' | 'warning' | 'critical' | 'danger';
   title: string;
   description: string;
   savings?: string;
   applied: boolean;
+  data?: {
+    reorderedWaypoints?: { id: number; newOrder: number }[];
+    altitudeAdjustments?: { waypointId: number; newAltitude: number }[];
+  };
 }
 
 interface Mission {
@@ -384,6 +388,7 @@ export function FlightPathOptimizerPanel() {
 
       const distanceSaved = totalOriginalDistance - optimizedDistance;
       if (distanceSaved > 50) {
+        const reorderedWaypoints = optimizedOrder.map((id, idx) => ({ id, newOrder: idx }));
         suggestions.push({
           id: 'route-reorder',
           type: 'route',
@@ -391,7 +396,8 @@ export function FlightPathOptimizerPanel() {
           title: 'Route Reordering Recommended',
           description: `Reordering waypoints could reduce total distance by ${Math.round(distanceSaved)}m (${Math.round(distanceSaved/totalOriginalDistance*100)}%).`,
           savings: `${Math.round(distanceSaved)}m shorter`,
-          applied: false
+          applied: false,
+          data: { reorderedWaypoints }
         });
       }
     }
@@ -418,6 +424,7 @@ export function FlightPathOptimizerPanel() {
     const motorCount = selectedDrone?.motorCount || 4;
     const batteryPercent = selectedDrone?.batteryPercent || 100;
     const batteryCapacityWh = 99.9;
+    const availableCapacityWh = batteryCapacityWh * (batteryPercent / 100);
     const motorPowerW = 150;
     const totalPowerW = motorCount * motorPowerW * 0.6;
     
@@ -435,7 +442,18 @@ export function FlightPathOptimizerPanel() {
     const originalFlightTimeSeconds = (totalOriginalDistance / cruiseSpeed) * windFactor;
     const climbEnergyWh = (totalAltitudeChange * 0.01) * motorCount;
     const flightEnergyWh = (totalPowerW * originalFlightTimeSeconds / 3600) + climbEnergyWh;
-    const originalBatteryUsage = (flightEnergyWh / batteryCapacityWh) * 100;
+    const originalBatteryUsage = (flightEnergyWh / availableCapacityWh) * 100;
+    
+    if (originalBatteryUsage >= 80) {
+      suggestions.push({
+        id: 'low-battery-warning',
+        type: 'safety',
+        severity: 'danger',
+        title: 'High Battery Usage Warning',
+        description: `Mission requires ${Math.round(originalBatteryUsage)}% of available capacity (${Math.round(availableCapacityWh)}Wh). Consider shorter route or charging before flight.`,
+        applied: false
+      });
+    }
     
     const routeSuggestions = suggestions.filter(s => s.type === 'route').length;
     const altitudeSuggestions = suggestions.filter(s => s.type === 'altitude').length;
@@ -549,6 +567,16 @@ export function FlightPathOptimizerPanel() {
                 body: JSON.stringify({ altitude: Math.round(optimalAlt) })
               });
             }
+          }
+        }
+
+        if (suggestion.id === 'route-reorder' && suggestion.data?.reorderedWaypoints) {
+          for (const { id, newOrder } of suggestion.data.reorderedWaypoints) {
+            await fetch(`/api/waypoints/${id}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ order: newOrder })
+            });
           }
         }
       }
