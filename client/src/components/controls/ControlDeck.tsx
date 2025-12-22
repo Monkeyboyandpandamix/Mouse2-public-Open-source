@@ -1,9 +1,10 @@
 import { Button } from "@/components/ui/button";
-import { Hand, ArrowUpCircle, ArrowDownCircle, Power, AlertOctagon, Navigation, Zap, Lock } from "lucide-react";
-import { useState, useEffect } from "react";
+import { Hand, ArrowUpCircle, ArrowDownCircle, Power, AlertOctagon, Navigation, Zap, Lock, Circle } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
+import { apiRequest } from "@/lib/queryClient";
 
 interface BaseLocation {
   lat: number;
@@ -39,6 +40,130 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
   const [baseLocation, setBaseLocation] = useState<BaseLocation | null>(null);
   const [isReturning, setIsReturning] = useState(false);
   const [customWidgets, setCustomWidgets] = useState<CustomWidget[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const flightStartTime = useRef<Date | null>(null);
+  const maxAltitudeRef = useRef<number>(0);
+  const totalDistanceRef = useRef<number>(0);
+  const lastPositionRef = useRef<{lat: number, lng: number} | null>(null);
+
+  // Get current drone ID from localStorage
+  const getCurrentDroneId = () => {
+    const saved = localStorage.getItem('mouse_selected_drone');
+    return saved ? JSON.parse(saved)?.id : 'default';
+  };
+
+  // Start flight session automatically on takeoff
+  const startFlightSession = async () => {
+    try {
+      const droneId = getCurrentDroneId();
+      const response = await apiRequest('/api/flight-sessions/start', {
+        method: 'POST',
+        body: JSON.stringify({ droneId }),
+      });
+      const data = await response.json();
+      if (data.success && data.session) {
+        setActiveSessionId(data.session.id);
+        setIsRecording(true);
+        flightStartTime.current = new Date();
+        maxAltitudeRef.current = 0;
+        totalDistanceRef.current = 0;
+        lastPositionRef.current = null;
+        toast.success("Flight recording started");
+        console.log(`[FLIGHT] Session started: ${data.session.id}`);
+      }
+    } catch (error) {
+      console.error("Failed to start flight session:", error);
+    }
+  };
+
+  // End flight session automatically on landing
+  const endFlightSession = async () => {
+    if (!activeSessionId && !isRecording) return;
+    
+    try {
+      const droneId = getCurrentDroneId();
+      const totalFlightTime = flightStartTime.current 
+        ? Math.round((Date.now() - flightStartTime.current.getTime()) / 1000)
+        : 0;
+      
+      const response = await apiRequest('/api/flight-sessions/end', {
+        method: 'POST',
+        body: JSON.stringify({ 
+          sessionId: activeSessionId,
+          droneId,
+          maxAltitude: maxAltitudeRef.current,
+          totalDistance: totalDistanceRef.current,
+          totalFlightTime
+        }),
+      });
+      const data = await response.json();
+      if (data.success) {
+        setActiveSessionId(null);
+        setIsRecording(false);
+        flightStartTime.current = null;
+        toast.success(`Flight recording saved (${Math.round(totalFlightTime / 60)}m ${totalFlightTime % 60}s)`);
+        console.log(`[FLIGHT] Session ended: ${data.session?.id}`);
+      }
+    } catch (error) {
+      console.error("Failed to end flight session:", error);
+    }
+  };
+
+  // Track telemetry for session stats
+  useEffect(() => {
+    if (!isRecording) return;
+    
+    const handleTelemetry = (e: CustomEvent) => {
+      const { altitude, latitude, longitude } = e.detail || {};
+      if (altitude && altitude > maxAltitudeRef.current) {
+        maxAltitudeRef.current = altitude;
+      }
+      if (latitude && longitude && lastPositionRef.current) {
+        const dist = calculateDistance(
+          lastPositionRef.current.lat, lastPositionRef.current.lng,
+          latitude, longitude
+        );
+        totalDistanceRef.current += dist;
+      }
+      if (latitude && longitude) {
+        lastPositionRef.current = { lat: latitude, lng: longitude };
+      }
+    };
+    
+    window.addEventListener('telemetry-update' as any, handleTelemetry);
+    return () => window.removeEventListener('telemetry-update' as any, handleTelemetry);
+  }, [isRecording]);
+
+  // Haversine distance calculation
+  const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371e3;
+    const p1 = lat1 * Math.PI / 180;
+    const p2 = lat2 * Math.PI / 180;
+    const dp = (lat2 - lat1) * Math.PI / 180;
+    const dl = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dp/2) * Math.sin(dp/2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl/2) * Math.sin(dl/2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  };
+
+  // Check for active session on mount
+  useEffect(() => {
+    const checkActiveSession = async () => {
+      try {
+        const droneId = getCurrentDroneId();
+        const response = await fetch(`/api/flight-sessions/active?droneId=${droneId}`);
+        const data = await response.json();
+        if (data.session) {
+          setActiveSessionId(data.session.id);
+          setIsRecording(true);
+          flightStartTime.current = new Date(data.session.startTime);
+        }
+      } catch (error) {
+        console.error("Failed to check active session:", error);
+      }
+    };
+    checkActiveSession();
+  }, []);
 
   // Load custom widgets from localStorage
   useEffect(() => {
@@ -132,6 +257,14 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
   return (
     <div className="h-auto min-h-[120px] sm:min-h-[140px] lg:h-40 border-t border-border bg-card/80 backdrop-blur-md p-2 sm:p-4 flex flex-wrap sm:flex-nowrap gap-2 sm:gap-4 shrink-0 z-50 overflow-x-auto">
       
+      {/* Recording Indicator */}
+      {isRecording && (
+        <div className="flex items-center gap-1 px-2 py-1 bg-destructive/20 border border-destructive/50 rounded-md shrink-0">
+          <Circle className="h-3 w-3 fill-destructive text-destructive animate-pulse" />
+          <span className="text-[10px] font-mono text-destructive font-semibold">REC</span>
+        </div>
+      )}
+
       {/* Arming Panel */}
       <div className="flex flex-col gap-1 sm:gap-2 w-24 sm:w-36 shrink-0">
         <span className="text-[8px] sm:text-[10px] font-mono text-muted-foreground uppercase tracking-widest">Master</span>
@@ -173,13 +306,14 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
               !canFlightControl && "opacity-50 cursor-not-allowed"
             )}
             disabled={!isArmed || !canFlightControl}
-            onClick={() => {
+            onClick={async () => {
               if (!canFlightControl) {
                 toast.error("You don't have flight control permission");
                 return;
               }
               toast.success("Initiating takeoff sequence...");
               window.dispatchEvent(new CustomEvent('flight-command', { detail: { command: 'takeoff' } }));
+              await startFlightSession();
             }}
             data-testid="button-takeoff"
           >
@@ -210,13 +344,14 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
               !canFlightControl && "opacity-50 cursor-not-allowed"
             )}
             disabled={!isArmed || !canFlightControl}
-            onClick={() => {
+            onClick={async () => {
               if (!canFlightControl) {
                 toast.error("You don't have flight control permission");
                 return;
               }
               toast.success("Initiating landing sequence...");
               window.dispatchEvent(new CustomEvent('flight-command', { detail: { command: 'land' } }));
+              await endFlightSession();
             }}
             data-testid="button-land"
           >

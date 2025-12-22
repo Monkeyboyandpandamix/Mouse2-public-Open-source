@@ -1140,35 +1140,181 @@ export async function registerRoutes(
   app.post("/api/telemetry/record", async (req, res) => {
     try {
       const { 
-        missionId, latitude, longitude, altitude, heading, groundSpeed, verticalSpeed,
-        batteryVoltage, batteryCurrent, batteryPercent, gpsFixType, gpsSatellites,
-        flightMode, armed, pitch, roll, yaw
+        sessionId, missionId, droneId, latitude, longitude, altitude, relativeAltitude,
+        heading, groundSpeed, verticalSpeed, airSpeed, batteryVoltage, batteryCurrent, 
+        batteryPercent, batteryTemp, gpsFixType, gpsSatellites, gpsHdop, flightMode, 
+        armed, pitch, roll, yaw, motor1Rpm, motor2Rpm, motor3Rpm, motor4Rpm,
+        motor1Current, motor2Current, motor3Current, motor4Current, cpuTemp,
+        vibrationX, vibrationY, vibrationZ, distanceFromHome, windSpeed, windDirection
       } = req.body;
 
       const flightLog = await storage.createFlightLog({
+        sessionId,
         missionId,
+        droneId,
         latitude,
         longitude,
         altitude,
+        relativeAltitude,
         heading,
         groundSpeed,
         verticalSpeed,
+        airSpeed,
         batteryVoltage,
         batteryCurrent,
         batteryPercent,
+        batteryTemp,
         gpsFixType,
         gpsSatellites,
+        gpsHdop,
         flightMode,
         armed: armed || false,
         pitch,
         roll,
-        yaw
+        yaw,
+        motor1Rpm,
+        motor2Rpm,
+        motor3Rpm,
+        motor4Rpm,
+        motor1Current,
+        motor2Current,
+        motor3Current,
+        motor4Current,
+        cpuTemp,
+        vibrationX,
+        vibrationY,
+        vibrationZ,
+        distanceFromHome,
+        windSpeed,
+        windDirection
       });
 
       broadcast("telemetry_recorded", flightLog);
       res.json({ success: true, flightLog });
     } catch (error) {
       res.status(500).json({ error: "Failed to record telemetry" });
+    }
+  });
+
+  // Flight Session Management - Auto-start recording on takeoff
+  app.post("/api/flight-sessions/start", async (req, res) => {
+    try {
+      const { missionId, droneId } = req.body;
+      
+      // Check if there's already an active session for this drone
+      const existingSession = await storage.getActiveFlightSession(droneId);
+      if (existingSession) {
+        return res.json({ success: true, session: existingSession, message: "Session already active" });
+      }
+
+      const session = await storage.createFlightSession({
+        droneId: droneId || null,
+        missionId: missionId || null,
+        startTime: new Date().toISOString(),
+        status: "active",
+        totalFlightTime: null,
+        maxAltitude: null,
+        totalDistance: null,
+        videoFilePath: null,
+        logFilePath: null,
+        model3dFilePath: null,
+      });
+
+      broadcast("flight_session_started", session);
+      console.log(`[FLIGHT] Session ${session.id} started for drone ${droneId}`);
+      res.json({ success: true, session });
+    } catch (error) {
+      console.error("Failed to start flight session:", error);
+      res.status(500).json({ error: "Failed to start flight session" });
+    }
+  });
+
+  app.post("/api/flight-sessions/end", async (req, res) => {
+    try {
+      const { sessionId, droneId, maxAltitude, totalDistance, totalFlightTime } = req.body;
+      
+      let session;
+      if (sessionId) {
+        session = await storage.endFlightSession(sessionId, { maxAltitude, totalDistance, totalFlightTime });
+      } else if (droneId) {
+        const activeSession = await storage.getActiveFlightSession(droneId);
+        if (activeSession) {
+          session = await storage.endFlightSession(activeSession.id, { maxAltitude, totalDistance, totalFlightTime });
+        }
+      }
+
+      if (!session) {
+        return res.status(404).json({ error: "No active session found" });
+      }
+
+      // Trigger Google sync after flight ends
+      try {
+        const flightLogs = await storage.getFlightLogsBySession(session.id);
+        const allSessions = await storage.getAllFlightSessions();
+        await syncDataToSheets({
+          flightSessions: allSessions,
+          flightLogs: flightLogs.slice(-1000), // Last 1000 logs from this session
+        });
+        console.log(`[FLIGHT] Session ${session.id} synced to Google Sheets`);
+      } catch (syncError) {
+        console.error("Failed to sync to Google:", syncError);
+      }
+
+      broadcast("flight_session_ended", session);
+      console.log(`[FLIGHT] Session ${session.id} ended`);
+      res.json({ success: true, session });
+    } catch (error) {
+      console.error("Failed to end flight session:", error);
+      res.status(500).json({ error: "Failed to end flight session" });
+    }
+  });
+
+  app.get("/api/flight-sessions", async (req, res) => {
+    try {
+      const sessions = await storage.getAllFlightSessions();
+      res.json(sessions);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get flight sessions" });
+    }
+  });
+
+  app.get("/api/flight-sessions/active", async (req, res) => {
+    try {
+      const droneId = req.query.droneId as string | undefined;
+      const session = await storage.getActiveFlightSession(droneId);
+      res.json({ session: session || null });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get active session" });
+    }
+  });
+
+  app.get("/api/flight-sessions/:id", async (req, res) => {
+    try {
+      const session = await storage.getFlightSession(req.params.id);
+      if (!session) {
+        return res.status(404).json({ error: "Session not found" });
+      }
+      res.json(session);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get session" });
+    }
+  });
+
+  app.get("/api/flight-sessions/:id/logs", async (req, res) => {
+    try {
+      const logs = await storage.getFlightLogsBySession(req.params.id);
+      res.json(logs);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get session logs" });
+    }
+  });
+
+  app.delete("/api/flight-sessions/:id", async (req, res) => {
+    try {
+      await storage.deleteFlightSession(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete session" });
     }
   });
 

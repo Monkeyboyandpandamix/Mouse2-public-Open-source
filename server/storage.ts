@@ -8,6 +8,8 @@ import {
   type InsertMission,
   type Waypoint,
   type InsertWaypoint,
+  type FlightSession,
+  type InsertFlightSession,
   type FlightLog,
   type InsertFlightLog,
   type SensorData,
@@ -401,6 +403,75 @@ export class FileStorage implements IStorage {
     let logs = readJsonFile<FlightLog>('flight_logs.json');
     logs = logs.filter(l => l.id !== id);
     writeJsonFile('flight_logs.json', logs);
+    this.markSyncPending();
+  }
+
+  async getFlightLogsBySession(sessionId: string): Promise<FlightLog[]> {
+    const logs = readJsonFile<FlightLog>('flight_logs.json');
+    return logs
+      .filter(l => l.sessionId === sessionId)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }
+
+  // Flight Sessions
+  async createFlightSession(session: InsertFlightSession): Promise<FlightSession> {
+    const sessions = readJsonFile<FlightSession>('flight_sessions.json');
+    const newSession: FlightSession = {
+      id: generateId(),
+      ...session,
+    };
+    sessions.push(newSession);
+    writeJsonFile('flight_sessions.json', sessions);
+    this.markSyncPending();
+    return newSession;
+  }
+
+  async getFlightSession(id: string): Promise<FlightSession | undefined> {
+    const sessions = readJsonFile<FlightSession>('flight_sessions.json');
+    return sessions.find(s => s.id === id);
+  }
+
+  async getActiveFlightSession(droneId?: string): Promise<FlightSession | undefined> {
+    const sessions = readJsonFile<FlightSession>('flight_sessions.json');
+    return sessions.find(s => s.status === 'active' && (!droneId || s.droneId === droneId));
+  }
+
+  async getAllFlightSessions(): Promise<FlightSession[]> {
+    const sessions = readJsonFile<FlightSession>('flight_sessions.json');
+    return sessions.sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+  }
+
+  async updateFlightSession(id: string, updates: Partial<FlightSession>): Promise<FlightSession | undefined> {
+    const sessions = readJsonFile<FlightSession>('flight_sessions.json');
+    const index = sessions.findIndex(s => s.id === id);
+    if (index < 0) return undefined;
+    
+    sessions[index] = { ...sessions[index], ...updates };
+    writeJsonFile('flight_sessions.json', sessions);
+    this.markSyncPending();
+    return sessions[index];
+  }
+
+  async endFlightSession(id: string, stats?: { maxAltitude?: number; totalDistance?: number; totalFlightTime?: number }): Promise<FlightSession | undefined> {
+    const sessions = readJsonFile<FlightSession>('flight_sessions.json');
+    const index = sessions.findIndex(s => s.id === id);
+    if (index < 0) return undefined;
+    
+    sessions[index] = {
+      ...sessions[index],
+      status: 'completed',
+      endTime: new Date().toISOString(),
+      ...stats,
+    };
+    writeJsonFile('flight_sessions.json', sessions);
+    this.markSyncPending();
+    return sessions[index];
+  }
+
+  async deleteFlightSession(id: string): Promise<void> {
+    let sessions = readJsonFile<FlightSession>('flight_sessions.json');
+    sessions = sessions.filter(s => s.id !== id);
+    writeJsonFile('flight_sessions.json', sessions);
     this.markSyncPending();
   }
 

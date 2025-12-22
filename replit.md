@@ -63,6 +63,7 @@ This application is fully portable and can be deployed without Replit:
 - Advanced AI-powered object tracking using TensorFlow.js COCO-SSD model for detecting stationary and moving objects (people, cars, trucks, motorcycles, bicycles), with multi-object tracking via IoU-based Hungarian assignment, velocity prediction for temporary occlusions, temporal confidence smoothing (0.7 EMA), and fallback motion detection for offline/degraded scenarios
 - Audio broadcast system with Pi GPIO speaker, USB speaker, and Orange Cube+ buzzer support
 - Flight controls including arm/disarm, takeoff, land, RTL, and emergency stop
+- **Automatic Flight Recording**: Flight sessions auto-start on takeoff and auto-end on landing. Captures enhanced telemetry including motor RPM/current, vibration XYZ, battery temp, GPS HDOP, air speed, wind speed/direction, and distance from home. Calculates total flight time, max altitude, and distance traveled. Sessions sync to Google Sheets on completion
 - Gripper control for payload drop/pickup operations
 - Google Sheets backup integration for data persistence
 - Google Drive integration for video footage storage
