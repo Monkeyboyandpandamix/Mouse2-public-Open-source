@@ -56,6 +56,7 @@ export async function getOrCreateBackupSpreadsheet(): Promise<string> {
         { properties: { title: 'FlightLogs' } },
         { properties: { title: 'FlightEvents' } },
         { properties: { title: 'Settings' } },
+        { properties: { title: 'GUIConfig' } },
         { properties: { title: 'SyncLog' } },
       ],
     },
@@ -94,6 +95,10 @@ export async function getOrCreateBackupSpreadsheet(): Promise<string> {
           values: [['ID', 'Key', 'Value', 'Category']],
         },
         {
+          range: 'GUIConfig!A1:E1',
+          values: [['Type', 'ID', 'Name', 'Config JSON', 'Updated At']],
+        },
+        {
           range: 'SyncLog!A1:C1',
           values: [['Timestamp', 'Table', 'Rows Synced']],
         },
@@ -112,6 +117,7 @@ export async function syncDataToSheets(data: {
   flightLogs?: any[];
   flightEvents?: any[];
   settings?: any[];
+  guiConfig?: { tabs?: any[]; panels?: any[]; widgets?: any[]; theme?: string };
 }): Promise<{ success: boolean; spreadsheetId: string; syncedTables: string[] }> {
   const sheets = await getGoogleSheetsClient();
   const spreadsheetId = await getOrCreateBackupSpreadsheet();
@@ -186,6 +192,50 @@ export async function syncDataToSheets(data: {
       requestBody: { values },
     });
     syncedTables.push('Settings');
+  }
+
+  // Sync GUI config (tabs, panels, widgets)
+  if (data.guiConfig) {
+    const guiRows: any[][] = [];
+    const guiTimestamp = new Date().toISOString();
+    
+    if (data.guiConfig.tabs && data.guiConfig.tabs.length > 0) {
+      data.guiConfig.tabs.forEach(tab => {
+        guiRows.push(['tab', tab.id, tab.name, JSON.stringify(tab), guiTimestamp]);
+      });
+    }
+    
+    if (data.guiConfig.panels && data.guiConfig.panels.length > 0) {
+      data.guiConfig.panels.forEach(panel => {
+        guiRows.push(['panel', panel.id, panel.name, JSON.stringify(panel), guiTimestamp]);
+      });
+    }
+    
+    if (data.guiConfig.widgets && data.guiConfig.widgets.length > 0) {
+      data.guiConfig.widgets.forEach(widget => {
+        guiRows.push(['widget', widget.id, widget.name, JSON.stringify(widget), guiTimestamp]);
+      });
+    }
+    
+    if (data.guiConfig.theme) {
+      guiRows.push(['theme', 'current_theme', data.guiConfig.theme, JSON.stringify({ theme: data.guiConfig.theme }), guiTimestamp]);
+    }
+    
+    // Always clear existing GUI config rows first to handle deletions
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: 'GUIConfig!A2:E1000',
+    });
+    
+    if (guiRows.length > 0) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `GUIConfig!A2:E${guiRows.length + 1}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: guiRows },
+      });
+    }
+    syncedTables.push('GUIConfig');
   }
 
   // Add sync log entry

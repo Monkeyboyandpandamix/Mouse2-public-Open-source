@@ -541,6 +541,29 @@ export async function registerRoutes(
     }
   });
 
+  // GUI Config Backup API - backs up tabs, panels, widgets, and theme
+  app.post("/api/backup/gui-config", async (req, res) => {
+    try {
+      const { tabs, panels, widgets, theme } = req.body;
+      
+      const result = await syncDataToSheets({
+        guiConfig: { tabs, panels, widgets, theme }
+      });
+
+      res.json({
+        success: true,
+        spreadsheetUrl: getSpreadsheetUrl(result.spreadsheetId),
+        syncedTables: result.syncedTables,
+      });
+    } catch (error: any) {
+      console.error("GUI Config backup error:", error);
+      res.status(500).json({ 
+        error: "Failed to backup GUI configuration",
+        message: error.message 
+      });
+    }
+  });
+
   // Google Drive File Storage API
   app.get("/api/drive/status", async (req, res) => {
     try {
