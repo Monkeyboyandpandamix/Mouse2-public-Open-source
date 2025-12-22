@@ -129,7 +129,7 @@ export default function Home() {
         // If running on Pi, auto-create and select local drone
         if (config.isOnboard && !selectedDrone) {
           const onboardDrone: Drone = {
-            id: -1, // Special ID for onboard drone
+            id: "onboard-local",
             name: "Local Drone",
             callsign: "ONBOARD",
             model: "M.O.U.S.E",
@@ -155,8 +155,8 @@ export default function Home() {
             maxSpeed: 15,
             maxAltitude: 120,
             rtlAltitude: 50,
-            createdAt: new Date(),
-            updatedAt: new Date(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
             lastSeen: null,
           };
           setSelectedDrone(onboardDrone);
@@ -170,9 +170,9 @@ export default function Home() {
       });
   }, []);
 
-  // Mock drone for preview mode
+  // Preview drone for preview mode
   const previewDrone: Drone = {
-    id: 0,
+    id: "preview-drone",
     name: "Preview Drone",
     callsign: "PREVIEW",
     model: "M.O.U.S.E",
@@ -198,8 +198,8 @@ export default function Home() {
     maxSpeed: 15,
     maxAltitude: 120,
     rtlAltitude: 50,
-    createdAt: new Date(),
-    updatedAt: new Date(),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
     lastSeen: null,
   };
 
@@ -398,7 +398,7 @@ export default function Home() {
       </div>
 
       {/* Preview Mode Banner */}
-      {previewMode && selectedDrone?.id === 0 && (
+      {previewMode && selectedDrone?.id === "preview-drone" && (
         <div className="fixed top-0 left-0 right-0 z-[250] bg-amber-500 text-black px-4 py-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Eye className="h-4 w-4" />
@@ -421,7 +421,7 @@ export default function Home() {
       )}
       
       {/* Onboard Mode Banner (running on Raspberry Pi) */}
-      {isOnboard && selectedDrone?.id === -1 && (
+      {isOnboard && selectedDrone?.id === "onboard-local" && (
         <div className="fixed top-0 left-0 right-0 z-[250] bg-green-600 text-white px-4 py-2 flex items-center justify-center">
           <div className="flex items-center gap-2">
             <Cpu className="h-4 w-4" />

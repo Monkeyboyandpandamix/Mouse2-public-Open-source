@@ -1,285 +1,256 @@
-import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, serial, integer, real, timestamp, boolean, json } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 // System Settings
-export const settings = pgTable("settings", {
-  id: serial("id").primaryKey(),
-  key: text("key").notNull().unique(),
-  value: json("value").notNull(),
-  category: text("category").notNull(), // 'connection', 'sensor', 'input', 'camera', 'audio'
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+export const settingsSchema = z.object({
+  id: z.string(),
+  key: z.string(),
+  value: z.any(),
+  category: z.string(),
+  updatedAt: z.string(),
 });
 
-export const insertSettingsSchema = createInsertSchema(settings).omit({ id: true, updatedAt: true });
+export const insertSettingsSchema = settingsSchema.omit({ id: true, updatedAt: true });
 export type InsertSettings = z.infer<typeof insertSettingsSchema>;
-export type Settings = typeof settings.$inferSelect;
+export type Settings = z.infer<typeof settingsSchema>;
 
 // Flight Missions
-export const missions = pgTable("missions", {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull(),
-  description: text("description"),
-  status: text("status").notNull().default("planned"), // 'planned', 'active', 'completed', 'aborted'
-  homeLatitude: real("home_latitude").notNull(),
-  homeLongitude: real("home_longitude").notNull(),
-  homeAltitude: real("home_altitude").notNull().default(0),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+export const missionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable().optional(),
+  status: z.string().default("planned"),
+  homeLatitude: z.number(),
+  homeLongitude: z.number(),
+  homeAltitude: z.number().default(0),
+  createdAt: z.string(),
+  updatedAt: z.string(),
 });
 
-export const insertMissionSchema = createInsertSchema(missions).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertMissionSchema = missionSchema.omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertMission = z.infer<typeof insertMissionSchema>;
-export type Mission = typeof missions.$inferSelect;
+export type Mission = z.infer<typeof missionSchema>;
 
 // Mission Waypoints
-export const waypoints = pgTable("waypoints", {
-  id: serial("id").primaryKey(),
-  missionId: integer("mission_id").notNull().references(() => missions.id, { onDelete: "cascade" }),
-  order: integer("order").notNull(),
-  latitude: real("latitude").notNull(),
-  longitude: real("longitude").notNull(),
-  altitude: real("altitude").notNull(),
-  speed: real("speed"),
-  action: text("action"), // 'flythrough', 'hover', 'photo', 'drop_payload', 'pickup_payload', 'rtl', 'alert', 'patrol'
-  actionParams: json("action_params"), // { hoverTime: number, alertMessage: string, patrolRadius: number }
-  address: text("address"), // Saved address for reference
+export const waypointSchema = z.object({
+  id: z.string(),
+  missionId: z.string(),
+  order: z.number(),
+  latitude: z.number(),
+  longitude: z.number(),
+  altitude: z.number(),
+  speed: z.number().nullable().optional(),
+  action: z.string().nullable().optional(),
+  actionParams: z.any().nullable().optional(),
+  address: z.string().nullable().optional(),
 });
 
-// Flight Sessions for comprehensive logging
-export const flightSessions = pgTable("flight_sessions", {
-  id: serial("id").primaryKey(),
-  missionId: integer("mission_id").references(() => missions.id, { onDelete: "set null" }),
-  startTime: timestamp("start_time").defaultNow().notNull(),
-  endTime: timestamp("end_time"),
-  status: text("status").notNull().default("active"), // 'active', 'completed', 'aborted'
-  totalFlightTime: integer("total_flight_time"), // seconds
-  maxAltitude: real("max_altitude"),
-  totalDistance: real("total_distance"), // meters
-  videoFilePath: text("video_file_path"),
-  logFilePath: text("log_file_path"),
-  model3dFilePath: text("model_3d_file_path"),
-});
-
-export const insertFlightSessionSchema = createInsertSchema(flightSessions).omit({ id: true });
-export type InsertFlightSession = z.infer<typeof insertFlightSessionSchema>;
-export type FlightSession = typeof flightSessions.$inferSelect;
-
-// Flight Events (commands, alerts, waypoint arrivals)
-export const flightEvents = pgTable("flight_events", {
-  id: serial("id").primaryKey(),
-  sessionId: integer("session_id").references(() => flightSessions.id, { onDelete: "cascade" }),
-  timestamp: timestamp("timestamp").defaultNow().notNull(),
-  eventType: text("event_type").notNull(), // 'command', 'alert', 'waypoint_arrival', 'mode_change', 'error'
-  eventData: json("event_data").notNull(),
-  latitude: real("latitude"),
-  longitude: real("longitude"),
-  altitude: real("altitude"),
-});
-
-export const insertFlightEventSchema = createInsertSchema(flightEvents).omit({ id: true, timestamp: true });
-export type InsertFlightEvent = z.infer<typeof insertFlightEventSchema>;
-export type FlightEvent = typeof flightEvents.$inferSelect;
-
-export const insertWaypointSchema = createInsertSchema(waypoints).omit({ id: true });
+export const insertWaypointSchema = waypointSchema.omit({ id: true });
 export type InsertWaypoint = z.infer<typeof insertWaypointSchema>;
-export type Waypoint = typeof waypoints.$inferSelect;
+export type Waypoint = z.infer<typeof waypointSchema>;
+
+// Flight Sessions
+export const flightSessionSchema = z.object({
+  id: z.string(),
+  missionId: z.string().nullable().optional(),
+  startTime: z.string(),
+  endTime: z.string().nullable().optional(),
+  status: z.string().default("active"),
+  totalFlightTime: z.number().nullable().optional(),
+  maxAltitude: z.number().nullable().optional(),
+  totalDistance: z.number().nullable().optional(),
+  videoFilePath: z.string().nullable().optional(),
+  logFilePath: z.string().nullable().optional(),
+  model3dFilePath: z.string().nullable().optional(),
+});
+
+export const insertFlightSessionSchema = flightSessionSchema.omit({ id: true });
+export type InsertFlightSession = z.infer<typeof insertFlightSessionSchema>;
+export type FlightSession = z.infer<typeof flightSessionSchema>;
+
+// Flight Events
+export const flightEventSchema = z.object({
+  id: z.string(),
+  sessionId: z.string().nullable().optional(),
+  timestamp: z.string(),
+  eventType: z.string(),
+  eventData: z.any(),
+  latitude: z.number().nullable().optional(),
+  longitude: z.number().nullable().optional(),
+  altitude: z.number().nullable().optional(),
+});
+
+export const insertFlightEventSchema = flightEventSchema.omit({ id: true, timestamp: true });
+export type InsertFlightEvent = z.infer<typeof insertFlightEventSchema>;
+export type FlightEvent = z.infer<typeof flightEventSchema>;
 
 // Flight Logs (Telemetry History)
-export const flightLogs = pgTable("flight_logs", {
-  id: serial("id").primaryKey(),
-  missionId: integer("mission_id").references(() => missions.id, { onDelete: "set null" }),
-  timestamp: timestamp("timestamp").defaultNow().notNull(),
-  latitude: real("latitude"),
-  longitude: real("longitude"),
-  altitude: real("altitude"),
-  heading: real("heading"),
-  groundSpeed: real("ground_speed"),
-  verticalSpeed: real("vertical_speed"),
-  batteryVoltage: real("battery_voltage"),
-  batteryCurrent: real("battery_current"),
-  batteryPercent: integer("battery_percent"),
-  gpsFixType: integer("gps_fix_type"),
-  gpsSatellites: integer("gps_satellites"),
-  flightMode: text("flight_mode"),
-  armed: boolean("armed").default(false),
-  pitch: real("pitch"),
-  roll: real("roll"),
-  yaw: real("yaw"),
+export const flightLogSchema = z.object({
+  id: z.string(),
+  missionId: z.string().nullable().optional(),
+  timestamp: z.string(),
+  latitude: z.number().nullable().optional(),
+  longitude: z.number().nullable().optional(),
+  altitude: z.number().nullable().optional(),
+  heading: z.number().nullable().optional(),
+  groundSpeed: z.number().nullable().optional(),
+  verticalSpeed: z.number().nullable().optional(),
+  batteryVoltage: z.number().nullable().optional(),
+  batteryCurrent: z.number().nullable().optional(),
+  batteryPercent: z.number().nullable().optional(),
+  gpsFixType: z.number().nullable().optional(),
+  gpsSatellites: z.number().nullable().optional(),
+  flightMode: z.string().nullable().optional(),
+  armed: z.boolean().default(false),
+  pitch: z.number().nullable().optional(),
+  roll: z.number().nullable().optional(),
+  yaw: z.number().nullable().optional(),
 });
 
-export const insertFlightLogSchema = createInsertSchema(flightLogs).omit({ id: true, timestamp: true });
+export const insertFlightLogSchema = flightLogSchema.omit({ id: true, timestamp: true });
 export type InsertFlightLog = z.infer<typeof insertFlightLogSchema>;
-export type FlightLog = typeof flightLogs.$inferSelect;
+export type FlightLog = z.infer<typeof flightLogSchema>;
 
 // Sensor Data
-export const sensorData = pgTable("sensor_data", {
-  id: serial("id").primaryKey(),
-  timestamp: timestamp("timestamp").defaultNow().notNull(),
-  sensorType: text("sensor_type").notNull(), // 'lidar', 'thermal', 'imu', 'barometer', 'custom'
-  sensorId: text("sensor_id").notNull(),
-  data: json("data").notNull(),
+export const sensorDataSchema = z.object({
+  id: z.string(),
+  timestamp: z.string(),
+  sensorType: z.string(),
+  sensorId: z.string(),
+  data: z.any(),
 });
 
-export const insertSensorDataSchema = createInsertSchema(sensorData).omit({ id: true, timestamp: true });
+export const insertSensorDataSchema = sensorDataSchema.omit({ id: true, timestamp: true });
 export type InsertSensorData = z.infer<typeof insertSensorDataSchema>;
-export type SensorData = typeof sensorData.$inferSelect;
+export type SensorData = z.infer<typeof sensorDataSchema>;
 
 // Motor/ESC Telemetry
-export const motorTelemetry = pgTable("motor_telemetry", {
-  id: serial("id").primaryKey(),
-  timestamp: timestamp("timestamp").defaultNow().notNull(),
-  motor1Rpm: integer("motor1_rpm"),
-  motor2Rpm: integer("motor2_rpm"),
-  motor3Rpm: integer("motor3_rpm"),
-  motor4Rpm: integer("motor4_rpm"),
-  motor1Temp: real("motor1_temp"),
-  motor2Temp: real("motor2_temp"),
-  motor3Temp: real("motor3_temp"),
-  motor4Temp: real("motor4_temp"),
-  motor1Current: real("motor1_current"),
-  motor2Current: real("motor2_current"),
-  motor3Current: real("motor3_current"),
-  motor4Current: real("motor4_current"),
-  escTemp: real("esc_temp"),
-  cpuTemp: real("cpu_temp"),
-  vibrationX: real("vibration_x"),
-  vibrationY: real("vibration_y"),
-  vibrationZ: real("vibration_z"),
+export const motorTelemetrySchema = z.object({
+  id: z.string(),
+  timestamp: z.string(),
+  motor1Rpm: z.number().nullable().optional(),
+  motor2Rpm: z.number().nullable().optional(),
+  motor3Rpm: z.number().nullable().optional(),
+  motor4Rpm: z.number().nullable().optional(),
+  motor1Temp: z.number().nullable().optional(),
+  motor2Temp: z.number().nullable().optional(),
+  motor3Temp: z.number().nullable().optional(),
+  motor4Temp: z.number().nullable().optional(),
+  motor1Current: z.number().nullable().optional(),
+  motor2Current: z.number().nullable().optional(),
+  motor3Current: z.number().nullable().optional(),
+  motor4Current: z.number().nullable().optional(),
+  escTemp: z.number().nullable().optional(),
+  cpuTemp: z.number().nullable().optional(),
+  vibrationX: z.number().nullable().optional(),
+  vibrationY: z.number().nullable().optional(),
+  vibrationZ: z.number().nullable().optional(),
 });
 
-export const insertMotorTelemetrySchema = createInsertSchema(motorTelemetry).omit({ id: true, timestamp: true });
+export const insertMotorTelemetrySchema = motorTelemetrySchema.omit({ id: true, timestamp: true });
 export type InsertMotorTelemetry = z.infer<typeof insertMotorTelemetrySchema>;
-export type MotorTelemetry = typeof motorTelemetry.$inferSelect;
+export type MotorTelemetry = z.infer<typeof motorTelemetrySchema>;
 
 // Camera/Tracking Settings
-export const cameraSettings = pgTable("camera_settings", {
-  id: serial("id").primaryKey(),
-  activeCamera: text("active_camera").notNull().default("gimbal"), // 'gimbal', 'thermal', 'fpv'
-  trackingEnabled: boolean("tracking_enabled").default(false),
-  trackingTarget: text("tracking_target"), // 'person', 'vehicle', 'custom'
-  trackingConfidence: real("tracking_confidence"),
-  gimbalPitch: real("gimbal_pitch"),
-  gimbalYaw: real("gimbal_yaw"),
-  recordingEnabled: boolean("recording_enabled").default(false),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+export const cameraSettingsSchema = z.object({
+  id: z.string(),
+  activeCamera: z.string().default("gimbal"),
+  trackingEnabled: z.boolean().default(false),
+  trackingTarget: z.string().nullable().optional(),
+  trackingConfidence: z.number().nullable().optional(),
+  gimbalPitch: z.number().nullable().optional(),
+  gimbalYaw: z.number().nullable().optional(),
+  recordingEnabled: z.boolean().default(false),
+  updatedAt: z.string(),
 });
 
-export const insertCameraSettingsSchema = createInsertSchema(cameraSettings).omit({ id: true, updatedAt: true });
+export const insertCameraSettingsSchema = cameraSettingsSchema.omit({ id: true, updatedAt: true });
 export type InsertCameraSettings = z.infer<typeof insertCameraSettingsSchema>;
-export type CameraSettings = typeof cameraSettings.$inferSelect;
+export type CameraSettings = z.infer<typeof cameraSettingsSchema>;
 
 // Connected Drones
-export const drones = pgTable("drones", {
-  id: serial("id").primaryKey(),
-  name: text("name").notNull(),
-  callsign: text("callsign").notNull().unique(), // Unique identifier like "ALPHA-1", "BRAVO-2"
-  model: text("model").notNull().default("Custom"), // "DJI Mavic", "Custom Hexacopter", etc.
-  status: text("status").notNull().default("offline"), // 'online', 'offline', 'armed', 'flying', 'error', 'maintenance'
-  connectionType: text("connection_type").notNull().default("mavlink"), // 'mavlink', 'dji_sdk', 'custom'
-  connectionString: text("connection_string"), // UDP/TCP endpoint, serial port, etc.
-  
-  // Current location (updated in real-time)
-  latitude: real("latitude"),
-  longitude: real("longitude"),
-  altitude: real("altitude"),
-  heading: real("heading"),
-  
-  // Battery and health
-  batteryPercent: integer("battery_percent"),
-  signalStrength: integer("signal_strength"), // 0-100
-  gpsStatus: text("gps_status").default("no_fix"), // 'no_fix', '2d_fix', '3d_fix', 'dgps', 'rtk_fixed'
-  
-  // Current mission info
-  currentMissionId: integer("current_mission_id").references(() => missions.id, { onDelete: "set null" }),
-  currentWaypointIndex: integer("current_waypoint_index"),
-  
-  // Geofencing
-  geofenceEnabled: boolean("geofence_enabled").default(false),
-  geofenceData: json("geofence_data"), // { type: 'circle' | 'polygon', center?, radius?, points?, maxAltitude?, minAltitude? }
-  
-  // Hardware configuration
-  motorCount: integer("motor_count").default(4), // 4 or 6 motors
-  hasGripper: boolean("has_gripper").default(false),
-  hasCamera: boolean("has_camera").default(true),
-  hasThermal: boolean("has_thermal").default(false),
-  hasLidar: boolean("has_lidar").default(false),
-  
-  // Settings specific to this drone
-  maxSpeed: real("max_speed").default(15), // m/s
-  maxAltitude: real("max_altitude").default(120), // meters
-  rtlAltitude: real("rtl_altitude").default(50), // meters
-  
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-  lastSeen: timestamp("last_seen"),
+export const droneSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  callsign: z.string(),
+  model: z.string().default("Custom"),
+  status: z.string().default("offline"),
+  connectionType: z.string().default("mavlink"),
+  connectionString: z.string().nullable().optional(),
+  latitude: z.number().nullable().optional(),
+  longitude: z.number().nullable().optional(),
+  altitude: z.number().nullable().optional(),
+  heading: z.number().nullable().optional(),
+  batteryPercent: z.number().nullable().optional(),
+  signalStrength: z.number().nullable().optional(),
+  gpsStatus: z.string().default("no_fix"),
+  currentMissionId: z.string().nullable().optional(),
+  currentWaypointIndex: z.number().nullable().optional(),
+  geofenceEnabled: z.boolean().default(false),
+  geofenceData: z.any().nullable().optional(),
+  motorCount: z.number().default(4),
+  hasGripper: z.boolean().default(false),
+  hasCamera: z.boolean().default(true),
+  hasThermal: z.boolean().default(false),
+  hasLidar: z.boolean().default(false),
+  maxSpeed: z.number().default(15),
+  maxAltitude: z.number().default(120),
+  rtlAltitude: z.number().default(50),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  lastSeen: z.string().nullable().optional(),
 });
 
-export const insertDroneSchema = createInsertSchema(drones).omit({ id: true, createdAt: true, updatedAt: true, lastSeen: true });
+export const insertDroneSchema = droneSchema.omit({ id: true, createdAt: true, updatedAt: true, lastSeen: true });
 export type InsertDrone = z.infer<typeof insertDroneSchema>;
-export type Drone = typeof drones.$inferSelect;
+export type Drone = z.infer<typeof droneSchema>;
 
-// Media Assets (Photos/Videos captured by drone)
-export const mediaAssets = pgTable("media_assets", {
-  id: serial("id").primaryKey(),
-  droneId: integer("drone_id").references(() => drones.id, { onDelete: "set null" }),
-  sessionId: integer("session_id").references(() => flightSessions.id, { onDelete: "set null" }),
-  type: text("type").notNull(), // 'photo', 'video', 'thermal_photo', 'thermal_video'
-  filename: text("filename").notNull(),
-  storagePath: text("storage_path"), // Local file path or object storage key
-  driveFileId: text("drive_file_id"), // Google Drive file ID if uploaded
-  driveLink: text("drive_link"), // Google Drive web view link
-  mimeType: text("mime_type").notNull(),
-  fileSize: integer("file_size"), // bytes
-  duration: integer("duration"), // seconds, for video
-  
-  // Location at time of capture
-  latitude: real("latitude"),
-  longitude: real("longitude"),
-  altitude: real("altitude"),
-  heading: real("heading"),
-  
-  // Camera metadata
-  cameraMode: text("camera_mode"), // 'hd', 'thermal', 'fpv'
-  zoomLevel: real("zoom_level"),
-  
-  // Sync status
-  syncStatus: text("sync_status").notNull().default("synced"), // 'pending', 'syncing', 'synced', 'failed'
-  syncError: text("sync_error"),
-  
-  capturedAt: timestamp("captured_at").defaultNow().notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+// Media Assets
+export const mediaAssetSchema = z.object({
+  id: z.string(),
+  droneId: z.string().nullable().optional(),
+  sessionId: z.string().nullable().optional(),
+  type: z.string(),
+  filename: z.string(),
+  storagePath: z.string().nullable().optional(),
+  driveFileId: z.string().nullable().optional(),
+  driveLink: z.string().nullable().optional(),
+  mimeType: z.string(),
+  fileSize: z.number().nullable().optional(),
+  duration: z.number().nullable().optional(),
+  latitude: z.number().nullable().optional(),
+  longitude: z.number().nullable().optional(),
+  altitude: z.number().nullable().optional(),
+  heading: z.number().nullable().optional(),
+  cameraMode: z.string().nullable().optional(),
+  zoomLevel: z.number().nullable().optional(),
+  syncStatus: z.string().default("synced"),
+  syncError: z.string().nullable().optional(),
+  capturedAt: z.string(),
+  createdAt: z.string(),
 });
 
-export const insertMediaAssetSchema = createInsertSchema(mediaAssets).omit({ id: true, createdAt: true });
+export const insertMediaAssetSchema = mediaAssetSchema.omit({ id: true, createdAt: true });
 export type InsertMediaAsset = z.infer<typeof insertMediaAssetSchema>;
-export type MediaAsset = typeof mediaAssets.$inferSelect;
+export type MediaAsset = z.infer<typeof mediaAssetSchema>;
 
-// Offline Data Backlog (queued when drone is disconnected)
-export const offlineBacklog = pgTable("offline_backlog", {
-  id: serial("id").primaryKey(),
-  droneId: integer("drone_id").references(() => drones.id, { onDelete: "cascade" }),
-  dataType: text("data_type").notNull(), // 'telemetry', 'media', 'event', 'sensor'
-  data: json("data").notNull(), // The actual data payload
-  priority: integer("priority").notNull().default(1), // Higher = more urgent (1-10)
-  
-  // For media, reference the local file
-  localFilePath: text("local_file_path"),
-  fileChecksum: text("file_checksum"), // MD5/SHA256 for integrity
-  
-  // Sync tracking
-  syncStatus: text("sync_status").notNull().default("pending"), // 'pending', 'syncing', 'synced', 'failed'
-  syncAttempts: integer("sync_attempts").notNull().default(0),
-  lastSyncAttempt: timestamp("last_sync_attempt"),
-  syncError: text("sync_error"),
-  
-  // Timestamps
-  recordedAt: timestamp("recorded_at").notNull(), // When data was originally captured
-  queuedAt: timestamp("queued_at").defaultNow().notNull(),
-  syncedAt: timestamp("synced_at"),
+// Offline Data Backlog
+export const offlineBacklogSchema = z.object({
+  id: z.string(),
+  droneId: z.string().nullable().optional(),
+  dataType: z.string(),
+  data: z.any(),
+  priority: z.number().default(1),
+  localFilePath: z.string().nullable().optional(),
+  fileChecksum: z.string().nullable().optional(),
+  syncStatus: z.string().default("pending"),
+  syncAttempts: z.number().default(0),
+  lastSyncAttempt: z.string().nullable().optional(),
+  syncError: z.string().nullable().optional(),
+  recordedAt: z.string(),
+  queuedAt: z.string(),
+  syncedAt: z.string().nullable().optional(),
 });
 
-export const insertOfflineBacklogSchema = createInsertSchema(offlineBacklog).omit({ id: true, queuedAt: true, syncedAt: true });
+export const insertOfflineBacklogSchema = offlineBacklogSchema.omit({ id: true, queuedAt: true, syncedAt: true });
 export type InsertOfflineBacklog = z.infer<typeof insertOfflineBacklogSchema>;
-export type OfflineBacklog = typeof offlineBacklog.$inferSelect;
+export type OfflineBacklog = z.infer<typeof offlineBacklogSchema>;

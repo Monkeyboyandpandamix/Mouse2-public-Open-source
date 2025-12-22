@@ -1,16 +1,7 @@
-import { drizzle } from "drizzle-orm/node-postgres";
-import pg from "pg";
+import { google } from 'googleapis';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
-  settings,
-  missions,
-  waypoints,
-  flightLogs,
-  sensorData,
-  motorTelemetry,
-  cameraSettings,
-  drones,
-  mediaAssets,
-  offlineBacklog,
   type Settings,
   type InsertSettings,
   type Mission,
@@ -32,13 +23,143 @@ import {
   type OfflineBacklog,
   type InsertOfflineBacklog,
 } from "@shared/schema";
-import { eq, desc } from "drizzle-orm";
 
-const pool = new pg.Pool({
-  connectionString: process.env.DATABASE_URL,
-});
+// Data directory for local JSON storage
+const DATA_DIR = process.env.DATA_DIR || './data';
 
-const db = drizzle(pool);
+// Ensure data directory exists
+function ensureDataDir() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+}
+
+// Generate unique IDs
+function generateId(): string {
+  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+
+// Read JSON file safely
+function readJsonFile<T>(filename: string, defaultValue: T[] = []): T[] {
+  ensureDataDir();
+  const filepath = path.join(DATA_DIR, filename);
+  try {
+    if (fs.existsSync(filepath)) {
+      const data = fs.readFileSync(filepath, 'utf-8');
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    console.error(`Error reading ${filename}:`, error);
+  }
+  return defaultValue;
+}
+
+// Write JSON file safely
+function writeJsonFile<T>(filename: string, data: T[]): void {
+  ensureDataDir();
+  const filepath = path.join(DATA_DIR, filename);
+  try {
+    fs.writeFileSync(filepath, JSON.stringify(data, null, 2));
+  } catch (error) {
+    console.error(`Error writing ${filename}:`, error);
+  }
+}
+
+// Google Sheets Integration (connection:conn_google-sheet_01KCZ7P27Z37NA3NNY4MFZPABN)
+let sheetConnectionSettings: any;
+
+async function getSheetAccessToken() {
+  if (sheetConnectionSettings && sheetConnectionSettings.settings.expires_at && new Date(sheetConnectionSettings.settings.expires_at).getTime() > Date.now()) {
+    return sheetConnectionSettings.settings.access_token;
+  }
+  
+  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
+  const xReplitToken = process.env.REPL_IDENTITY 
+    ? 'repl ' + process.env.REPL_IDENTITY 
+    : process.env.WEB_REPL_RENEWAL 
+    ? 'depl ' + process.env.WEB_REPL_RENEWAL 
+    : null;
+
+  if (!xReplitToken || !hostname) {
+    console.log('Google Sheets integration not available (offline mode)');
+    return null;
+  }
+
+  try {
+    sheetConnectionSettings = await fetch(
+      'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=google-sheet',
+      {
+        headers: {
+          'Accept': 'application/json',
+          'X_REPLIT_TOKEN': xReplitToken
+        }
+      }
+    ).then(res => res.json()).then(data => data.items?.[0]);
+
+    const accessToken = sheetConnectionSettings?.settings?.access_token || sheetConnectionSettings.settings?.oauth?.credentials?.access_token;
+    return accessToken || null;
+  } catch (error) {
+    console.log('Failed to get Google Sheets token:', error);
+    return null;
+  }
+}
+
+async function getGoogleSheetsClient() {
+  const accessToken = await getSheetAccessToken();
+  if (!accessToken) return null;
+
+  const oauth2Client = new google.auth.OAuth2();
+  oauth2Client.setCredentials({ access_token: accessToken });
+  return google.sheets({ version: 'v4', auth: oauth2Client });
+}
+
+// Google Drive Integration (connection:conn_google-drive_01KCZ7KBPA4BD72Z487ZYNMB0S)
+let driveConnectionSettings: any;
+
+async function getDriveAccessToken() {
+  if (driveConnectionSettings && driveConnectionSettings.settings.expires_at && new Date(driveConnectionSettings.settings.expires_at).getTime() > Date.now()) {
+    return driveConnectionSettings.settings.access_token;
+  }
+  
+  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
+  const xReplitToken = process.env.REPL_IDENTITY 
+    ? 'repl ' + process.env.REPL_IDENTITY 
+    : process.env.WEB_REPL_RENEWAL 
+    ? 'depl ' + process.env.WEB_REPL_RENEWAL 
+    : null;
+
+  if (!xReplitToken || !hostname) {
+    console.log('Google Drive integration not available (offline mode)');
+    return null;
+  }
+
+  try {
+    driveConnectionSettings = await fetch(
+      'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=google-drive',
+      {
+        headers: {
+          'Accept': 'application/json',
+          'X_REPLIT_TOKEN': xReplitToken
+        }
+      }
+    ).then(res => res.json()).then(data => data.items?.[0]);
+
+    const accessToken = driveConnectionSettings?.settings?.access_token || driveConnectionSettings.settings?.oauth?.credentials?.access_token;
+    return accessToken || null;
+  } catch (error) {
+    console.log('Failed to get Google Drive token:', error);
+    return null;
+  }
+}
+
+async function getGoogleDriveClient() {
+  const accessToken = await getDriveAccessToken();
+  if (!accessToken) return null;
+
+  const oauth2Client = new google.auth.OAuth2();
+  oauth2Client.setCredentials({ access_token: accessToken });
+  return google.drive({ version: 'v3', auth: oauth2Client });
+}
 
 export interface IStorage {
   // Settings
@@ -47,23 +168,24 @@ export interface IStorage {
   upsertSetting(setting: InsertSettings): Promise<Settings>;
   
   // Missions
-  getMission(id: number): Promise<Mission | undefined>;
+  getMission(id: string): Promise<Mission | undefined>;
   getAllMissions(): Promise<Mission[]>;
   createMission(mission: InsertMission): Promise<Mission>;
-  updateMission(id: number, mission: Partial<InsertMission>): Promise<Mission | undefined>;
-  deleteMission(id: number): Promise<void>;
+  updateMission(id: string, mission: Partial<InsertMission>): Promise<Mission | undefined>;
+  deleteMission(id: string): Promise<void>;
   
   // Waypoints
-  getWaypointsByMission(missionId: number): Promise<Waypoint[]>;
+  getWaypointsByMission(missionId: string): Promise<Waypoint[]>;
   createWaypoint(waypoint: InsertWaypoint): Promise<Waypoint>;
-  updateWaypoint(id: number, waypoint: Partial<InsertWaypoint>): Promise<Waypoint | undefined>;
-  deleteWaypoint(id: number): Promise<void>;
-  deleteWaypointsByMission(missionId: number): Promise<void>;
+  updateWaypoint(id: string, waypoint: Partial<InsertWaypoint>): Promise<Waypoint | undefined>;
+  deleteWaypoint(id: string): Promise<void>;
+  deleteWaypointsByMission(missionId: string): Promise<void>;
   
   // Flight Logs
   createFlightLog(log: InsertFlightLog): Promise<FlightLog>;
-  getFlightLogsByMission(missionId: number, limit?: number): Promise<FlightLog[]>;
+  getFlightLogsByMission(missionId: string, limit?: number): Promise<FlightLog[]>;
   getRecentFlightLogs(limit: number): Promise<FlightLog[]>;
+  deleteFlightLog(id: string): Promise<void>;
   
   // Sensor Data
   createSensorData(data: InsertSensorData): Promise<SensorData>;
@@ -78,326 +200,545 @@ export interface IStorage {
   updateCameraSettings(settings: Partial<InsertCameraSettings>): Promise<CameraSettings>;
   
   // Drones
-  getDrone(id: number): Promise<Drone | undefined>;
+  getDrone(id: string): Promise<Drone | undefined>;
   getDroneByCallsign(callsign: string): Promise<Drone | undefined>;
   getAllDrones(): Promise<Drone[]>;
   createDrone(drone: InsertDrone): Promise<Drone>;
-  updateDrone(id: number, drone: Partial<InsertDrone>): Promise<Drone | undefined>;
-  updateDroneLocation(id: number, latitude: number, longitude: number, altitude: number, heading: number): Promise<Drone | undefined>;
-  deleteDrone(id: number): Promise<void>;
+  updateDrone(id: string, drone: Partial<InsertDrone>): Promise<Drone | undefined>;
+  updateDroneLocation(id: string, latitude: number, longitude: number, altitude: number, heading: number): Promise<Drone | undefined>;
+  deleteDrone(id: string): Promise<void>;
   
   // Media Assets
-  getMediaAsset(id: number): Promise<MediaAsset | undefined>;
-  getMediaAssetsByDrone(droneId: number, limit?: number): Promise<MediaAsset[]>;
-  getMediaAssetsBySession(sessionId: number): Promise<MediaAsset[]>;
+  getMediaAsset(id: string): Promise<MediaAsset | undefined>;
+  getMediaAssetsByDrone(droneId: string, limit?: number): Promise<MediaAsset[]>;
+  getMediaAssetsBySession(sessionId: string): Promise<MediaAsset[]>;
   getPendingMediaAssets(): Promise<MediaAsset[]>;
   createMediaAsset(asset: InsertMediaAsset): Promise<MediaAsset>;
-  updateMediaAsset(id: number, asset: Partial<InsertMediaAsset>): Promise<MediaAsset | undefined>;
-  deleteMediaAsset(id: number): Promise<void>;
+  updateMediaAsset(id: string, asset: Partial<InsertMediaAsset>): Promise<MediaAsset | undefined>;
+  deleteMediaAsset(id: string): Promise<void>;
   
   // Offline Backlog
-  getBacklogItem(id: number): Promise<OfflineBacklog | undefined>;
-  getPendingBacklog(droneId?: number): Promise<OfflineBacklog[]>;
+  getBacklogItem(id: string): Promise<OfflineBacklog | undefined>;
+  getPendingBacklog(droneId?: string): Promise<OfflineBacklog[]>;
   createBacklogItem(item: InsertOfflineBacklog): Promise<OfflineBacklog>;
-  updateBacklogItem(id: number, item: Partial<InsertOfflineBacklog>): Promise<OfflineBacklog | undefined>;
-  markBacklogSynced(id: number): Promise<void>;
-  deleteBacklogItem(id: number): Promise<void>;
-  clearSyncedBacklog(droneId?: number): Promise<void>;
+  updateBacklogItem(id: string, item: Partial<InsertOfflineBacklog>): Promise<OfflineBacklog | undefined>;
+  markBacklogSynced(id: string): Promise<void>;
+  deleteBacklogItem(id: string): Promise<void>;
+  clearSyncedBacklog(droneId?: string): Promise<void>;
+  
+  // Sync operations
+  syncToGoogle(): Promise<void>;
 }
 
-export class DatabaseStorage implements IStorage {
+export class FileStorage implements IStorage {
+  private syncPending = false;
+
   // Settings
   async getSetting(key: string): Promise<Settings | undefined> {
-    const result = await db.select().from(settings).where(eq(settings.key, key)).limit(1);
-    return result[0];
+    const settings = readJsonFile<Settings>('settings.json');
+    return settings.find(s => s.key === key);
   }
 
   async getSettingsByCategory(category: string): Promise<Settings[]> {
-    return await db.select().from(settings).where(eq(settings.category, category));
+    const settings = readJsonFile<Settings>('settings.json');
+    return settings.filter(s => s.category === category);
   }
 
   async upsertSetting(setting: InsertSettings): Promise<Settings> {
-    const existing = await this.getSetting(setting.key);
-    if (existing) {
-      const result = await db
-        .update(settings)
-        .set({ ...setting, updatedAt: new Date() })
-        .where(eq(settings.key, setting.key))
-        .returning();
-      return result[0];
+    const settings = readJsonFile<Settings>('settings.json');
+    const existingIndex = settings.findIndex(s => s.key === setting.key);
+    
+    const now = new Date().toISOString();
+    if (existingIndex >= 0) {
+      settings[existingIndex] = { ...settings[existingIndex], ...setting, updatedAt: now };
+      writeJsonFile('settings.json', settings);
+      this.markSyncPending();
+      return settings[existingIndex];
     } else {
-      const result = await db.insert(settings).values(setting).returning();
-      return result[0];
+      const newSetting: Settings = { id: generateId(), ...setting, updatedAt: now };
+      settings.push(newSetting);
+      writeJsonFile('settings.json', settings);
+      this.markSyncPending();
+      return newSetting;
     }
   }
 
   // Missions
-  async getMission(id: number): Promise<Mission | undefined> {
-    const result = await db.select().from(missions).where(eq(missions.id, id)).limit(1);
-    return result[0];
+  async getMission(id: string): Promise<Mission | undefined> {
+    const missions = readJsonFile<Mission>('missions.json');
+    return missions.find(m => m.id === id);
   }
 
   async getAllMissions(): Promise<Mission[]> {
-    return await db.select().from(missions).orderBy(desc(missions.createdAt));
+    const missions = readJsonFile<Mission>('missions.json');
+    return missions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   async createMission(mission: InsertMission): Promise<Mission> {
-    const result = await db.insert(missions).values(mission).returning();
-    return result[0];
+    const missions = readJsonFile<Mission>('missions.json');
+    const now = new Date().toISOString();
+    const newMission: Mission = {
+      id: generateId(),
+      ...mission,
+      status: mission.status || 'planned',
+      homeAltitude: mission.homeAltitude || 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    missions.push(newMission);
+    writeJsonFile('missions.json', missions);
+    this.markSyncPending();
+    return newMission;
   }
 
-  async updateMission(id: number, mission: Partial<InsertMission>): Promise<Mission | undefined> {
-    const result = await db
-      .update(missions)
-      .set({ ...mission, updatedAt: new Date() })
-      .where(eq(missions.id, id))
-      .returning();
-    return result[0];
+  async updateMission(id: string, mission: Partial<InsertMission>): Promise<Mission | undefined> {
+    const missions = readJsonFile<Mission>('missions.json');
+    const index = missions.findIndex(m => m.id === id);
+    if (index < 0) return undefined;
+    
+    missions[index] = { ...missions[index], ...mission, updatedAt: new Date().toISOString() };
+    writeJsonFile('missions.json', missions);
+    this.markSyncPending();
+    return missions[index];
   }
 
-  async deleteMission(id: number): Promise<void> {
-    await db.delete(missions).where(eq(missions.id, id));
+  async deleteMission(id: string): Promise<void> {
+    let missions = readJsonFile<Mission>('missions.json');
+    missions = missions.filter(m => m.id !== id);
+    writeJsonFile('missions.json', missions);
+    
+    // Also delete waypoints for this mission
+    await this.deleteWaypointsByMission(id);
+    this.markSyncPending();
   }
 
   // Waypoints
-  async getWaypointsByMission(missionId: number): Promise<Waypoint[]> {
-    return await db.select().from(waypoints).where(eq(waypoints.missionId, missionId)).orderBy(waypoints.order);
+  async getWaypointsByMission(missionId: string): Promise<Waypoint[]> {
+    const waypoints = readJsonFile<Waypoint>('waypoints.json');
+    return waypoints.filter(w => w.missionId === missionId).sort((a, b) => a.order - b.order);
   }
 
   async createWaypoint(waypoint: InsertWaypoint): Promise<Waypoint> {
-    const result = await db.insert(waypoints).values(waypoint).returning();
-    return result[0];
+    const waypoints = readJsonFile<Waypoint>('waypoints.json');
+    const newWaypoint: Waypoint = { id: generateId(), ...waypoint };
+    waypoints.push(newWaypoint);
+    writeJsonFile('waypoints.json', waypoints);
+    this.markSyncPending();
+    return newWaypoint;
   }
 
-  async updateWaypoint(id: number, waypoint: Partial<InsertWaypoint>): Promise<Waypoint | undefined> {
-    const result = await db.update(waypoints).set(waypoint).where(eq(waypoints.id, id)).returning();
-    return result[0];
+  async updateWaypoint(id: string, waypoint: Partial<InsertWaypoint>): Promise<Waypoint | undefined> {
+    const waypoints = readJsonFile<Waypoint>('waypoints.json');
+    const index = waypoints.findIndex(w => w.id === id);
+    if (index < 0) return undefined;
+    
+    waypoints[index] = { ...waypoints[index], ...waypoint };
+    writeJsonFile('waypoints.json', waypoints);
+    this.markSyncPending();
+    return waypoints[index];
   }
 
-  async deleteWaypoint(id: number): Promise<void> {
-    await db.delete(waypoints).where(eq(waypoints.id, id));
+  async deleteWaypoint(id: string): Promise<void> {
+    let waypoints = readJsonFile<Waypoint>('waypoints.json');
+    waypoints = waypoints.filter(w => w.id !== id);
+    writeJsonFile('waypoints.json', waypoints);
+    this.markSyncPending();
   }
 
-  async deleteWaypointsByMission(missionId: number): Promise<void> {
-    await db.delete(waypoints).where(eq(waypoints.missionId, missionId));
+  async deleteWaypointsByMission(missionId: string): Promise<void> {
+    let waypoints = readJsonFile<Waypoint>('waypoints.json');
+    waypoints = waypoints.filter(w => w.missionId !== missionId);
+    writeJsonFile('waypoints.json', waypoints);
+    this.markSyncPending();
   }
 
   // Flight Logs
   async createFlightLog(log: InsertFlightLog): Promise<FlightLog> {
-    const result = await db.insert(flightLogs).values(log).returning();
-    return result[0];
+    const logs = readJsonFile<FlightLog>('flight_logs.json');
+    const newLog: FlightLog = {
+      id: generateId(),
+      ...log,
+      armed: log.armed ?? false,
+      timestamp: new Date().toISOString(),
+    };
+    logs.push(newLog);
+    
+    // Keep only last 10000 logs to prevent file from getting too large
+    const trimmedLogs = logs.slice(-10000);
+    writeJsonFile('flight_logs.json', trimmedLogs);
+    this.markSyncPending();
+    return newLog;
   }
 
-  async getFlightLogsByMission(missionId: number, limit: number = 100): Promise<FlightLog[]> {
-    return await db
-      .select()
-      .from(flightLogs)
-      .where(eq(flightLogs.missionId, missionId))
-      .orderBy(desc(flightLogs.timestamp))
-      .limit(limit);
+  async getFlightLogsByMission(missionId: string, limit: number = 100): Promise<FlightLog[]> {
+    const logs = readJsonFile<FlightLog>('flight_logs.json');
+    return logs
+      .filter(l => l.missionId === missionId)
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, limit);
   }
 
   async getRecentFlightLogs(limit: number): Promise<FlightLog[]> {
-    return await db.select().from(flightLogs).orderBy(desc(flightLogs.timestamp)).limit(limit);
+    const logs = readJsonFile<FlightLog>('flight_logs.json');
+    return logs
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, limit);
+  }
+
+  async deleteFlightLog(id: string): Promise<void> {
+    let logs = readJsonFile<FlightLog>('flight_logs.json');
+    logs = logs.filter(l => l.id !== id);
+    writeJsonFile('flight_logs.json', logs);
+    this.markSyncPending();
   }
 
   // Sensor Data
   async createSensorData(data: InsertSensorData): Promise<SensorData> {
-    const result = await db.insert(sensorData).values(data).returning();
-    return result[0];
+    const sensorData = readJsonFile<SensorData>('sensor_data.json');
+    const newData: SensorData = {
+      id: generateId(),
+      ...data,
+      timestamp: new Date().toISOString(),
+    };
+    sensorData.push(newData);
+    
+    // Keep only last 5000 entries
+    const trimmed = sensorData.slice(-5000);
+    writeJsonFile('sensor_data.json', trimmed);
+    return newData;
   }
 
   async getRecentSensorData(sensorType: string, limit: number): Promise<SensorData[]> {
-    return await db
-      .select()
-      .from(sensorData)
-      .where(eq(sensorData.sensorType, sensorType))
-      .orderBy(desc(sensorData.timestamp))
-      .limit(limit);
+    const sensorData = readJsonFile<SensorData>('sensor_data.json');
+    return sensorData
+      .filter(s => s.sensorType === sensorType)
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, limit);
   }
 
   // Motor Telemetry
   async createMotorTelemetry(telemetry: InsertMotorTelemetry): Promise<MotorTelemetry> {
-    const result = await db.insert(motorTelemetry).values(telemetry).returning();
-    return result[0];
+    const motorData = readJsonFile<MotorTelemetry>('motor_telemetry.json');
+    const newData: MotorTelemetry = {
+      id: generateId(),
+      ...telemetry,
+      timestamp: new Date().toISOString(),
+    };
+    motorData.push(newData);
+    
+    // Keep only last 5000 entries
+    const trimmed = motorData.slice(-5000);
+    writeJsonFile('motor_telemetry.json', trimmed);
+    return newData;
   }
 
   async getRecentMotorTelemetry(limit: number): Promise<MotorTelemetry[]> {
-    return await db.select().from(motorTelemetry).orderBy(desc(motorTelemetry.timestamp)).limit(limit);
+    const motorData = readJsonFile<MotorTelemetry>('motor_telemetry.json');
+    return motorData
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, limit);
   }
 
   // Camera Settings
   async getCameraSettings(): Promise<CameraSettings | undefined> {
-    const result = await db.select().from(cameraSettings).limit(1);
-    if (result.length === 0) {
-      // Create default settings if none exist
-      const defaults = await db.insert(cameraSettings).values({}).returning();
-      return defaults[0];
+    const settings = readJsonFile<CameraSettings>('camera_settings.json');
+    if (settings.length === 0) {
+      const defaults: CameraSettings = {
+        id: generateId(),
+        activeCamera: 'gimbal',
+        trackingEnabled: false,
+        recordingEnabled: false,
+        updatedAt: new Date().toISOString(),
+      };
+      writeJsonFile('camera_settings.json', [defaults]);
+      return defaults;
     }
-    return result[0];
+    return settings[0];
   }
 
   async updateCameraSettings(settings: Partial<InsertCameraSettings>): Promise<CameraSettings> {
     const existing = await this.getCameraSettings();
-    if (existing) {
-      const result = await db
-        .update(cameraSettings)
-        .set({ ...settings, updatedAt: new Date() })
-        .where(eq(cameraSettings.id, existing.id))
-        .returning();
-      return result[0];
-    }
-    const result = await db.insert(cameraSettings).values(settings).returning();
-    return result[0];
+    const updated: CameraSettings = {
+      ...existing!,
+      ...settings,
+      updatedAt: new Date().toISOString(),
+    };
+    writeJsonFile('camera_settings.json', [updated]);
+    this.markSyncPending();
+    return updated;
   }
 
   // Drones
-  async getDrone(id: number): Promise<Drone | undefined> {
-    const result = await db.select().from(drones).where(eq(drones.id, id)).limit(1);
-    return result[0];
+  async getDrone(id: string): Promise<Drone | undefined> {
+    const drones = readJsonFile<Drone>('drones.json');
+    return drones.find(d => d.id === id);
   }
 
   async getDroneByCallsign(callsign: string): Promise<Drone | undefined> {
-    const result = await db.select().from(drones).where(eq(drones.callsign, callsign)).limit(1);
-    return result[0];
+    const drones = readJsonFile<Drone>('drones.json');
+    return drones.find(d => d.callsign === callsign);
   }
 
   async getAllDrones(): Promise<Drone[]> {
-    return await db.select().from(drones).orderBy(desc(drones.updatedAt));
+    const drones = readJsonFile<Drone>('drones.json');
+    return drones.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   }
 
   async createDrone(drone: InsertDrone): Promise<Drone> {
-    const result = await db.insert(drones).values(drone).returning();
-    return result[0];
+    const drones = readJsonFile<Drone>('drones.json');
+    const now = new Date().toISOString();
+    const newDrone: Drone = {
+      id: generateId(),
+      ...drone,
+      model: drone.model || 'Custom',
+      status: drone.status || 'offline',
+      connectionType: drone.connectionType || 'mavlink',
+      gpsStatus: drone.gpsStatus || 'no_fix',
+      geofenceEnabled: drone.geofenceEnabled ?? false,
+      motorCount: drone.motorCount ?? 4,
+      hasGripper: drone.hasGripper ?? false,
+      hasCamera: drone.hasCamera ?? true,
+      hasThermal: drone.hasThermal ?? false,
+      hasLidar: drone.hasLidar ?? false,
+      maxSpeed: drone.maxSpeed ?? 15,
+      maxAltitude: drone.maxAltitude ?? 120,
+      rtlAltitude: drone.rtlAltitude ?? 50,
+      createdAt: now,
+      updatedAt: now,
+    };
+    drones.push(newDrone);
+    writeJsonFile('drones.json', drones);
+    this.markSyncPending();
+    return newDrone;
   }
 
-  async updateDrone(id: number, drone: Partial<InsertDrone>): Promise<Drone | undefined> {
-    const result = await db
-      .update(drones)
-      .set({ ...drone, updatedAt: new Date() })
-      .where(eq(drones.id, id))
-      .returning();
-    return result[0];
+  async updateDrone(id: string, drone: Partial<InsertDrone>): Promise<Drone | undefined> {
+    const drones = readJsonFile<Drone>('drones.json');
+    const index = drones.findIndex(d => d.id === id);
+    if (index < 0) return undefined;
+    
+    drones[index] = { ...drones[index], ...drone, updatedAt: new Date().toISOString() };
+    writeJsonFile('drones.json', drones);
+    this.markSyncPending();
+    return drones[index];
   }
 
-  async updateDroneLocation(id: number, latitude: number, longitude: number, altitude: number, heading: number): Promise<Drone | undefined> {
-    const result = await db
-      .update(drones)
-      .set({ latitude, longitude, altitude, heading, lastSeen: new Date(), updatedAt: new Date() })
-      .where(eq(drones.id, id))
-      .returning();
-    return result[0];
+  async updateDroneLocation(id: string, latitude: number, longitude: number, altitude: number, heading: number): Promise<Drone | undefined> {
+    const drones = readJsonFile<Drone>('drones.json');
+    const index = drones.findIndex(d => d.id === id);
+    if (index < 0) return undefined;
+    
+    const now = new Date().toISOString();
+    drones[index] = { ...drones[index], latitude, longitude, altitude, heading, lastSeen: now, updatedAt: now };
+    writeJsonFile('drones.json', drones);
+    return drones[index];
   }
 
-  async deleteDrone(id: number): Promise<void> {
-    await db.delete(drones).where(eq(drones.id, id));
+  async deleteDrone(id: string): Promise<void> {
+    let drones = readJsonFile<Drone>('drones.json');
+    drones = drones.filter(d => d.id !== id);
+    writeJsonFile('drones.json', drones);
+    this.markSyncPending();
   }
 
   // Media Assets
-  async getMediaAsset(id: number): Promise<MediaAsset | undefined> {
-    const result = await db.select().from(mediaAssets).where(eq(mediaAssets.id, id)).limit(1);
-    return result[0];
+  async getMediaAsset(id: string): Promise<MediaAsset | undefined> {
+    const assets = readJsonFile<MediaAsset>('media_assets.json');
+    return assets.find(a => a.id === id);
   }
 
-  async getMediaAssetsByDrone(droneId: number, limit: number = 100): Promise<MediaAsset[]> {
-    return await db
-      .select()
-      .from(mediaAssets)
-      .where(eq(mediaAssets.droneId, droneId))
-      .orderBy(desc(mediaAssets.capturedAt))
-      .limit(limit);
+  async getMediaAssetsByDrone(droneId: string, limit: number = 100): Promise<MediaAsset[]> {
+    const assets = readJsonFile<MediaAsset>('media_assets.json');
+    return assets
+      .filter(a => a.droneId === droneId)
+      .sort((a, b) => new Date(b.capturedAt).getTime() - new Date(a.capturedAt).getTime())
+      .slice(0, limit);
   }
 
-  async getMediaAssetsBySession(sessionId: number): Promise<MediaAsset[]> {
-    return await db
-      .select()
-      .from(mediaAssets)
-      .where(eq(mediaAssets.sessionId, sessionId))
-      .orderBy(desc(mediaAssets.capturedAt));
+  async getMediaAssetsBySession(sessionId: string): Promise<MediaAsset[]> {
+    const assets = readJsonFile<MediaAsset>('media_assets.json');
+    return assets
+      .filter(a => a.sessionId === sessionId)
+      .sort((a, b) => new Date(b.capturedAt).getTime() - new Date(a.capturedAt).getTime());
   }
 
   async getPendingMediaAssets(): Promise<MediaAsset[]> {
-    return await db
-      .select()
-      .from(mediaAssets)
-      .where(eq(mediaAssets.syncStatus, "pending"))
-      .orderBy(mediaAssets.capturedAt);
+    const assets = readJsonFile<MediaAsset>('media_assets.json');
+    return assets.filter(a => a.syncStatus === 'pending');
   }
 
   async createMediaAsset(asset: InsertMediaAsset): Promise<MediaAsset> {
-    const result = await db.insert(mediaAssets).values(asset).returning();
-    return result[0];
+    const assets = readJsonFile<MediaAsset>('media_assets.json');
+    const newAsset: MediaAsset = {
+      id: generateId(),
+      ...asset,
+      syncStatus: asset.syncStatus || 'synced',
+      createdAt: new Date().toISOString(),
+    };
+    assets.push(newAsset);
+    writeJsonFile('media_assets.json', assets);
+    this.markSyncPending();
+    return newAsset;
   }
 
-  async updateMediaAsset(id: number, asset: Partial<InsertMediaAsset>): Promise<MediaAsset | undefined> {
-    const result = await db.update(mediaAssets).set(asset).where(eq(mediaAssets.id, id)).returning();
-    return result[0];
+  async updateMediaAsset(id: string, asset: Partial<InsertMediaAsset>): Promise<MediaAsset | undefined> {
+    const assets = readJsonFile<MediaAsset>('media_assets.json');
+    const index = assets.findIndex(a => a.id === id);
+    if (index < 0) return undefined;
+    
+    assets[index] = { ...assets[index], ...asset };
+    writeJsonFile('media_assets.json', assets);
+    this.markSyncPending();
+    return assets[index];
   }
 
-  async deleteMediaAsset(id: number): Promise<void> {
-    await db.delete(mediaAssets).where(eq(mediaAssets.id, id));
+  async deleteMediaAsset(id: string): Promise<void> {
+    let assets = readJsonFile<MediaAsset>('media_assets.json');
+    assets = assets.filter(a => a.id !== id);
+    writeJsonFile('media_assets.json', assets);
+    this.markSyncPending();
   }
 
   // Offline Backlog
-  async getBacklogItem(id: number): Promise<OfflineBacklog | undefined> {
-    const result = await db.select().from(offlineBacklog).where(eq(offlineBacklog.id, id)).limit(1);
-    return result[0];
+  async getBacklogItem(id: string): Promise<OfflineBacklog | undefined> {
+    const backlog = readJsonFile<OfflineBacklog>('offline_backlog.json');
+    return backlog.find(b => b.id === id);
   }
 
-  async getPendingBacklog(droneId?: number): Promise<OfflineBacklog[]> {
-    let query = db
-      .select()
-      .from(offlineBacklog)
-      .where(eq(offlineBacklog.syncStatus, "pending"))
-      .orderBy(desc(offlineBacklog.priority), offlineBacklog.recordedAt);
-    
-    if (droneId !== undefined) {
-      return await db
-        .select()
-        .from(offlineBacklog)
-        .where(eq(offlineBacklog.droneId, droneId))
-        .orderBy(desc(offlineBacklog.priority), offlineBacklog.recordedAt);
+  async getPendingBacklog(droneId?: string): Promise<OfflineBacklog[]> {
+    const backlog = readJsonFile<OfflineBacklog>('offline_backlog.json');
+    let filtered = backlog.filter(b => b.syncStatus === 'pending');
+    if (droneId) {
+      filtered = filtered.filter(b => b.droneId === droneId);
     }
-    
-    return await query;
+    return filtered.sort((a, b) => b.priority - a.priority);
   }
 
   async createBacklogItem(item: InsertOfflineBacklog): Promise<OfflineBacklog> {
-    const result = await db.insert(offlineBacklog).values(item).returning();
-    return result[0];
+    const backlog = readJsonFile<OfflineBacklog>('offline_backlog.json');
+    const newItem: OfflineBacklog = {
+      id: generateId(),
+      ...item,
+      priority: item.priority ?? 1,
+      syncStatus: item.syncStatus || 'pending',
+      syncAttempts: item.syncAttempts ?? 0,
+      queuedAt: new Date().toISOString(),
+    };
+    backlog.push(newItem);
+    writeJsonFile('offline_backlog.json', backlog);
+    return newItem;
   }
 
-  async updateBacklogItem(id: number, item: Partial<InsertOfflineBacklog>): Promise<OfflineBacklog | undefined> {
-    const result = await db
-      .update(offlineBacklog)
-      .set({ ...item, lastSyncAttempt: new Date() })
-      .where(eq(offlineBacklog.id, id))
-      .returning();
-    return result[0];
+  async updateBacklogItem(id: string, item: Partial<InsertOfflineBacklog>): Promise<OfflineBacklog | undefined> {
+    const backlog = readJsonFile<OfflineBacklog>('offline_backlog.json');
+    const index = backlog.findIndex(b => b.id === id);
+    if (index < 0) return undefined;
+    
+    backlog[index] = { ...backlog[index], ...item, lastSyncAttempt: new Date().toISOString() };
+    writeJsonFile('offline_backlog.json', backlog);
+    return backlog[index];
   }
 
-  async markBacklogSynced(id: number): Promise<void> {
-    await db
-      .update(offlineBacklog)
-      .set({ syncStatus: "synced", syncedAt: new Date() })
-      .where(eq(offlineBacklog.id, id));
+  async markBacklogSynced(id: string): Promise<void> {
+    const backlog = readJsonFile<OfflineBacklog>('offline_backlog.json');
+    const index = backlog.findIndex(b => b.id === id);
+    if (index >= 0) {
+      backlog[index].syncStatus = 'synced';
+      backlog[index].syncedAt = new Date().toISOString();
+      writeJsonFile('offline_backlog.json', backlog);
+    }
   }
 
-  async deleteBacklogItem(id: number): Promise<void> {
-    await db.delete(offlineBacklog).where(eq(offlineBacklog.id, id));
+  async deleteBacklogItem(id: string): Promise<void> {
+    let backlog = readJsonFile<OfflineBacklog>('offline_backlog.json');
+    backlog = backlog.filter(b => b.id !== id);
+    writeJsonFile('offline_backlog.json', backlog);
   }
 
-  async clearSyncedBacklog(droneId?: number): Promise<void> {
-    if (droneId !== undefined) {
-      await db
-        .delete(offlineBacklog)
-        .where(eq(offlineBacklog.droneId, droneId));
+  async clearSyncedBacklog(droneId?: string): Promise<void> {
+    let backlog = readJsonFile<OfflineBacklog>('offline_backlog.json');
+    if (droneId) {
+      backlog = backlog.filter(b => b.droneId !== droneId || b.syncStatus !== 'synced');
     } else {
-      await db
-        .delete(offlineBacklog)
-        .where(eq(offlineBacklog.syncStatus, "synced"));
+      backlog = backlog.filter(b => b.syncStatus !== 'synced');
+    }
+    writeJsonFile('offline_backlog.json', backlog);
+  }
+
+  // Sync management
+  private markSyncPending() {
+    this.syncPending = true;
+  }
+
+  // Sync data to Google Sheets/Drive
+  async syncToGoogle(): Promise<void> {
+    if (!this.syncPending) return;
+    
+    try {
+      const sheetsClient = await getGoogleSheetsClient();
+      const driveClient = await getGoogleDriveClient();
+      
+      if (!sheetsClient && !driveClient) {
+        console.log('Google sync not available (offline mode)');
+        return;
+      }
+
+      // Backup all JSON files to Google Drive
+      if (driveClient) {
+        const files = ['missions.json', 'drones.json', 'waypoints.json', 'settings.json', 'camera_settings.json'];
+        for (const file of files) {
+          const filepath = path.join(DATA_DIR, file);
+          if (fs.existsSync(filepath)) {
+            try {
+              const content = fs.readFileSync(filepath, 'utf-8');
+              
+              // Search for existing file
+              const searchRes = await driveClient.files.list({
+                q: `name='mouse_gcs_${file}' and trashed=false`,
+                fields: 'files(id)',
+              });
+              
+              if (searchRes.data.files && searchRes.data.files.length > 0) {
+                // Update existing file
+                await driveClient.files.update({
+                  fileId: searchRes.data.files[0].id!,
+                  media: {
+                    mimeType: 'application/json',
+                    body: content,
+                  },
+                });
+              } else {
+                // Create new file
+                await driveClient.files.create({
+                  requestBody: {
+                    name: `mouse_gcs_${file}`,
+                    mimeType: 'application/json',
+                  },
+                  media: {
+                    mimeType: 'application/json',
+                    body: content,
+                  },
+                });
+              }
+              console.log(`Synced ${file} to Google Drive`);
+            } catch (error) {
+              console.error(`Failed to sync ${file} to Drive:`, error);
+            }
+          }
+        }
+      }
+
+      this.syncPending = false;
+      console.log('Google sync completed');
+    } catch (error) {
+      console.error('Google sync failed:', error);
     }
   }
 }
 
-export const storage = new DatabaseStorage();
+export const storage = new FileStorage();
+
+// Periodic sync to Google (every 5 minutes)
+setInterval(() => {
+  storage.syncToGoogle().catch(console.error);
+}, 5 * 60 * 1000);

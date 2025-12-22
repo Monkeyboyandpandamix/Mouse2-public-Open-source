@@ -99,18 +99,38 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     toast.info("Select a different drone");
   };
   
-  // Simulated diagnostics - in real implementation, would come from WebSocket
+  // Real diagnostics from WebSocket - defaults to disconnected state
   const [diagnostics, setDiagnostics] = useState<SystemDiagnostics>({
-    gpsConnected: true,
-    gpsCount: 12,
-    rcSignal: 98,
-    telemetryLink: 100,
-    batteryVoltage: 24.2,
-    batteryPercent: 85,
-    fcConnected: true,
-    lidarConnected: true,
-    cameraConnected: true
+    gpsConnected: false,
+    gpsCount: 0,
+    rcSignal: 0,
+    telemetryLink: 0,
+    batteryVoltage: 0,
+    batteryPercent: 0,
+    fcConnected: false,
+    lidarConnected: false,
+    cameraConnected: false
   });
+
+  // Listen for telemetry updates from WebSocket
+  useEffect(() => {
+    const handleTelemetry = (e: CustomEvent) => {
+      const data = e.detail;
+      if (data) {
+        setDiagnostics(prev => ({
+          ...prev,
+          gpsConnected: data.gpsSatellites > 0,
+          gpsCount: data.gpsSatellites || 0,
+          batteryVoltage: data.batteryVoltage || 0,
+          batteryPercent: data.batteryPercent || 0,
+          fcConnected: true,
+          telemetryLink: 100,
+        }));
+      }
+    };
+    window.addEventListener('telemetry-update' as any, handleTelemetry);
+    return () => window.removeEventListener('telemetry-update' as any, handleTelemetry);
+  }, []);
 
   // Calculate auto system status based on diagnostics
   const calculateSystemStatus = (): { ready: boolean; issues: string[] } => {

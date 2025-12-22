@@ -50,7 +50,7 @@ export async function registerRoutes(
 
   // Runtime config API - returns device role for Pi vs Ground Control detection
   app.get("/api/runtime-config", async (req, res) => {
-    const deviceRole = process.env.DEVICE_ROLE || "GROUND"; // Default to ground control
+    const deviceRole = process.env.DEVICE_ROLE || "GROUND";
     const mavlinkDefaults = deviceRole === "ONBOARD" ? {
       connectionString: "/dev/ttyACM0",
       baudRate: 115200,
@@ -99,7 +99,7 @@ export async function registerRoutes(
 
   app.get("/api/missions/:id", async (req, res) => {
     try {
-      const mission = await storage.getMission(parseInt(req.params.id));
+      const mission = await storage.getMission(req.params.id);
       if (!mission) {
         return res.status(404).json({ error: "Mission not found" });
       }
@@ -125,7 +125,7 @@ export async function registerRoutes(
 
   app.patch("/api/missions/:id", async (req, res) => {
     try {
-      const mission = await storage.updateMission(parseInt(req.params.id), req.body);
+      const mission = await storage.updateMission(req.params.id, req.body);
       if (!mission) {
         return res.status(404).json({ error: "Mission not found" });
       }
@@ -137,7 +137,7 @@ export async function registerRoutes(
 
   app.delete("/api/missions/:id", async (req, res) => {
     try {
-      await storage.deleteMission(parseInt(req.params.id));
+      await storage.deleteMission(req.params.id);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete mission" });
@@ -147,7 +147,7 @@ export async function registerRoutes(
   // Waypoints API
   app.get("/api/missions/:missionId/waypoints", async (req, res) => {
     try {
-      const waypoints = await storage.getWaypointsByMission(parseInt(req.params.missionId));
+      const waypoints = await storage.getWaypointsByMission(req.params.missionId);
       res.json(waypoints);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch waypoints" });
@@ -170,7 +170,7 @@ export async function registerRoutes(
 
   app.patch("/api/waypoints/:id", async (req, res) => {
     try {
-      const waypoint = await storage.updateWaypoint(parseInt(req.params.id), req.body);
+      const waypoint = await storage.updateWaypoint(req.params.id, req.body);
       if (!waypoint) {
         return res.status(404).json({ error: "Waypoint not found" });
       }
@@ -182,7 +182,7 @@ export async function registerRoutes(
 
   app.delete("/api/waypoints/:id", async (req, res) => {
     try {
-      await storage.deleteWaypoint(parseInt(req.params.id));
+      await storage.deleteWaypoint(req.params.id);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete waypoint" });
@@ -212,6 +212,15 @@ export async function registerRoutes(
       res.json(logs);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch flight logs" });
+    }
+  });
+
+  app.delete("/api/flight-logs/:id", async (req, res) => {
+    try {
+      await storage.deleteFlightLog(req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete flight log" });
     }
   });
 
@@ -461,7 +470,7 @@ export async function registerRoutes(
 
   app.get("/api/drones/:id", async (req, res) => {
     try {
-      const drone = await storage.getDrone(parseInt(req.params.id));
+      const drone = await storage.getDrone(req.params.id);
       if (!drone) {
         return res.status(404).json({ error: "Drone not found" });
       }
@@ -488,7 +497,7 @@ export async function registerRoutes(
 
   app.patch("/api/drones/:id", async (req, res) => {
     try {
-      const drone = await storage.updateDrone(parseInt(req.params.id), req.body);
+      const drone = await storage.updateDrone(req.params.id, req.body);
       if (!drone) {
         return res.status(404).json({ error: "Drone not found" });
       }
@@ -503,7 +512,7 @@ export async function registerRoutes(
     try {
       const { latitude, longitude, altitude, heading } = req.body;
       const drone = await storage.updateDroneLocation(
-        parseInt(req.params.id),
+        req.params.id,
         latitude,
         longitude,
         altitude,
@@ -521,8 +530,8 @@ export async function registerRoutes(
 
   app.delete("/api/drones/:id", async (req, res) => {
     try {
-      await storage.deleteDrone(parseInt(req.params.id));
-      broadcast("drone_removed", { id: parseInt(req.params.id) });
+      await storage.deleteDrone(req.params.id);
+      broadcast("drone_removed", { id: req.params.id });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete drone" });
@@ -536,13 +545,13 @@ export async function registerRoutes(
       let assets;
       
       if (droneId) {
-        assets = await storage.getMediaAssetsByDrone(parseInt(droneId as string));
+        assets = await storage.getMediaAssetsByDrone(droneId as string);
       } else if (sessionId) {
-        assets = await storage.getMediaAssetsBySession(parseInt(sessionId as string));
+        assets = await storage.getMediaAssetsBySession(sessionId as string);
       } else if (status === "pending") {
         assets = await storage.getPendingMediaAssets();
       } else {
-        assets = await storage.getMediaAssetsByDrone(0, 100);
+        assets = await storage.getMediaAssetsByDrone("", 100);
       }
       
       res.json(assets);
@@ -553,7 +562,7 @@ export async function registerRoutes(
 
   app.get("/api/media/:id", async (req, res) => {
     try {
-      const asset = await storage.getMediaAsset(parseInt(req.params.id));
+      const asset = await storage.getMediaAsset(req.params.id);
       if (!asset) {
         return res.status(404).json({ error: "Media asset not found" });
       }
@@ -580,7 +589,7 @@ export async function registerRoutes(
 
   app.patch("/api/media/:id", async (req, res) => {
     try {
-      const asset = await storage.updateMediaAsset(parseInt(req.params.id), req.body);
+      const asset = await storage.updateMediaAsset(req.params.id, req.body);
       if (!asset) {
         return res.status(404).json({ error: "Media asset not found" });
       }
@@ -592,7 +601,7 @@ export async function registerRoutes(
 
   app.delete("/api/media/:id", async (req, res) => {
     try {
-      await storage.deleteMediaAsset(parseInt(req.params.id));
+      await storage.deleteMediaAsset(req.params.id);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete media asset" });
@@ -603,9 +612,7 @@ export async function registerRoutes(
   app.get("/api/backlog", async (req, res) => {
     try {
       const { droneId } = req.query;
-      const backlog = await storage.getPendingBacklog(
-        droneId ? parseInt(droneId as string) : undefined
-      );
+      const backlog = await storage.getPendingBacklog(droneId as string | undefined);
       res.json(backlog);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch backlog" });
@@ -663,7 +670,7 @@ export async function registerRoutes(
 
   app.patch("/api/backlog/:id/synced", async (req, res) => {
     try {
-      await storage.markBacklogSynced(parseInt(req.params.id));
+      await storage.markBacklogSynced(req.params.id);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to mark as synced" });
@@ -672,7 +679,7 @@ export async function registerRoutes(
 
   app.delete("/api/backlog/:id", async (req, res) => {
     try {
-      await storage.deleteBacklogItem(parseInt(req.params.id));
+      await storage.deleteBacklogItem(req.params.id);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete backlog item" });
@@ -682,12 +689,20 @@ export async function registerRoutes(
   app.delete("/api/backlog/clear", async (req, res) => {
     try {
       const { droneId } = req.query;
-      await storage.clearSyncedBacklog(
-        droneId ? parseInt(droneId as string) : undefined
-      );
+      await storage.clearSyncedBacklog(droneId as string | undefined);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to clear synced backlog" });
+    }
+  });
+
+  // Trigger Google sync manually
+  app.post("/api/sync/google", async (req, res) => {
+    try {
+      await storage.syncToGoogle();
+      res.json({ success: true, message: "Sync initiated" });
+    } catch (error: any) {
+      res.status(500).json({ error: "Failed to sync", message: error.message });
     }
   });
 
