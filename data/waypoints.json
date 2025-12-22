@@ -24,5 +24,16 @@
     "actionParams": {
       "hoverTime": 5
     }
+  },
+  {
+    "id": "1766376578862-jbe3enlke",
+    "missionId": "1766375519854-afe9mjlte",
+    "order": 3,
+    "latitude": 36.07209144346926,
+    "longitude": -79.47335958480836,
+    "altitude": 50,
+    "speed": 5,
+    "action": "flythrough",
+    "actionParams": {}
   }
 ]
