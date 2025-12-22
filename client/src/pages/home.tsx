@@ -17,7 +17,7 @@ import { GeofencingPanel } from "@/components/panels/GeofencingPanel";
 import { GUIConfigPanel } from "@/components/panels/GUIConfigPanel";
 import { DroneSelectionPanel } from "@/components/panels/DroneSelectionPanel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertTriangle, X } from "lucide-react";
+import { AlertTriangle, X, Eye, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Drone } from "@shared/schema";
 
@@ -127,9 +127,56 @@ export default function Home() {
     return <UserAccessPanel />;
   }
 
-  // If logged in but no drone selected, show drone selection panel
-  if (!selectedDrone) {
-    return <DroneSelectionPanel onDroneSelected={(drone) => setSelectedDrone(drone)} />;
+  // Preview mode state (for skipping drone selection)
+  const [previewMode, setPreviewMode] = useState(false);
+
+  // Mock drone for preview mode
+  const previewDrone: Drone = {
+    id: 0,
+    name: "Preview Drone",
+    callsign: "PREVIEW",
+    model: "M.O.U.S.E",
+    status: "offline",
+    connectionType: "mavlink",
+    connectionString: null,
+    latitude: 36.0957,
+    longitude: -79.4378,
+    altitude: 0,
+    heading: 0,
+    batteryPercent: 100,
+    signalStrength: 0,
+    gpsStatus: "no_fix",
+    currentMissionId: null,
+    currentWaypointIndex: null,
+    geofenceEnabled: false,
+    geofenceData: null,
+    motorCount: 4,
+    hasGripper: true,
+    hasCamera: true,
+    hasThermal: true,
+    hasLidar: true,
+    maxSpeed: 15,
+    maxAltitude: 120,
+    rtlAltitude: 50,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    lastSeen: null,
+  };
+
+  // If logged in but no drone selected, show drone selection panel (unless preview mode)
+  if (!selectedDrone && !previewMode) {
+    return (
+      <DroneSelectionPanel 
+        onDroneSelected={(drone) => setSelectedDrone(drone)} 
+        onSkipPreview={() => {
+          setPreviewMode(true);
+          // Set preview drone as the selected drone so all components work
+          setSelectedDrone(previewDrone);
+          localStorage.setItem("mouse_selected_drone", JSON.stringify(previewDrone));
+          window.dispatchEvent(new CustomEvent("drone-selected", { detail: previewDrone }));
+        }}
+      />
+    );
   }
 
   const dismissError = (id: string) => {
@@ -296,6 +343,29 @@ export default function Home() {
           </Alert>
         ))}
       </div>
+
+      {/* Preview Mode Banner */}
+      {previewMode && selectedDrone?.id === 0 && (
+        <div className="fixed top-0 left-0 right-0 z-[250] bg-amber-500 text-black px-4 py-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Eye className="h-4 w-4" />
+            <span className="text-sm font-medium">Preview Mode - No drone connected</span>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-black hover:bg-amber-600"
+            onClick={() => {
+              setPreviewMode(false);
+              setSelectedDrone(null);
+              localStorage.removeItem("mouse_selected_drone");
+            }}
+          >
+            <ArrowLeft className="h-4 w-4 mr-1" />
+            Back to Drone Selection
+          </Button>
+        </div>
+      )}
 
       <TopBar onSettingsClick={() => setActiveTab("settings")} />
 

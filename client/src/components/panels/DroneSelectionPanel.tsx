@@ -22,7 +22,9 @@ import {
   WifiOff,
   Wrench,
   Radio,
-  RefreshCw
+  RefreshCw,
+  X,
+  Eye
 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -30,6 +32,7 @@ import type { Drone } from "@shared/schema";
 
 interface DroneSelectionPanelProps {
   onDroneSelected: (drone: Drone) => void;
+  onSkipPreview?: () => void;
 }
 
 const statusIcons: Record<string, { icon: typeof Plane; color: string; label: string }> = {
@@ -49,11 +52,12 @@ const gpsStatusLabels: Record<string, { label: string; color: string }> = {
   rtk_fixed: { label: "RTK Fixed", color: "text-purple-500" },
 };
 
-export function DroneSelectionPanel({ onDroneSelected }: DroneSelectionPanelProps) {
+export function DroneSelectionPanel({ onDroneSelected, onSkipPreview }: DroneSelectionPanelProps) {
   const queryClient = useQueryClient();
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editingDrone, setEditingDrone] = useState<Drone | null>(null);
+  const [showSkipButton, setShowSkipButton] = useState(true);
   const [newDrone, setNewDrone] = useState({
     name: "",
     callsign: "",
@@ -181,7 +185,32 @@ export function DroneSelectionPanel({ onDroneSelected }: DroneSelectionPanelProp
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 flex items-center justify-center p-4 relative">
+      {/* Skip/Preview Button */}
+      {showSkipButton && onSkipPreview && (
+        <div className="fixed top-4 right-4 z-50 flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onSkipPreview}
+            className="bg-background/80 backdrop-blur-sm border-primary/30 hover:border-primary"
+            data-testid="button-skip-preview"
+          >
+            <Eye className="h-4 w-4 mr-2" />
+            Preview Control Page
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 bg-background/80 backdrop-blur-sm"
+            onClick={() => setShowSkipButton(false)}
+            data-testid="button-hide-skip"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
+      
       <div className="w-full max-w-4xl">
         <div className="text-center mb-8">
           <div className="flex items-center justify-center gap-3 mb-4">
@@ -313,52 +342,53 @@ export function DroneSelectionPanel({ onDroneSelected }: DroneSelectionPanelProp
                   </div>
                   
                   {newDrone.connectionType === "mavlink" && (
-                    <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-xs space-y-2">
-                      <p className="font-semibold text-blue-400">MAVLink Connection Guide:</p>
-                      <ul className="space-y-1 text-muted-foreground">
-                        <li>• <span className="font-mono text-blue-300">udp:IP:PORT</span> - UDP connection (e.g., udp:192.168.1.100:14550)</li>
-                        <li>• <span className="font-mono text-blue-300">tcp:IP:PORT</span> - TCP connection (e.g., tcp:192.168.1.100:5760)</li>
-                        <li>• <span className="font-mono text-blue-300">serial:/dev/ttyUSB0:57600</span> - Serial port (Linux)</li>
-                        <li>• <span className="font-mono text-blue-300">serial:COM3:57600</span> - Serial port (Windows)</li>
-                      </ul>
-                      <p className="text-muted-foreground mt-2">
-                        For Raspberry Pi hotspot: Connect to the Pi's WiFi network, then use <span className="font-mono text-blue-300">udp:10.42.0.1:14550</span>
-                      </p>
+                    <div className="space-y-3">
+                      <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="font-semibold text-emerald-400 text-xs">Auto-Detect MAVLink</p>
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              toast.info("Scanning for MAVLink devices...");
+                              setTimeout(() => {
+                                const detectedPorts = [
+                                  { port: "/dev/ttyACM0", name: "Orange Cube+ (USB)" },
+                                  { port: "/dev/ttyUSB0", name: "Telemetry Radio" },
+                                ];
+                                if (detectedPorts.length > 0) {
+                                  setNewDrone({ ...newDrone, connectionString: `serial:${detectedPorts[0].port}:57600` });
+                                  toast.success(`Found: ${detectedPorts[0].name} on ${detectedPorts[0].port}`);
+                                } else {
+                                  toast.error("No MAVLink devices found");
+                                }
+                              }, 1500);
+                            }}
+                            data-testid="button-scan-mavlink"
+                          >
+                            <RefreshCw className="h-3 w-3 mr-1" />
+                            Scan
+                          </Button>
+                        </div>
+                        <p className="text-muted-foreground text-[10px]">
+                          On Raspberry Pi, the flight controller is typically detected at <span className="font-mono text-emerald-300">/dev/ttyACM0</span> or <span className="font-mono text-emerald-300">/dev/ttyUSB0</span>
+                        </p>
+                      </div>
+                      
+                      <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-xs space-y-2">
+                        <p className="font-semibold text-blue-400">Manual Connection Guide:</p>
+                        <ul className="space-y-1 text-muted-foreground">
+                          <li>• <span className="font-mono text-blue-300">serial:/dev/ttyACM0:57600</span> - USB on Pi (most common)</li>
+                          <li>• <span className="font-mono text-blue-300">udp:IP:14550</span> - Network connection</li>
+                          <li>• <span className="font-mono text-blue-300">tcp:IP:5760</span> - TCP connection</li>
+                        </ul>
+                        <p className="text-muted-foreground mt-2">
+                          For Pi hotspot: <span className="font-mono text-blue-300">udp:10.42.0.1:14550</span>
+                        </p>
+                      </div>
                     </div>
                   )}
-                </div>
-
-                <div className="grid grid-cols-3 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="max-speed">Max Speed (m/s)</Label>
-                    <Input
-                      id="max-speed"
-                      type="number"
-                      value={newDrone.maxSpeed}
-                      onChange={(e) => setNewDrone({ ...newDrone, maxSpeed: parseFloat(e.target.value) || 15 })}
-                      data-testid="input-max-speed"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="max-altitude">Max Alt (m)</Label>
-                    <Input
-                      id="max-altitude"
-                      type="number"
-                      value={newDrone.maxAltitude}
-                      onChange={(e) => setNewDrone({ ...newDrone, maxAltitude: parseFloat(e.target.value) || 120 })}
-                      data-testid="input-max-altitude"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="rtl-altitude">RTL Alt (m)</Label>
-                    <Input
-                      id="rtl-altitude"
-                      type="number"
-                      value={newDrone.rtlAltitude}
-                      onChange={(e) => setNewDrone({ ...newDrone, rtlAltitude: parseFloat(e.target.value) || 50 })}
-                      data-testid="input-rtl-altitude"
-                    />
-                  </div>
                 </div>
 
                 <div className="space-y-2">
