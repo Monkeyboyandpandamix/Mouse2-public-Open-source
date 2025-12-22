@@ -96,9 +96,11 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     localStorage.setItem('mouse_gcs_messages', JSON.stringify(messages));
   }, [messages]);
 
-  // Load messages from API on mount
+  // Load messages from API on mount (filtered by user for DM privacy)
   useEffect(() => {
-    fetch('/api/messages')
+    const userId = session.user?.id;
+    const url = userId ? `/api/messages?userId=${userId}` : '/api/messages';
+    fetch(url)
       .then(res => res.ok ? res.json() : [])
       .then(data => {
         if (Array.isArray(data) && data.length > 0) {
@@ -106,7 +108,7 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
         }
       })
       .catch(() => {}); // Fail silently, use localStorage
-  }, []);
+  }, [session.user?.id]);
 
   // Load chat users for @ mention autocomplete
   useEffect(() => {
@@ -124,11 +126,16 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    const userId = session.user?.id;
     
     ws.onmessage = (event) => {
       try {
         const { type, data } = JSON.parse(event.data);
         if (type === 'new_message') {
+          // Filter DMs client-side: only show if broadcast, user is sender, or user is recipient
+          const isDMForMe = !data.recipientId || data.senderId === userId || data.recipientId === userId;
+          if (!isDMForMe) return;
+          
           setMessages(prev => {
             // Avoid duplicates
             if (prev.some(m => m.id === data.id)) return prev;
@@ -147,7 +154,7 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     };
     
     return () => ws.close();
-  }, []);
+  }, [session.user?.id]);
 
   // Filter users for @ mention autocomplete
   const filteredMentionUsers = chatUsers
@@ -157,6 +164,14 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
   // Handle message input change for @ detection
   const handleMessageChange = (value: string) => {
     setNewMessage(value);
+    
+    // Clear selected recipient if message no longer starts with @username
+    if (selectedRecipient) {
+      const expectedPrefix = `@${selectedRecipient.username} `;
+      if (!value.startsWith(expectedPrefix)) {
+        setSelectedRecipient(null);
+      }
+    }
     
     // Check for @ mention
     const lastAtIndex = value.lastIndexOf('@');

@@ -700,6 +700,10 @@ export async function registerRoutes(
   app.get("/api/messages", async (req, res) => {
     try {
       const userId = req.query.userId as string | undefined;
+      // Server-side filtering: if userId provided, filter to only show:
+      // - Broadcast messages (no recipientId)
+      // - Messages sent by the user
+      // - Messages where user is recipient
       const messages = userId 
         ? await storage.getMessagesForUser(userId)
         : await storage.getAllMessages();

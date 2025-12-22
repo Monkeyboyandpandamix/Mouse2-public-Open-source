@@ -8,5 +8,29 @@
     "timestamp": "2025-12-22T02:10:56.564Z",
     "editedAt": "2025-12-22T02:10:59.506Z",
     "deleted": true
+  },
+  {
+    "id": "1766370407654-thz97nwmi",
+    "senderId": "1",
+    "senderName": "admin",
+    "senderRole": "admin",
+    "content": "[Message deleted]",
+    "recipientId": null,
+    "recipientName": null,
+    "timestamp": "2025-12-22T02:26:47.654Z",
+    "editedAt": null,
+    "deleted": true
+  },
+  {
+    "id": "1766370524894-67kzy4sab",
+    "senderId": "1",
+    "senderName": "admin",
+    "senderRole": "admin",
+    "content": "helllo",
+    "recipientId": null,
+    "recipientName": null,
+    "timestamp": "2025-12-22T02:28:44.894Z",
+    "editedAt": null,
+    "deleted": false
   }
 ]
