@@ -219,6 +219,38 @@ export function UserAccessPanel() {
     window.dispatchEvent(new CustomEvent('session-change', { detail: session }));
   }, [session]);
 
+  // Cross-tab synchronization via storage event
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === 'mouse_gcs_custom_roles' && e.newValue) {
+        try {
+          const newRoles = JSON.parse(e.newValue);
+          setCustomRoles(newRoles);
+        } catch {}
+      }
+      if (e.key === 'mouse_gcs_groups' && e.newValue) {
+        try {
+          const newGroups = JSON.parse(e.newValue);
+          setGroups(newGroups);
+        } catch {}
+      }
+      if (e.key === 'mouse_gcs_role_permissions' && e.newValue) {
+        try {
+          const newPermissions = JSON.parse(e.newValue);
+          setRolePermissions(newPermissions);
+        } catch {}
+      }
+      if (e.key === 'mouse_gcs_users' && e.newValue) {
+        try {
+          const newUsers = JSON.parse(e.newValue);
+          setUsers(newUsers);
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
   const [loginError, setLoginError] = useState<string | null>(null);
   
   const handleLogin = async () => {
