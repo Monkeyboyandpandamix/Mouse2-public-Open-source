@@ -15,37 +15,58 @@ if ! command -v node &> /dev/null; then
     echo "  Fedora:        sudo dnf install nodejs npm"
     echo "  Arch:          sudo pacman -S nodejs npm"
     echo ""
+    echo "Or use Node Version Manager (nvm):"
+    echo "  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash"
+    echo "  nvm install 20"
+    echo ""
     exit 1
+fi
+
+# Check Node.js version
+NODE_VERSION=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
+if [ "$NODE_VERSION" -lt 18 ]; then
+    echo "WARNING: Node.js version is below v18. Some features may not work."
+    echo "Current version: $(node -v)"
+    echo ""
 fi
 
 # Set environment variables
 export NODE_ENV=production
-export PORT=5000
-export DATA_DIR=./data
+export PORT=${PORT:-5000}
+export DATA_DIR=${DATA_DIR:-./data}
 
 # Create data directory
-mkdir -p data
+mkdir -p "$DATA_DIR"
 
-# Install dependencies if needed
+# Install ALL dependencies (needed for TypeScript build)
 if [ ! -d "node_modules" ]; then
     echo "Installing dependencies..."
-    npm install --production
+    npm install
+fi
+
+# Build if not already built
+if [ ! -f "dist/index.cjs" ]; then
+    echo ""
+    echo "Building application..."
+    npm run build
+    if [ $? -ne 0 ]; then
+        echo "Build failed! Please check for errors."
+        exit 1
+    fi
 fi
 
 echo ""
-echo "Building application..."
-npm run build
-
-echo ""
-echo "Starting server on http://localhost:5000"
-echo "Opening browser..."
+echo "Starting server on http://localhost:$PORT"
 echo ""
 echo "Press Ctrl+C to stop the server."
 echo ""
 
-# Try to open browser
-(sleep 2 && xdg-open http://localhost:5000 2>/dev/null || open http://localhost:5000 2>/dev/null) &
+# Open browser unless NO_BROWSER is set
+if [ -z "$NO_BROWSER" ]; then
+    echo "Opening browser..."
+    (sleep 2 && xdg-open "http://localhost:$PORT" 2>/dev/null || open "http://localhost:$PORT" 2>/dev/null) &
+fi
 
 # Start the production server
 export NODE_ENV=production
-node dist/index.js
+node dist/index.cjs

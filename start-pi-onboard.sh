@@ -14,6 +14,10 @@ if ! command -v node &> /dev/null; then
     echo "  sudo apt update"
     echo "  sudo apt install nodejs npm"
     echo ""
+    echo "Or for the latest version:"
+    echo "  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -"
+    echo "  sudo apt install -y nodejs"
+    echo ""
     exit 1
 fi
 
@@ -30,35 +34,46 @@ if [ "$EUID" -ne 0 ]; then
     echo "Serial port access may fail. Consider running with:"
     echo "  sudo ./start-pi-onboard.sh"
     echo ""
+    echo "Or add your user to the dialout group:"
+    echo "  sudo usermod -a -G dialout $USER"
+    echo "  (Log out and back in for changes to take effect)"
+    echo ""
 fi
 
 # Set environment variables for onboard mode
 export NODE_ENV=production
-export PORT=5000
-export DATA_DIR=./data
+export PORT=${PORT:-5000}
+export DATA_DIR=${DATA_DIR:-./data}
 export DEVICE_ROLE=ONBOARD
 
 # Create data directory
-mkdir -p data
+mkdir -p "$DATA_DIR"
 
-# Install dependencies if needed
+# Install ALL dependencies (needed for TypeScript build)
 if [ ! -d "node_modules" ]; then
     echo "Installing dependencies..."
-    npm install --production
+    npm install
 fi
 
-echo ""
-echo "Building application..."
-npm run build
+# Build if not already built
+if [ ! -f "dist/index.cjs" ]; then
+    echo ""
+    echo "Building application..."
+    npm run build
+    if [ $? -ne 0 ]; then
+        echo "Build failed! Please check for errors."
+        exit 1
+    fi
+fi
 
 echo ""
 echo "Starting in ONBOARD mode..."
 echo "MAVLink will connect to: /dev/ttyACM0"
-echo "Web interface: http://localhost:5000"
+echo "Web interface: http://localhost:$PORT"
 echo ""
 echo "Press Ctrl+C to stop the server."
 echo ""
 
-# Start the production server
+# Start the production server (no browser open for headless Pi)
 export NODE_ENV=production
-node dist/index.js
+node dist/index.cjs
