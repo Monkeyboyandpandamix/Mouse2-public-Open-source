@@ -76,10 +76,11 @@ export function MissionPlanningPanel() {
   const [isExecuting, setIsExecuting] = useState(false);
 
   useEffect(() => {
-    const handleMissionUpdated = (e: CustomEvent<{ missionId: number }>) => {
+    const handleMissionUpdated = (e: Event) => {
+      const customEvent = e as CustomEvent<{ missionId?: number }>;
       queryClient.invalidateQueries({ queryKey: ["/api/missions"] });
-      if (e.detail?.missionId) {
-        queryClient.invalidateQueries({ queryKey: ["/api/missions", e.detail.missionId, "waypoints"] });
+      if (customEvent.detail?.missionId) {
+        queryClient.invalidateQueries({ queryKey: ["/api/missions", customEvent.detail.missionId, "waypoints"] });
       }
       if (selectedMission) {
         queryClient.invalidateQueries({ queryKey: ["/api/missions", selectedMission, "waypoints"] });
@@ -87,8 +88,8 @@ export function MissionPlanningPanel() {
       toast.info("Mission updated from optimizer");
     };
     
-    window.addEventListener('mission-updated' as any, handleMissionUpdated);
-    return () => window.removeEventListener('mission-updated' as any, handleMissionUpdated);
+    window.addEventListener('mission-updated', handleMissionUpdated);
+    return () => window.removeEventListener('mission-updated', handleMissionUpdated);
   }, [queryClient, selectedMission]);
 
   const { data: missions = [] } = useQuery<Mission[]>({
