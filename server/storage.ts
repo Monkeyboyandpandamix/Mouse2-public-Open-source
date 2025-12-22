@@ -22,6 +22,8 @@ import {
   type InsertMediaAsset,
   type OfflineBacklog,
   type InsertOfflineBacklog,
+  type UserMessage,
+  type InsertUserMessage,
 } from "@shared/schema";
 
 // Data directory for local JSON storage
@@ -225,6 +227,13 @@ export interface IStorage {
   markBacklogSynced(id: string): Promise<void>;
   deleteBacklogItem(id: string): Promise<void>;
   clearSyncedBacklog(droneId?: string): Promise<void>;
+  
+  // User Messages (Team Communication)
+  getAllMessages(): Promise<UserMessage[]>;
+  createMessage(message: InsertUserMessage): Promise<UserMessage>;
+  updateMessage(id: string, content: string): Promise<UserMessage | undefined>;
+  deleteMessage(id: string): Promise<void>;
+  syncMessagesToSheets(messages: UserMessage[]): Promise<void>;
   
   // Sync operations
   syncToGoogle(): Promise<void>;
@@ -663,6 +672,116 @@ export class FileStorage implements IStorage {
       backlog = backlog.filter(b => b.syncStatus !== 'synced');
     }
     writeJsonFile('offline_backlog.json', backlog);
+  }
+
+  // User Messages (Team Communication)
+  async getAllMessages(): Promise<UserMessage[]> {
+    const messages = readJsonFile<UserMessage>('messages.json');
+    return messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }
+
+  async createMessage(message: InsertUserMessage): Promise<UserMessage> {
+    const messages = readJsonFile<UserMessage>('messages.json');
+    const newMessage: UserMessage = {
+      id: generateId(),
+      ...message,
+      timestamp: new Date().toISOString(),
+      editedAt: null,
+      deleted: false,
+    };
+    messages.push(newMessage);
+    writeJsonFile('messages.json', messages);
+    this.markSyncPending();
+    return newMessage;
+  }
+
+  async updateMessage(id: string, content: string): Promise<UserMessage | undefined> {
+    const messages = readJsonFile<UserMessage>('messages.json');
+    const index = messages.findIndex(m => m.id === id);
+    if (index < 0) return undefined;
+    
+    messages[index].content = content;
+    messages[index].editedAt = new Date().toISOString();
+    writeJsonFile('messages.json', messages);
+    this.markSyncPending();
+    return messages[index];
+  }
+
+  async deleteMessage(id: string): Promise<void> {
+    const messages = readJsonFile<UserMessage>('messages.json');
+    const index = messages.findIndex(m => m.id === id);
+    if (index >= 0) {
+      messages[index].deleted = true;
+      messages[index].content = "[Message deleted]";
+      writeJsonFile('messages.json', messages);
+      this.markSyncPending();
+    }
+  }
+
+  async syncMessagesToSheets(msgs: UserMessage[]): Promise<void> {
+    // Save messages locally first
+    writeJsonFile('messages.json', msgs);
+    
+    try {
+      const sheetsClient = await getGoogleSheetsClient();
+      if (!sheetsClient) {
+        console.log('Google Sheets not available for message sync');
+        return;
+      }
+
+      // Get or create a spreadsheet for messages
+      const SPREADSHEET_NAME = 'MOUSE_GCS_Messages';
+      
+      // Search for existing spreadsheet
+      const driveClient = await getGoogleDriveClient();
+      if (!driveClient) return;
+      
+      const searchRes = await driveClient.files.list({
+        q: `name='${SPREADSHEET_NAME}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`,
+        fields: 'files(id)',
+      });
+
+      let spreadsheetId: string;
+      
+      if (searchRes.data.files && searchRes.data.files.length > 0) {
+        spreadsheetId = searchRes.data.files[0].id!;
+      } else {
+        // Create new spreadsheet
+        const createRes = await sheetsClient.spreadsheets.create({
+          requestBody: {
+            properties: { title: SPREADSHEET_NAME },
+            sheets: [{ properties: { title: 'Messages' } }]
+          }
+        });
+        spreadsheetId = createRes.data.spreadsheetId!;
+      }
+
+      // Prepare data for sheets
+      const headers = ['ID', 'Sender ID', 'Sender Name', 'Sender Role', 'Content', 'Timestamp', 'Edited At', 'Deleted'];
+      const rows = msgs.map(m => [
+        m.id, m.senderId, m.senderName, m.senderRole, m.content, 
+        m.timestamp, m.editedAt || '', m.deleted ? 'Yes' : 'No'
+      ]);
+
+      // Clear and update sheet
+      await sheetsClient.spreadsheets.values.clear({
+        spreadsheetId,
+        range: 'Messages!A:H',
+      });
+
+      await sheetsClient.spreadsheets.values.update({
+        spreadsheetId,
+        range: 'Messages!A1',
+        valueInputOption: 'RAW',
+        requestBody: {
+          values: [headers, ...rows]
+        }
+      });
+
+      console.log(`Synced ${msgs.length} messages to Google Sheets`);
+    } catch (error) {
+      console.error('Failed to sync messages to Sheets:', error);
+    }
   }
 
   // Sync management

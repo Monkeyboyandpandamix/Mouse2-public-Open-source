@@ -254,3 +254,19 @@ export const offlineBacklogSchema = z.object({
 export const insertOfflineBacklogSchema = offlineBacklogSchema.omit({ id: true, queuedAt: true, syncedAt: true });
 export type InsertOfflineBacklog = z.infer<typeof insertOfflineBacklogSchema>;
 export type OfflineBacklog = z.infer<typeof offlineBacklogSchema>;
+
+// User Messages (Team Communication)
+export const userMessageSchema = z.object({
+  id: z.string(),
+  senderId: z.string(),
+  senderName: z.string(),
+  senderRole: z.string(),
+  content: z.string(),
+  timestamp: z.string(),
+  editedAt: z.string().nullable().optional(),
+  deleted: z.boolean().default(false),
+});
+
+export const insertUserMessageSchema = userMessageSchema.omit({ id: true, timestamp: true, editedAt: true, deleted: true });
+export type InsertUserMessage = z.infer<typeof insertUserMessageSchema>;
+export type UserMessage = z.infer<typeof userMessageSchema>;

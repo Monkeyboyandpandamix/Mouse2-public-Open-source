@@ -696,6 +696,70 @@ export async function registerRoutes(
     }
   });
 
+  // User Messages API (Team Communication)
+  app.get("/api/messages", async (req, res) => {
+    try {
+      const messages = await storage.getAllMessages();
+      res.json(messages);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch messages" });
+    }
+  });
+
+  app.post("/api/messages", async (req, res) => {
+    try {
+      const { senderId, senderName, senderRole, content } = req.body;
+      if (!senderId || !senderName || !senderRole || !content) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+      const message = await storage.createMessage({ senderId, senderName, senderRole, content });
+      broadcast("new_message", message);
+      res.json(message);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create message" });
+    }
+  });
+
+  app.patch("/api/messages/:id", async (req, res) => {
+    try {
+      const { content } = req.body;
+      if (!content) {
+        return res.status(400).json({ error: "Content required" });
+      }
+      const message = await storage.updateMessage(req.params.id, content);
+      if (!message) {
+        return res.status(404).json({ error: "Message not found" });
+      }
+      broadcast("message_updated", message);
+      res.json(message);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update message" });
+    }
+  });
+
+  app.delete("/api/messages/:id", async (req, res) => {
+    try {
+      await storage.deleteMessage(req.params.id);
+      broadcast("message_deleted", { id: req.params.id });
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete message" });
+    }
+  });
+
+  app.post("/api/messages/sync", async (req, res) => {
+    try {
+      const messages = req.body;
+      if (!Array.isArray(messages)) {
+        return res.status(400).json({ error: "Messages array required" });
+      }
+      await storage.syncMessagesToSheets(messages);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to sync messages" });
+    }
+  });
+
   // Trigger Google sync manually
   app.post("/api/sync/google", async (req, res) => {
     try {

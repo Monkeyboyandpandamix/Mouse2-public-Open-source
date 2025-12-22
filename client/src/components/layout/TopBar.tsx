@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { 
   Wifi, 
   Battery, 
@@ -16,9 +17,14 @@ import {
   User,
   Plane,
   ChevronDown,
-  RefreshCw
+  RefreshCw,
+  Send,
+  Edit2,
+  Trash2,
+  X,
+  Check
 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Popover,
   PopoverContent,
@@ -29,7 +35,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { Drone } from "@shared/schema";
+import type { Drone, UserMessage } from "@shared/schema";
 
 interface UserSession {
   user: { id: string; username: string; role: string } | null;
@@ -66,6 +72,144 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     const saved = localStorage.getItem('mouse_selected_drone');
     return saved ? JSON.parse(saved) : null;
   });
+
+  // Messaging state
+  const [messages, setMessages] = useState<UserMessage[]>(() => {
+    const saved = localStorage.getItem('mouse_gcs_messages');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [newMessage, setNewMessage] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState("");
+  const scrollRef = useRef<HTMLDivElement>(null);
+  
+  // Save messages to localStorage as backup
+  useEffect(() => {
+    localStorage.setItem('mouse_gcs_messages', JSON.stringify(messages));
+  }, [messages]);
+
+  // Load messages from API on mount
+  useEffect(() => {
+    fetch('/api/messages')
+      .then(res => res.ok ? res.json() : [])
+      .then(data => {
+        if (Array.isArray(data) && data.length > 0) {
+          setMessages(data);
+        }
+      })
+      .catch(() => {}); // Fail silently, use localStorage
+  }, []);
+
+  // WebSocket subscription for real-time updates
+  useEffect(() => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    
+    ws.onmessage = (event) => {
+      try {
+        const { type, data } = JSON.parse(event.data);
+        if (type === 'new_message') {
+          setMessages(prev => {
+            // Avoid duplicates
+            if (prev.some(m => m.id === data.id)) return prev;
+            return [...prev, data];
+          });
+        } else if (type === 'message_updated') {
+          setMessages(prev => prev.map(m => m.id === data.id ? data : m));
+        } else if (type === 'message_deleted') {
+          setMessages(prev => prev.map(m => 
+            m.id === data.id ? { ...m, deleted: true, content: "[Message deleted]" } : m
+          ));
+        }
+      } catch (e) {
+        // Ignore parse errors
+      }
+    };
+    
+    return () => ws.close();
+  }, []);
+
+  const sendMessage = async () => {
+    if (!newMessage.trim() || !session.user) return;
+    
+    try {
+      const res = await fetch('/api/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          senderId: session.user.id,
+          senderName: session.user.username,
+          senderRole: session.user.role,
+          content: newMessage.trim()
+        })
+      });
+      
+      if (res.ok) {
+        const message = await res.json();
+        setMessages(prev => {
+          if (prev.some(m => m.id === message.id)) return prev;
+          return [...prev, message];
+        });
+        setNewMessage("");
+        setTimeout(() => scrollRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+      }
+    } catch (e) {
+      // Offline fallback - create local message
+      const message: UserMessage = {
+        id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        senderId: session.user.id,
+        senderName: session.user.username,
+        senderRole: session.user.role,
+        content: newMessage.trim(),
+        timestamp: new Date().toISOString(),
+        editedAt: null,
+        deleted: false
+      };
+      setMessages(prev => [...prev, message]);
+      setNewMessage("");
+    }
+  };
+
+  const editMessage = async (id: string) => {
+    if (!editContent.trim()) return;
+    
+    try {
+      const res = await fetch(`/api/messages/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: editContent.trim() })
+      });
+      
+      if (res.ok) {
+        const updated = await res.json();
+        setMessages(prev => prev.map(m => m.id === id ? updated : m));
+      }
+    } catch (e) {
+      // Offline fallback
+      setMessages(prev => prev.map(m => 
+        m.id === id ? { ...m, content: editContent.trim(), editedAt: new Date().toISOString() } : m
+      ));
+    }
+    
+    setEditingId(null);
+    setEditContent("");
+  };
+
+  const deleteMessage = async (id: string) => {
+    try {
+      await fetch(`/api/messages/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      // Ignore errors - update locally anyway
+    }
+    setMessages(prev => prev.map(m => 
+      m.id === id ? { ...m, deleted: true, content: "[Message deleted]" } : m
+    ));
+  };
+
+  const startEdit = (msg: UserMessage) => {
+    setEditingId(msg.id);
+    setEditContent(msg.content);
+  };
   
   // Listen for session changes
   useEffect(() => {
@@ -336,10 +480,37 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           <span className="hidden sm:inline">MODE:</span>STAB
         </Badge>
 
+      </div>
+
+      {/* Right Section - Telemetry, Emergency, Comms, Time, User */}
+      <div className="flex items-center gap-1 sm:gap-2 lg:gap-4 shrink-0">
+        {/* Telemetry Status Bar - Always visible with compact display on small screens */}
+        <div className="flex items-center gap-1 sm:gap-2 text-[10px] sm:text-xs font-mono text-muted-foreground">
+          <div className="flex items-center gap-0.5" title="GPS Satellites">
+            <Satellite className="h-3 w-3 text-primary" />
+            <span className="text-foreground">{diagnostics.gpsCount}</span>
+          </div>
+          <div className="flex items-center gap-0.5" title="RC Signal Strength">
+            <Signal className="h-3 w-3 text-emerald-500" />
+            <span className="text-foreground">{diagnostics.rcSignal}</span>
+          </div>
+          <div className="flex items-center gap-0.5 hidden sm:flex" title="Telemetry Link Quality">
+            <Wifi className="h-3 w-3 text-emerald-500" />
+            <span className="text-foreground">{diagnostics.telemetryLink}</span>
+          </div>
+          <div className="flex items-center gap-0.5" title="Drone Battery">
+            <Battery className="h-3 w-3 text-emerald-500" />
+            <span className="text-foreground">{diagnostics.batteryPercent}%</span>
+          </div>
+        </div>
+
+        <div className="h-6 w-px bg-border hidden sm:block" />
+
+        {/* Emergency Button - Moved to right section */}
         <Button 
           variant="destructive" 
           size="sm" 
-          className="ml-1 gap-1 font-bold animate-pulse hover:animate-none px-2 h-8 text-xs shrink-0"
+          className="gap-1 font-bold animate-pulse hover:animate-none px-2 h-7 text-[10px] sm:text-xs shrink-0"
           onClick={() => {
             if (confirm("EMERGENCY LANDING: This will find a safe clearing and land immediately. Continue?")) {
               toast.error("EMERGENCY LANDING INITIATED - Finding safe landing zone...", { duration: 5000 });
@@ -348,65 +519,128 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           data-testid="button-emergency-land"
         >
           <ChevronDown className="h-3 w-3" />
-          <span className="hidden md:inline">EMERGENCY</span>
-          <span className="md:hidden">SOS</span>
+          <span className="hidden sm:inline">SOS</span>
         </Button>
-      </div>
 
-      <div className="flex items-center gap-2 sm:gap-4 lg:gap-6 shrink-0">
-        {/* Telemetry Status Bar - Always visible with compact display on small screens */}
-        <div className="flex items-center gap-1 sm:gap-3 text-[10px] sm:text-xs font-mono text-muted-foreground flex-wrap justify-end">
-          <div className="flex items-center gap-1" title="GPS Satellites">
-            <Satellite className="h-3 w-3 text-primary" />
-            <span className="text-foreground">{diagnostics.gpsCount}</span>
-          </div>
-          <div className="flex items-center gap-1" title="RC Signal Strength">
-            <Signal className="h-3 w-3 text-emerald-500" />
-            <span className="text-foreground">{diagnostics.rcSignal}</span>
-          </div>
-          <div className="flex items-center gap-1" title="Telemetry Link Quality">
-            <Wifi className="h-3 w-3 text-emerald-500" />
-            <span className="text-foreground">{diagnostics.telemetryLink}</span>
-          </div>
-          <div className="flex items-center gap-1" title="Drone Battery">
-            <Battery className="h-3 w-3 text-emerald-500" />
-            <span className="text-foreground">{diagnostics.batteryPercent}%</span>
-          </div>
-        </div>
+        <div className="h-6 w-px bg-border hidden sm:block" />
 
-        <div className="h-6 w-px bg-border" />
-
-        {/* Comms Panel */}
+        {/* Comms Panel - Team Messaging */}
         <Popover>
           <PopoverTrigger asChild>
-             <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-foreground">
+             <Button variant="ghost" size="sm" className="gap-1 text-muted-foreground hover:text-foreground px-2 h-8">
                 <MessageSquare className="h-4 w-4" />
-                <span className="hidden md:inline text-xs font-mono uppercase">Comms</span>
-                <Badge className="h-4 w-4 p-0 flex items-center justify-center bg-primary text-[10px]">1</Badge>
+                <span className="hidden lg:inline text-xs font-mono uppercase">Comms</span>
+                {messages.filter(m => !m.deleted).length > 0 && (
+                  <Badge className="h-4 min-w-4 p-0 flex items-center justify-center bg-primary text-[10px]">
+                    {messages.filter(m => !m.deleted).length}
+                  </Badge>
+                )}
              </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-80 p-0 mr-4 bg-card/95 backdrop-blur border-border" align="end">
+          <PopoverContent className="w-96 p-0 mr-4 bg-card/95 backdrop-blur border-border" align="end">
              <div className="p-3 border-b border-border flex items-center justify-between">
-                <span className="font-mono font-bold text-sm">EMERGENCY COMMS CHANNEL</span>
-                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-             </div>
-             <ScrollArea className="h-64 p-4 space-y-4">
-                <div className="flex flex-col gap-1">
-                   <span className="text-[10px] text-muted-foreground">10:42:01 - DISPATCH</span>
-                   <div className="bg-muted/50 p-2 rounded text-xs">
-                      Priority package drop requested at Waypoint 2. Confirm availability.
-                   </div>
+                <span className="font-mono font-bold text-sm">TEAM COMMS</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-muted-foreground">{messages.filter(m => !m.deleted).length} messages</span>
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                 </div>
-                <div className="flex flex-col gap-1 items-end">
-                   <span className="text-[10px] text-muted-foreground">10:42:15 - PILOT</span>
-                   <div className="bg-primary/20 text-primary p-2 rounded text-xs text-right">
-                      Copy dispatch. En route to WP2. ETA 2 mins.
-                   </div>
+             </div>
+             <ScrollArea className="h-72 p-3">
+                <div className="space-y-3">
+                  {messages.filter(m => !m.deleted).length === 0 ? (
+                    <div className="text-center text-muted-foreground text-xs py-8">
+                      No messages yet. Start the conversation!
+                    </div>
+                  ) : (
+                    messages.map((msg) => {
+                      if (msg.deleted) return null;
+                      const isOwn = session.user?.id === msg.senderId;
+                      const msgTime = new Date(msg.timestamp);
+                      const timeStr = msgTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                      
+                      return (
+                        <div key={msg.id} className={`flex flex-col gap-1 ${isOwn ? 'items-end' : ''}`}>
+                          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                            <span>{timeStr}</span>
+                            <span className="font-medium">{msg.senderName}</span>
+                            <Badge variant="outline" className="h-4 text-[8px] px-1">
+                              {msg.senderRole}
+                            </Badge>
+                            {msg.editedAt && <span className="italic">(edited)</span>}
+                          </div>
+                          
+                          {editingId === msg.id ? (
+                            <div className="flex gap-1 w-full">
+                              <Input
+                                value={editContent}
+                                onChange={(e) => setEditContent(e.target.value)}
+                                className="h-7 text-xs flex-1"
+                                onKeyDown={(e) => e.key === 'Enter' && editMessage(msg.id)}
+                                data-testid={`input-edit-message-${msg.id}`}
+                              />
+                              <Button size="icon" className="h-7 w-7" onClick={() => editMessage(msg.id)}>
+                                <Check className="h-3 w-3" />
+                              </Button>
+                              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setEditingId(null)}>
+                                <X className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <div className={`group relative p-2 rounded text-xs max-w-[280px] ${
+                              isOwn ? 'bg-primary/20 text-primary' : 'bg-muted/50'
+                            }`}>
+                              <p className="break-words">{msg.content}</p>
+                              {isOwn && (
+                                <div className="absolute -top-1 -right-1 hidden group-hover:flex gap-0.5 bg-background rounded border shadow-sm">
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="h-5 w-5"
+                                    onClick={() => startEdit(msg)}
+                                    data-testid={`button-edit-message-${msg.id}`}
+                                  >
+                                    <Edit2 className="h-2.5 w-2.5" />
+                                  </Button>
+                                  <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="h-5 w-5 text-destructive hover:text-destructive"
+                                    onClick={() => deleteMessage(msg.id)}
+                                    data-testid={`button-delete-message-${msg.id}`}
+                                  >
+                                    <Trash2 className="h-2.5 w-2.5" />
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                  <div ref={scrollRef} />
                 </div>
              </ScrollArea>
              <div className="p-2 border-t border-border flex gap-2">
-                <Button size="sm" variant="outline" className="flex-1 text-xs"><Mic className="h-3 w-3 mr-2" /> PTT</Button>
-                <Button size="sm" className="flex-1 text-xs">SEND</Button>
+                {session.isLoggedIn ? (
+                  <>
+                    <Input
+                      placeholder="Type a message..."
+                      value={newMessage}
+                      onChange={(e) => setNewMessage(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
+                      className="flex-1 h-8 text-xs"
+                      data-testid="input-new-message"
+                    />
+                    <Button size="sm" onClick={sendMessage} className="h-8 px-3" data-testid="button-send-message">
+                      <Send className="h-3 w-3" />
+                    </Button>
+                  </>
+                ) : (
+                  <div className="text-xs text-muted-foreground text-center w-full py-1">
+                    Log in to send messages
+                  </div>
+                )}
              </div>
           </PopoverContent>
         </Popover>
