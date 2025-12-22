@@ -699,20 +699,39 @@ export async function registerRoutes(
   // User Messages API (Team Communication)
   app.get("/api/messages", async (req, res) => {
     try {
-      const messages = await storage.getAllMessages();
+      const userId = req.query.userId as string | undefined;
+      const messages = userId 
+        ? await storage.getMessagesForUser(userId)
+        : await storage.getAllMessages();
       res.json(messages);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch messages" });
     }
   });
 
+  app.get("/api/chat-users", async (req, res) => {
+    try {
+      const users = await storage.getChatUsers();
+      res.json(users);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch users" });
+    }
+  });
+
   app.post("/api/messages", async (req, res) => {
     try {
-      const { senderId, senderName, senderRole, content } = req.body;
+      const { senderId, senderName, senderRole, content, recipientId, recipientName } = req.body;
       if (!senderId || !senderName || !senderRole || !content) {
         return res.status(400).json({ error: "Missing required fields" });
       }
-      const message = await storage.createMessage({ senderId, senderName, senderRole, content });
+      const message = await storage.createMessage({ 
+        senderId, 
+        senderName, 
+        senderRole, 
+        content,
+        recipientId: recipientId || null,
+        recipientName: recipientName || null
+      });
       broadcast("new_message", message);
       res.json(message);
     } catch (error) {

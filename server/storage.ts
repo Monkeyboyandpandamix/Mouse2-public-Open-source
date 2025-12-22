@@ -230,6 +230,8 @@ export interface IStorage {
   
   // User Messages (Team Communication)
   getAllMessages(): Promise<UserMessage[]>;
+  getMessagesForUser(userId: string): Promise<UserMessage[]>;
+  getChatUsers(): Promise<{ id: string; username: string; role: string }[]>;
   createMessage(message: InsertUserMessage): Promise<UserMessage>;
   updateMessage(id: string, content: string): Promise<UserMessage | undefined>;
   deleteMessage(id: string): Promise<void>;
@@ -678,6 +680,33 @@ export class FileStorage implements IStorage {
   async getAllMessages(): Promise<UserMessage[]> {
     const messages = readJsonFile<UserMessage>('messages.json');
     return messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }
+
+  async getMessagesForUser(userId: string): Promise<UserMessage[]> {
+    const messages = readJsonFile<UserMessage>('messages.json');
+    return messages
+      .filter(m => {
+        // Show if: broadcast (no recipient), user is sender, or user is recipient
+        return !m.recipientId || m.senderId === userId || m.recipientId === userId;
+      })
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }
+
+  async getChatUsers(): Promise<{ id: string; username: string; role: string }[]> {
+    const messages = readJsonFile<UserMessage>('messages.json');
+    const userMap = new Map<string, { id: string; username: string; role: string }>();
+    
+    for (const msg of messages) {
+      if (!userMap.has(msg.senderId)) {
+        userMap.set(msg.senderId, {
+          id: msg.senderId,
+          username: msg.senderName,
+          role: msg.senderRole
+        });
+      }
+    }
+    
+    return Array.from(userMap.values()).sort((a, b) => a.username.localeCompare(b.username));
   }
 
   async createMessage(message: InsertUserMessage): Promise<UserMessage> {

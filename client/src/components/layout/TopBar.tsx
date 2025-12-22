@@ -82,6 +82,14 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  
+  // @ mention autocomplete state
+  const [chatUsers, setChatUsers] = useState<{ id: string; username: string; role: string }[]>([]);
+  const [showMentions, setShowMentions] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState("");
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [selectedRecipient, setSelectedRecipient] = useState<{ id: string; username: string } | null>(null);
   
   // Save messages to localStorage as backup
   useEffect(() => {
@@ -99,6 +107,18 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
       })
       .catch(() => {}); // Fail silently, use localStorage
   }, []);
+
+  // Load chat users for @ mention autocomplete
+  useEffect(() => {
+    fetch('/api/chat-users')
+      .then(res => res.ok ? res.json() : [])
+      .then(data => {
+        if (Array.isArray(data)) {
+          setChatUsers(data);
+        }
+      })
+      .catch(() => {});
+  }, [messages]); // Refresh when messages change to pick up new users
 
   // WebSocket subscription for real-time updates
   useEffect(() => {
@@ -129,8 +149,85 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     return () => ws.close();
   }, []);
 
+  // Filter users for @ mention autocomplete
+  const filteredMentionUsers = chatUsers
+    .filter(u => u.id !== session.user?.id) // Exclude self
+    .filter(u => u.username.toLowerCase().includes(mentionQuery.toLowerCase()));
+
+  // Handle message input change for @ detection
+  const handleMessageChange = (value: string) => {
+    setNewMessage(value);
+    
+    // Check for @ mention
+    const lastAtIndex = value.lastIndexOf('@');
+    if (lastAtIndex >= 0) {
+      const afterAt = value.slice(lastAtIndex + 1);
+      // Only show dropdown if @ is at start or after a space, and no space after
+      const beforeAt = value.slice(0, lastAtIndex);
+      const isValidPosition = lastAtIndex === 0 || beforeAt.endsWith(' ');
+      const hasNoSpaceAfter = !afterAt.includes(' ');
+      
+      if (isValidPosition && hasNoSpaceAfter) {
+        setMentionQuery(afterAt);
+        setShowMentions(true);
+        setMentionIndex(0);
+        return;
+      }
+    }
+    setShowMentions(false);
+    setMentionQuery("");
+  };
+
+  // Select a user from mention dropdown
+  const selectMention = (user: { id: string; username: string }) => {
+    const lastAtIndex = newMessage.lastIndexOf('@');
+    const beforeMention = newMessage.slice(0, lastAtIndex);
+    setNewMessage(beforeMention + '@' + user.username + ' ');
+    setSelectedRecipient(user);
+    setShowMentions(false);
+    setMentionQuery("");
+    inputRef.current?.focus();
+  };
+
+  // Handle keyboard navigation in mention dropdown
+  const handleMessageKeyDown = (e: React.KeyboardEvent) => {
+    if (showMentions && filteredMentionUsers.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setMentionIndex(prev => Math.min(prev + 1, filteredMentionUsers.length - 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setMentionIndex(prev => Math.max(prev - 1, 0));
+      } else if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        selectMention(filteredMentionUsers[mentionIndex]);
+      } else if (e.key === 'Escape') {
+        setShowMentions(false);
+      }
+    } else if (e.key === 'Enter' && !showMentions) {
+      sendMessage();
+    }
+  };
+
   const sendMessage = async () => {
     if (!newMessage.trim() || !session.user) return;
+    
+    // Extract recipient from message if it starts with @username
+    let recipientId = selectedRecipient?.id || null;
+    let recipientName = selectedRecipient?.username || null;
+    let messageContent = newMessage.trim();
+    
+    // Check if message starts with @username pattern
+    const mentionMatch = messageContent.match(/^@(\S+)\s+(.+)$/);
+    if (mentionMatch) {
+      const mentionedUsername = mentionMatch[1];
+      const matchedUser = chatUsers.find(u => u.username.toLowerCase() === mentionedUsername.toLowerCase());
+      if (matchedUser) {
+        recipientId = matchedUser.id;
+        recipientName = matchedUser.username;
+        messageContent = mentionMatch[2]; // Content after the @mention
+      }
+    }
     
     try {
       const res = await fetch('/api/messages', {
@@ -140,7 +237,9 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           senderId: session.user.id,
           senderName: session.user.username,
           senderRole: session.user.role,
-          content: newMessage.trim()
+          content: messageContent,
+          recipientId,
+          recipientName
         })
       });
       
@@ -151,6 +250,7 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           return [...prev, message];
         });
         setNewMessage("");
+        setSelectedRecipient(null);
         setTimeout(() => scrollRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
       }
     } catch (e) {
@@ -160,13 +260,16 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
         senderId: session.user.id,
         senderName: session.user.username,
         senderRole: session.user.role,
-        content: newMessage.trim(),
+        recipientId,
+        recipientName,
+        content: messageContent,
         timestamp: new Date().toISOString(),
         editedAt: null,
         deleted: false
       };
       setMessages(prev => [...prev, message]);
       setNewMessage("");
+      setSelectedRecipient(null);
     }
   };
 
@@ -560,12 +663,18 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
                       
                       return (
                         <div key={msg.id} className={`flex flex-col gap-1 ${isOwn ? 'items-end' : ''}`}>
-                          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                          <div className="flex items-center gap-2 text-[10px] text-muted-foreground flex-wrap">
                             <span>{timeStr}</span>
                             <span className="font-medium">{msg.senderName}</span>
+                            {msg.recipientName && (
+                              <span className="text-primary">→ @{msg.recipientName}</span>
+                            )}
                             <Badge variant="outline" className="h-4 text-[8px] px-1">
                               {msg.senderRole}
                             </Badge>
+                            {msg.recipientId && (
+                              <Badge variant="secondary" className="h-4 text-[8px] px-1 bg-primary/20 text-primary">DM</Badge>
+                            )}
                             {msg.editedAt && <span className="italic">(edited)</span>}
                           </div>
                           
@@ -623,19 +732,44 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
              </ScrollArea>
              <div className="p-2 border-t border-border flex gap-2">
                 {session.isLoggedIn ? (
-                  <>
-                    <Input
-                      placeholder="Type a message..."
-                      value={newMessage}
-                      onChange={(e) => setNewMessage(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
-                      className="flex-1 h-8 text-xs"
-                      data-testid="input-new-message"
-                    />
+                  <div className="flex-1 flex gap-2 relative">
+                    <div className="flex-1 relative">
+                      <Input
+                        ref={inputRef}
+                        placeholder="Type @ to DM someone..."
+                        value={newMessage}
+                        onChange={(e) => handleMessageChange(e.target.value)}
+                        onKeyDown={handleMessageKeyDown}
+                        className="h-8 text-xs w-full"
+                        data-testid="input-new-message"
+                      />
+                      {showMentions && filteredMentionUsers.length > 0 && (
+                        <div className="absolute bottom-full left-0 w-full mb-1 bg-popover border border-border rounded-md shadow-lg z-50 max-h-32 overflow-y-auto" data-testid="mention-dropdown">
+                          {filteredMentionUsers.map((user, idx) => (
+                            <div
+                              key={user.id}
+                              className={`px-3 py-2 text-xs cursor-pointer flex items-center justify-between ${
+                                idx === mentionIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'
+                              }`}
+                              onClick={() => selectMention(user)}
+                              data-testid={`mention-user-${user.id}`}
+                            >
+                              <span className="font-medium">@{user.username}</span>
+                              <Badge variant="outline" className="h-4 text-[8px] px-1">{user.role}</Badge>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {selectedRecipient && (
+                        <div className="absolute -top-5 left-0 text-[10px] text-primary">
+                          DM to @{selectedRecipient.username}
+                        </div>
+                      )}
+                    </div>
                     <Button size="sm" onClick={sendMessage} className="h-8 px-3" data-testid="button-send-message">
                       <Send className="h-3 w-3" />
                     </Button>
-                  </>
+                  </div>
                 ) : (
                   <div className="text-xs text-muted-foreground text-center w-full py-1">
                     Log in to send messages

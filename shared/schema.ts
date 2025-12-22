@@ -261,6 +261,8 @@ export const userMessageSchema = z.object({
   senderId: z.string(),
   senderName: z.string(),
   senderRole: z.string(),
+  recipientId: z.string().nullable().optional(), // null = broadcast to all
+  recipientName: z.string().nullable().optional(),
   content: z.string(),
   timestamp: z.string(),
   editedAt: z.string().nullable().optional(),
@@ -270,3 +272,11 @@ export const userMessageSchema = z.object({
 export const insertUserMessageSchema = userMessageSchema.omit({ id: true, timestamp: true, editedAt: true, deleted: true });
 export type InsertUserMessage = z.infer<typeof insertUserMessageSchema>;
 export type UserMessage = z.infer<typeof userMessageSchema>;
+
+// Chat User (extracted from messages for autocomplete)
+export const chatUserSchema = z.object({
+  id: z.string(),
+  username: z.string(),
+  role: z.string(),
+});
+export type ChatUser = z.infer<typeof chatUserSchema>;
