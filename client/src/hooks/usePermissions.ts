@@ -50,7 +50,20 @@ export function usePermissions() {
     const saved = localStorage.getItem('mouse_gcs_role_permissions');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        // Always ensure admin has all default permissions (merge with any new ones)
+        const mergedAdmin = [...new Set([
+          ...(parsed.admin || []),
+          ...defaultRolePermissions.admin
+        ])];
+        const merged = {
+          ...defaultRolePermissions,
+          ...parsed,
+          admin: mergedAdmin // Admin always gets all default permissions
+        };
+        // Update localStorage with merged permissions
+        localStorage.setItem('mouse_gcs_role_permissions', JSON.stringify(merged));
+        return merged;
       } catch {
         return defaultRolePermissions;
       }

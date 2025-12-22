@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Plus, Trash2, Save, Play, MapPin, Navigation, Search, AlertTriangle, Clock, Bell, RotateCcw, Radar, Edit, X, Check, Lock } from "lucide-react";
+import { Plus, Trash2, Save, Play, MapPin, Navigation, Search, AlertTriangle, Clock, Bell, RotateCcw, Radar, Edit, X, Check, Lock, Hand } from "lucide-react";
 import { useState, useCallback, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -43,6 +43,7 @@ const WAYPOINT_ACTIONS = [
   { value: "hover", label: "Hover", icon: Clock, desc: "Stop and hover at location" },
   { value: "alert", label: "Alert on Arrival", icon: Bell, desc: "Send notification when reached" },
   { value: "patrol", label: "Patrol Area", icon: Radar, desc: "Circle around this point" },
+  { value: "open_gripper", label: "Open Gripper", icon: Hand, desc: "Open gripper to release payload" },
   { value: "rtl", label: "Return to Launch", icon: RotateCcw, desc: "Return home after this point" },
 ];
 
