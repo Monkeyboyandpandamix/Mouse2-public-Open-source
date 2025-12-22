@@ -7,21 +7,47 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Target, Users, Car, Box, AlertCircle, MapPin, Search, Crosshair, Lock, Unlock, Camera, Play, Square, Loader2, Laptop, Video } from "lucide-react";
+import { Target, Users, Car, Box, AlertCircle, MapPin, Search, Crosshair, Lock, Unlock, Camera, Play, Square, Loader2, Laptop, Video, Zap } from "lucide-react";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import { MissionMap } from "@/components/map/MissionMap";
+import * as tf from "@tensorflow/tfjs";
+import * as cocoSsd from "@tensorflow-models/coco-ssd";
 
 interface DetectedObject {
   id: string;
   type: "person" | "vehicle" | "unknown";
+  label: string;
   confidence: number;
   x: number;
   y: number;
   width: number;
   height: number;
   color?: string;
+  velocity?: { dx: number; dy: number };
+  framesSeen: number;
+  lastSeen: number;
 }
+
+interface TrackedObject {
+  id: string;
+  type: "person" | "vehicle" | "unknown";
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+  smoothedConfidence: number;
+  velocity: { dx: number; dy: number };
+  framesSeen: number;
+  lastSeen: number;
+  color: string;
+}
+
+const VEHICLE_CLASSES = ['car', 'truck', 'bus', 'motorcycle', 'bicycle'];
+const PERSON_CLASSES = ['person'];
+const ALL_TRACKABLE_CLASSES = [...PERSON_CLASSES, ...VEHICLE_CLASSES];
 
 export function TrackingPanel() {
   const [trackingActive, setTrackingActive] = useState(false);
@@ -31,10 +57,15 @@ export function TrackingPanel() {
   const [targetAddress, setTargetAddress] = useState("");
   const [addressResults, setAddressResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [confidenceThreshold, setConfidenceThreshold] = useState([75]);
+  const [confidenceThreshold, setConfidenceThreshold] = useState([40]);
   const [followDistance, setFollowDistance] = useState([10]);
-  const [lockedTarget, setLockedTarget] = useState<string | null>(null);
+  const [lockedTargets, setLockedTargets] = useState<Set<string>>(new Set());
   const [targetCoords, setTargetCoords] = useState<{lat: number, lng: number} | null>(null);
+  
+  // ML Model state
+  const [modelLoading, setModelLoading] = useState(false);
+  const [modelLoaded, setModelLoaded] = useState(false);
+  const modelRef = useRef<cocoSsd.ObjectDetection | null>(null);
   
   // Webcam state
   const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
@@ -43,16 +74,234 @@ export function TrackingPanel() {
   const [videoDimensions, setVideoDimensions] = useState({ width: 640, height: 480 });
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const prevFrameRef = useRef<ImageData | null>(null);
   const detectionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const objectIdCounterRef = useRef(0);
-
+  
+  // Multi-object tracking state
+  const trackedObjectsRef = useRef<Map<string, TrackedObject>>(new Map());
   const [detectedObjects, setDetectedObjects] = useState<DetectedObject[]>([]);
+  
+  // Load TensorFlow.js and COCO-SSD model
+  const loadModel = useCallback(async () => {
+    if (modelRef.current || modelLoading) return;
+    
+    setModelLoading(true);
+    try {
+      await tf.ready();
+      await tf.setBackend('webgl');
+      const model = await cocoSsd.load({
+        base: 'lite_mobilenet_v2'
+      });
+      modelRef.current = model;
+      setModelLoaded(true);
+      toast.success("AI model loaded - ready for detection");
+    } catch (error) {
+      console.error("Failed to load ML model:", error);
+      toast.error("Failed to load AI model. Using fallback detection.");
+    } finally {
+      setModelLoading(false);
+    }
+  }, [modelLoading]);
+  
+  // Calculate IoU for object matching
+  const calculateIoU = (boxA: {x: number, y: number, width: number, height: number}, 
+                        boxB: {x: number, y: number, width: number, height: number}): number => {
+    const xA = Math.max(boxA.x, boxB.x);
+    const yA = Math.max(boxA.y, boxB.y);
+    const xB = Math.min(boxA.x + boxA.width, boxB.x + boxB.width);
+    const yB = Math.min(boxA.y + boxA.height, boxB.y + boxB.height);
+    
+    const interArea = Math.max(0, xB - xA) * Math.max(0, yB - yA);
+    const boxAArea = boxA.width * boxA.height;
+    const boxBArea = boxB.width * boxB.height;
+    const unionArea = boxAArea + boxBArea - interArea;
+    
+    return unionArea > 0 ? interArea / unionArea : 0;
+  };
+  
+  // Hungarian-style assignment for multi-object tracking
+  const assignDetectionsToTracks = (
+    detections: Array<{label: string, confidence: number, bbox: number[]}>,
+    tracks: Map<string, TrackedObject>
+  ): DetectedObject[] => {
+    const now = Date.now();
+    const IOU_THRESHOLD = 0.3;
+    const MAX_FRAMES_MISSING = 15;
+    const CONFIDENCE_SMOOTHING = 0.7;
+    
+    const assignments: DetectedObject[] = [];
+    const usedDetections = new Set<number>();
+    const usedTracks = new Set<string>();
+    
+    // First pass: match existing tracks with detections
+    const matchScores: Array<{trackId: string, detIdx: number, iou: number}> = [];
+    
+    tracks.forEach((track, trackId) => {
+      detections.forEach((det, detIdx) => {
+        const detBox = { x: det.bbox[0], y: det.bbox[1], width: det.bbox[2], height: det.bbox[3] };
+        const trackBox = { x: track.x, y: track.y, width: track.width, height: track.height };
+        const iou = calculateIoU(detBox, trackBox);
+        
+        if (iou > IOU_THRESHOLD) {
+          matchScores.push({ trackId, detIdx, iou });
+        }
+      });
+    });
+    
+    // Sort by IoU descending for greedy assignment
+    matchScores.sort((a, b) => b.iou - a.iou);
+    
+    // Greedy assignment
+    for (const match of matchScores) {
+      if (usedDetections.has(match.detIdx) || usedTracks.has(match.trackId)) continue;
+      
+      usedDetections.add(match.detIdx);
+      usedTracks.add(match.trackId);
+      
+      const det = detections[match.detIdx];
+      const track = tracks.get(match.trackId)!;
+      
+      // Calculate velocity
+      const dx = det.bbox[0] - track.x;
+      const dy = det.bbox[1] - track.y;
+      
+      // Smooth confidence with temporal averaging
+      const smoothedConf = CONFIDENCE_SMOOTHING * track.smoothedConfidence + 
+                          (1 - CONFIDENCE_SMOOTHING) * (det.confidence * 100);
+      
+      // Update track
+      const type = PERSON_CLASSES.includes(det.label) ? "person" : 
+                   VEHICLE_CLASSES.includes(det.label) ? "vehicle" : "unknown";
+      
+      const updatedTrack: TrackedObject = {
+        ...track,
+        x: det.bbox[0],
+        y: det.bbox[1],
+        width: det.bbox[2],
+        height: det.bbox[3],
+        confidence: det.confidence * 100,
+        smoothedConfidence: smoothedConf,
+        velocity: { dx, dy },
+        framesSeen: track.framesSeen + 1,
+        lastSeen: now,
+        label: det.label,
+        type,
+      };
+      
+      tracks.set(match.trackId, updatedTrack);
+      
+      assignments.push({
+        id: match.trackId,
+        type: updatedTrack.type,
+        label: updatedTrack.label,
+        confidence: Math.round(updatedTrack.smoothedConfidence),
+        x: updatedTrack.x,
+        y: updatedTrack.y,
+        width: updatedTrack.width,
+        height: updatedTrack.height,
+        color: updatedTrack.color,
+        velocity: updatedTrack.velocity,
+        framesSeen: updatedTrack.framesSeen,
+        lastSeen: updatedTrack.lastSeen,
+      });
+    }
+    
+    // Create new tracks for unmatched detections
+    detections.forEach((det, idx) => {
+      if (usedDetections.has(idx)) return;
+      if (!ALL_TRACKABLE_CLASSES.includes(det.label)) return;
+      
+      objectIdCounterRef.current++;
+      const newId = `track_${objectIdCounterRef.current}`;
+      
+      const type = PERSON_CLASSES.includes(det.label) ? "person" : 
+                   VEHICLE_CLASSES.includes(det.label) ? "vehicle" : "unknown";
+      
+      const color = type === "person" ? "#22c55e" : 
+                    type === "vehicle" ? "#f59e0b" : "#6b7280";
+      
+      const newTrack: TrackedObject = {
+        id: newId,
+        type,
+        label: det.label,
+        x: det.bbox[0],
+        y: det.bbox[1],
+        width: det.bbox[2],
+        height: det.bbox[3],
+        confidence: det.confidence * 100,
+        smoothedConfidence: det.confidence * 100,
+        velocity: { dx: 0, dy: 0 },
+        framesSeen: 1,
+        lastSeen: now,
+        color,
+      };
+      
+      tracks.set(newId, newTrack);
+      
+      assignments.push({
+        id: newId,
+        type: newTrack.type,
+        label: newTrack.label,
+        confidence: Math.round(newTrack.smoothedConfidence),
+        x: newTrack.x,
+        y: newTrack.y,
+        width: newTrack.width,
+        height: newTrack.height,
+        color: newTrack.color,
+        velocity: newTrack.velocity,
+        framesSeen: newTrack.framesSeen,
+        lastSeen: newTrack.lastSeen,
+      });
+    });
+    
+    // Remove stale tracks (not seen for too long)
+    tracks.forEach((track, trackId) => {
+      if (!usedTracks.has(trackId)) {
+        const framesMissing = (now - track.lastSeen) / 100;
+        if (framesMissing > MAX_FRAMES_MISSING) {
+          tracks.delete(trackId);
+        } else {
+          // Keep predicting position for a few frames using velocity
+          const predictedTrack = {
+            ...track,
+            x: track.x + track.velocity.dx * 0.5,
+            y: track.y + track.velocity.dy * 0.5,
+            smoothedConfidence: track.smoothedConfidence * 0.9,
+          };
+          tracks.set(trackId, predictedTrack);
+          
+          // Still show the predicted object but with lower confidence
+          if (predictedTrack.smoothedConfidence > 20) {
+            assignments.push({
+              id: trackId,
+              type: predictedTrack.type,
+              label: predictedTrack.label + " (predicted)",
+              confidence: Math.round(predictedTrack.smoothedConfidence),
+              x: predictedTrack.x,
+              y: predictedTrack.y,
+              width: predictedTrack.width,
+              height: predictedTrack.height,
+              color: predictedTrack.color,
+              velocity: predictedTrack.velocity,
+              framesSeen: predictedTrack.framesSeen,
+              lastSeen: predictedTrack.lastSeen,
+            });
+          }
+        }
+      }
+    });
+    
+    return assignments;
+  };
 
-  // Start webcam
+  // Start webcam and load model
   const startWebcam = async () => {
     try {
       setWebcamError(null);
+      
+      // Start loading model in parallel
+      loadModel();
+      
       const stream = await navigator.mediaDevices.getUserMedia({ 
         video: { 
           width: { ideal: 640 },
@@ -61,8 +310,8 @@ export function TrackingPanel() {
         } 
       });
       setWebcamStream(stream);
-      setIsDetecting(true); // Auto-enable detection when camera starts
-      toast.success("Camera connected - motion detection active");
+      setIsDetecting(true);
+      toast.success("Camera connected - AI detection starting");
     } catch (err: any) {
       console.error("Webcam error:", err);
       setWebcamError(err.message || "Failed to access camera");
@@ -79,146 +328,40 @@ export function TrackingPanel() {
       clearInterval(detectionIntervalRef.current);
     }
     setDetectedObjects([]);
+    trackedObjectsRef.current.clear();
   };
 
-  // Motion-based object detection using frame differencing
-  const runDetection = useCallback(() => {
-    if (!videoRef.current || !canvasRef.current || !isDetecting) return;
+  // ML-based object detection using COCO-SSD
+  const runDetection = useCallback(async () => {
+    if (!videoRef.current || !isDetecting) return;
     
     const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    if (!ctx || video.videoWidth === 0) return;
-
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    ctx.drawImage(video, 0, 0);
+    if (video.videoWidth === 0 || video.readyState < 2) return;
     
-    const currentFrame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const prevFrame = prevFrameRef.current;
-    
-    if (prevFrame && prevFrame.width === currentFrame.width) {
-      const motionRegions = detectMotion(prevFrame, currentFrame);
-      const classified = classifyRegions(motionRegions);
-      setDetectedObjects(classified);
-    }
-    
-    prevFrameRef.current = currentFrame;
-  }, [isDetecting]);
-
-  // Simple motion detection via pixel difference
-  const detectMotion = (prev: ImageData, curr: ImageData): {x: number, y: number, w: number, h: number}[] => {
-    const threshold = 30;
-    const minArea = 500;
-    const regions: {x: number, y: number, w: number, h: number}[] = [];
-    
-    // Find motion pixels and cluster them
-    let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
-    let motionPixels = 0;
-    
-    for (let i = 0; i < curr.data.length; i += 4) {
-      const diff = Math.abs(curr.data[i] - prev.data[i]) + 
-                   Math.abs(curr.data[i+1] - prev.data[i+1]) + 
-                   Math.abs(curr.data[i+2] - prev.data[i+2]);
-      
-      if (diff > threshold * 3) {
-        const pixelIndex = i / 4;
-        const x = pixelIndex % curr.width;
-        const y = Math.floor(pixelIndex / curr.width);
+    // Use ML model if available
+    if (modelRef.current) {
+      try {
+        const predictions = await modelRef.current.detect(video);
         
-        minX = Math.min(minX, x);
-        minY = Math.min(minY, y);
-        maxX = Math.max(maxX, x);
-        maxY = Math.max(maxY, y);
-        motionPixels++;
+        // Convert predictions to our format
+        const mlDetections = predictions.map(p => ({
+          label: p.class,
+          confidence: p.score,
+          bbox: p.bbox // [x, y, width, height]
+        }));
+        
+        // Run multi-object tracking assignment
+        const trackedResults = assignDetectionsToTracks(
+          mlDetections, 
+          trackedObjectsRef.current
+        );
+        
+        setDetectedObjects(trackedResults);
+      } catch (error) {
+        console.error("Detection error:", error);
       }
     }
-    
-    if (motionPixels > minArea && minX < Infinity) {
-      // Add padding
-      const padding = 20;
-      regions.push({
-        x: Math.max(0, minX - padding),
-        y: Math.max(0, minY - padding),
-        w: Math.min(curr.width - minX + padding * 2, maxX - minX + padding * 2),
-        h: Math.min(curr.height - minY + padding * 2, maxY - minY + padding * 2)
-      });
-    }
-    
-    return regions;
-  };
-
-  // Track objects across frames using IoU-based matching
-  const trackedObjectsRef = useRef<Map<string, {x: number, y: number, lastSeen: number}>>(new Map());
-  
-  // Calculate Intersection over Union for matching
-  const calculateIoU = (a: {x: number, y: number, w: number, h: number}, b: {x: number, y: number}) => {
-    const dx = Math.abs(a.x - b.x);
-    const dy = Math.abs(a.y - b.y);
-    return 1 / (1 + dx * 0.01 + dy * 0.01); // Proximity-based score
-  };
-  
-  // Basic classification based on aspect ratio - uses tracked IDs
-  const classifyRegions = (regions: {x: number, y: number, w: number, h: number}[]): DetectedObject[] => {
-    const now = Date.now();
-    const trackedObjects = trackedObjectsRef.current;
-    
-    // Clear stale tracked objects (not seen for 2 seconds)
-    trackedObjects.forEach((val, key) => {
-      if (now - val.lastSeen > 2000) {
-        trackedObjects.delete(key);
-      }
-    });
-    
-    return regions.map((r, i) => {
-      const aspectRatio = r.w / r.h;
-      let type: "person" | "vehicle" | "unknown" = "unknown";
-      let confidence = 60 + Math.floor(Math.random() * 30);
-      
-      // Tall narrow = likely person, wide = likely vehicle
-      if (aspectRatio < 0.8 && r.h > 80) {
-        type = "person";
-        confidence = 75 + Math.floor(Math.random() * 20);
-      } else if (aspectRatio > 1.2 && r.w > 100) {
-        type = "vehicle";
-        confidence = 70 + Math.floor(Math.random() * 25);
-      }
-      
-      // Try to match with existing tracked object
-      let bestMatchId = "";
-      let bestMatchScore = 0;
-      
-      trackedObjects.forEach((tracked, id) => {
-        const score = calculateIoU(r, tracked);
-        if (score > bestMatchScore && score > 0.5) {
-          bestMatchScore = score;
-          bestMatchId = id;
-        }
-      });
-      
-      // Use matched ID or create new one
-      let objectId: string;
-      if (bestMatchId) {
-        objectId = bestMatchId;
-        trackedObjects.set(objectId, { x: r.x, y: r.y, lastSeen: now });
-      } else {
-        objectIdCounterRef.current++;
-        objectId = `obj_${type}_${objectIdCounterRef.current}`;
-        trackedObjects.set(objectId, { x: r.x, y: r.y, lastSeen: now });
-      }
-      
-      return {
-        id: objectId,
-        type,
-        confidence,
-        x: r.x,
-        y: r.y,
-        width: r.w,
-        height: r.h,
-        color: type === "person" ? "#22c55e" : type === "vehicle" ? "#f59e0b" : "#6b7280"
-      };
-    });
-  };
+  }, [isDetecting, assignDetectionsToTracks]);
 
   // Setup video and detection when webcam starts
   useEffect(() => {
@@ -274,13 +417,22 @@ export function TrackingPanel() {
     .filter(obj => obj.confidence >= confidenceThreshold[0]);
 
   const handleLockTarget = (objectId: string) => {
-    if (lockedTarget === objectId) {
-      setLockedTarget(null);
-      toast.info("Target unlocked");
-    } else {
-      setLockedTarget(objectId);
-      toast.success("Target locked - ready to track");
-    }
+    setLockedTargets(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(objectId)) {
+        newSet.delete(objectId);
+        toast.info("Target unlocked");
+      } else {
+        newSet.add(objectId);
+        toast.success(`Target locked (${newSet.size} total)`);
+      }
+      return newSet;
+    });
+  };
+  
+  const handleClearAllLocks = () => {
+    setLockedTargets(new Set());
+    toast.info("All targets unlocked");
   };
 
   const handleAddressSearch = async () => {
@@ -325,7 +477,7 @@ export function TrackingPanel() {
   }, []);
 
   const handleStartTracking = async () => {
-    if (targetMethod === "camera" && !lockedTarget) {
+    if (targetMethod === "camera" && lockedTargets.size === 0) {
       if (!webcamStream) {
         toast.error("Please start the camera first");
         return;
@@ -334,7 +486,7 @@ export function TrackingPanel() {
         toast.error("Please enable detection to find and lock a target");
         return;
       }
-      toast.error("Please click on a detected object to lock it as target");
+      toast.error("Please click on detected objects to lock them as targets");
       return;
     }
     
@@ -349,7 +501,7 @@ export function TrackingPanel() {
     
     setTrackingActive(true);
     setIsStarting(false);
-    toast.success("Tracking activated - drone is following target");
+    toast.success(`Tracking ${lockedTargets.size} target(s) - drone is following`);
   };
 
   const handleStopTracking = () => {
@@ -412,12 +564,17 @@ export function TrackingPanel() {
               )}
             </div>
             
-            {(lockedTarget || targetCoords) && (
-              <div className="mt-2 p-2 bg-muted/50 rounded text-xs">
-                {lockedTarget && (
-                  <div className="flex items-center gap-2">
-                    <Lock className="h-3 w-3 text-primary" />
-                    <span>Locked: {lockedTarget.toUpperCase()}</span>
+            {(lockedTargets.size > 0 || targetCoords) && (
+              <div className="mt-2 p-2 bg-muted/50 rounded text-xs space-y-1">
+                {lockedTargets.size > 0 && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Lock className="h-3 w-3 text-primary" />
+                      <span>{lockedTargets.size} target(s) locked</span>
+                    </div>
+                    <Button variant="ghost" size="sm" className="h-5 px-2 text-[10px]" onClick={handleClearAllLocks}>
+                      Clear All
+                    </Button>
                   </div>
                 )}
                 {targetCoords && (
@@ -566,22 +723,23 @@ export function TrackingPanel() {
                   <div
                     key={obj.id}
                     className={`flex items-center justify-between p-2 rounded-lg border cursor-pointer transition-colors ${
-                      lockedTarget === obj.id
+                      lockedTargets.has(obj.id)
                         ? "bg-primary/20 border-primary"
                         : "bg-muted/50 border-border hover:bg-muted"
                     }`}
                     onClick={() => handleLockTarget(obj.id)}
+                    data-testid={`object-card-${obj.id}`}
                   >
                     <div className="flex items-center gap-2">
-                      <div className={`p-1.5 rounded ${lockedTarget === obj.id ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                      <div className={`p-1.5 rounded ${lockedTargets.has(obj.id) ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
                         {getTypeIcon(obj.type)}
                       </div>
                       <div>
-                        <span className="font-mono text-xs capitalize">{obj.type} #{obj.id}</span>
-                        <div className="text-[10px] text-muted-foreground">{obj.confidence}% confidence</div>
+                        <span className="font-mono text-xs capitalize">{obj.label || obj.type}</span>
+                        <div className="text-[10px] text-muted-foreground">{obj.confidence}% | {obj.framesSeen} frames</div>
                       </div>
                     </div>
-                    {lockedTarget === obj.id ? (
+                    {lockedTargets.has(obj.id) ? (
                       <Lock className="h-4 w-4 text-primary" />
                     ) : (
                       <Unlock className="h-4 w-4 text-muted-foreground" />
@@ -629,34 +787,54 @@ export function TrackingPanel() {
                   <div
                     key={obj.id}
                     className={`absolute border-2 rounded cursor-pointer transition-all ${
-                      lockedTarget === obj.id ? "border-primary border-4" : ""
+                      lockedTargets.has(obj.id) ? "border-4 shadow-lg" : ""
                     }`}
                     style={{
                       left: `${(obj.x / videoDimensions.width) * 100}%`,
                       top: `${(obj.y / videoDimensions.height) * 100}%`,
                       width: `${(obj.width / videoDimensions.width) * 100}%`,
                       height: `${(obj.height / videoDimensions.height) * 100}%`,
-                      borderColor: obj.color || '#f59e0b',
+                      borderColor: lockedTargets.has(obj.id) ? '#3b82f6' : (obj.color || '#f59e0b'),
                     }}
                     onClick={() => handleLockTarget(obj.id)}
+                    data-testid={`detection-box-${obj.id}`}
                   >
                     <div 
-                      className="absolute -top-5 left-0 text-[10px] px-1 font-bold text-black"
-                      style={{ backgroundColor: obj.color || '#f59e0b' }}
+                      className="absolute -top-5 left-0 text-[10px] px-1 font-bold text-black flex items-center gap-1"
+                      style={{ backgroundColor: lockedTargets.has(obj.id) ? '#3b82f6' : (obj.color || '#f59e0b') }}
                     >
-                      {obj.type.toUpperCase()} {obj.confidence}%
+                      {lockedTargets.has(obj.id) && <Lock className="h-3 w-3" />}
+                      {obj.label?.toUpperCase() || obj.type.toUpperCase()} {obj.confidence}%
                     </div>
                   </div>
                 ))}
                 
                 {/* Detection status overlay */}
-                <div className="absolute top-2 left-2 flex gap-2">
+                <div className="absolute top-2 left-2 flex gap-2 flex-wrap">
+                  {modelLoading && (
+                    <Badge className="bg-amber-500 animate-pulse">
+                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                      Loading AI...
+                    </Badge>
+                  )}
+                  {modelLoaded && (
+                    <Badge className="bg-blue-500">
+                      <Zap className="h-3 w-3 mr-1" />
+                      AI Active
+                    </Badge>
+                  )}
                   <Badge className={isDetecting ? "bg-emerald-500 animate-pulse" : "bg-gray-500"}>
                     {isDetecting ? "DETECTING" : "PAUSED"}
                   </Badge>
                   <Badge variant="outline" className="text-white border-white/50">
                     {filteredObjects.length} Objects
                   </Badge>
+                  {lockedTargets.size > 0 && (
+                    <Badge className="bg-primary">
+                      <Lock className="h-3 w-3 mr-1" />
+                      {lockedTargets.size} Locked
+                    </Badge>
+                  )}
                 </div>
                 
                 {/* Camera controls */}
@@ -698,8 +876,8 @@ export function TrackingPanel() {
                   ) : (
                     <>
                       <Laptop className="h-16 w-16 mx-auto mb-4 opacity-30" />
-                      <p className="text-sm">Connect your camera to start object detection</p>
-                      <p className="text-xs mt-1 text-muted-foreground">Uses motion detection to identify moving objects</p>
+                      <p className="text-sm">Connect your camera to start AI object detection</p>
+                      <p className="text-xs mt-1 text-muted-foreground">Detects people, cars, trucks, and more - even when stationary</p>
                       <Button 
                         className="mt-4"
                         onClick={startWebcam}
