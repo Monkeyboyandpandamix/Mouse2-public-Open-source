@@ -18,7 +18,11 @@ import {
   Plus, 
   CheckCircle,
   MousePointer,
-  Undo2
+  Undo2,
+  Map,
+  Satellite,
+  Moon,
+  Locate
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
@@ -118,6 +122,37 @@ export function GeofencingPanel() {
 
   const [drawingPoints, setDrawingPoints] = useState<{ lat: number; lng: number }[]>([]);
   const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>({ lat: 34.0522, lng: -118.2437 });
+  const [mapStyle, setMapStyle] = useState<"standard" | "dark" | "satellite">("standard");
+
+  // Map tile configurations
+  const mapTiles = {
+    standard: {
+      url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    },
+    dark: {
+      url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+    },
+    satellite: {
+      url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      attribution: '&copy; <a href="https://www.esri.com/">Esri</a>'
+    }
+  };
+
+  const goToCurrentLocation = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          setMapCenter({ lat, lng });
+          toast.success("Map centered on your current location");
+        },
+        () => toast.error("Could not get current location")
+      );
+    }
+  };
 
   useEffect(() => {
     localStorage.setItem('mouse_geofence_zones', JSON.stringify(zones));
@@ -304,8 +339,9 @@ export function GeofencingPanel() {
           style={{ background: '#1a1a2e' }}
         >
           <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            key={mapStyle}
+            attribution={mapTiles[mapStyle].attribution}
+            url={mapTiles[mapStyle].url}
           />
           
           <MapCenterOnZone center={mapCenter} />
@@ -421,6 +457,53 @@ export function GeofencingPanel() {
             </Card>
           </div>
         )}
+
+        {/* Map style controls */}
+        <div className="absolute bottom-4 left-4 z-[1000] flex gap-2">
+          <div className="bg-background/95 backdrop-blur rounded-lg border border-border p-1 flex gap-1">
+            <Button
+              size="sm"
+              variant={mapStyle === "standard" ? "default" : "ghost"}
+              className="h-8 px-2"
+              onClick={() => setMapStyle("standard")}
+              title="Standard Map"
+              data-testid="button-map-standard"
+            >
+              <Map className="h-4 w-4" />
+            </Button>
+            <Button
+              size="sm"
+              variant={mapStyle === "dark" ? "default" : "ghost"}
+              className="h-8 px-2"
+              onClick={() => setMapStyle("dark")}
+              title="Dark Mode"
+              data-testid="button-map-dark"
+            >
+              <Moon className="h-4 w-4" />
+            </Button>
+            <Button
+              size="sm"
+              variant={mapStyle === "satellite" ? "default" : "ghost"}
+              className="h-8 px-2"
+              onClick={() => setMapStyle("satellite")}
+              title="Satellite View"
+              data-testid="button-map-satellite"
+            >
+              <Satellite className="h-4 w-4" />
+            </Button>
+          </div>
+          <Button
+            size="sm"
+            variant="secondary"
+            className="h-10 bg-background/95 backdrop-blur border border-border"
+            onClick={goToCurrentLocation}
+            title="Go to Current Location"
+            data-testid="button-current-location"
+          >
+            <Locate className="h-4 w-4 mr-1" />
+            My Location
+          </Button>
+        </div>
       </div>
 
       {/* Right - Controls */}

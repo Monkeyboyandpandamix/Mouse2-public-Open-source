@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, type MouseEvent } from "react";
 import { cn } from "@/lib/utils";
-import { Maximize2, Minimize2, Eye, EyeOff, Flame, ZoomIn, ZoomOut, RotateCcw, Camera, Video, Laptop, Settings2, Crosshair } from "lucide-react";
+import { Maximize2, Minimize2, Eye, EyeOff, Flame, ZoomIn, ZoomOut, RotateCcw, Camera, Video, Laptop, Settings2, Crosshair, Move, Upload, Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
@@ -63,16 +63,37 @@ export function VideoFeed() {
   });
   const [showConfigDialog, setShowConfigDialog] = useState(false);
   const [streamUrl, setStreamUrl] = useState(cameraConfig.streamUrl);
+  
+  // Draggable position state
+  const [position, setPosition] = useState(() => {
+    const saved = localStorage.getItem('mouse_camera_position');
+    return saved ? JSON.parse(saved) : { x: 20, y: 0 };
+  });
+  const [isDraggingPanel, setIsDraggingPanel] = useState(false);
+  const [panelDragStart, setPanelDragStart] = useState({ x: 0, y: 0 });
+  
+  // Recording state
+  const [recordedChunks, setRecordedChunks] = useState<Blob[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const prevFrameRef = useRef<ImageData | null>(null);
   const detectionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const trackedObjectsRef = useRef<Map<string, {x: number, y: number, lastSeen: number}>>(new Map());
   const objectIdCounterRef = useRef(0);
+  const containerRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
     localStorage.setItem('mouse_camera_config', JSON.stringify(cameraConfig));
   }, [cameraConfig]);
+
+  useEffect(() => {
+    localStorage.setItem('mouse_camera_position', JSON.stringify(position));
+  }, [position]);
 
   useEffect(() => {
     if (activeCam === 'webcam') {
@@ -117,6 +138,25 @@ export function VideoFeed() {
       };
     }
   }, [isDetecting, webcamStream, activeCam]);
+
+  // Recording duration timer
+  useEffect(() => {
+    if (isRecording) {
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingDuration(prev => prev + 1);
+      }, 1000);
+    } else {
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+      }
+      setRecordingDuration(0);
+    }
+    return () => {
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+      }
+    };
+  }, [isRecording]);
 
   const detectMotion = () => {
     if (!videoRef.current || !canvasRef.current) return;
@@ -294,13 +334,211 @@ export function VideoFeed() {
     setIsDragging(false);
   };
 
-  const handleSnapshot = () => {
-    toast.success("Snapshot captured and saved");
+  // Panel dragging handlers
+  const handlePanelDragStart = (e: MouseEvent<HTMLButtonElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingPanel(true);
+    setPanelDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
   };
 
-  const handleToggleRecording = () => {
-    setIsRecording(!isRecording);
-    toast.success(isRecording ? "Recording stopped" : "Recording started");
+  useEffect(() => {
+    const handleGlobalMouseMove = (e: globalThis.MouseEvent) => {
+      if (isDraggingPanel) {
+        const newX = Math.max(0, Math.min(window.innerWidth - 320, e.clientX - panelDragStart.x));
+        const newY = Math.max(0, Math.min(window.innerHeight - 250, e.clientY - panelDragStart.y));
+        setPosition({ x: newX, y: newY });
+      }
+    };
+
+    const handleGlobalMouseUp = () => {
+      setIsDraggingPanel(false);
+    };
+
+    if (isDraggingPanel) {
+      document.addEventListener('mousemove', handleGlobalMouseMove);
+      document.addEventListener('mouseup', handleGlobalMouseUp);
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleGlobalMouseMove);
+      document.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+  }, [isDraggingPanel, panelDragStart]);
+
+  // Snapshot functionality
+  const handleSnapshot = async () => {
+    try {
+      let imageData: string | null = null;
+      
+      if (activeCam === 'webcam' && videoRef.current) {
+        const canvas = document.createElement('canvas');
+        canvas.width = videoRef.current.videoWidth;
+        canvas.height = videoRef.current.videoHeight;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(videoRef.current, 0, 0);
+          imageData = canvas.toDataURL('image/png');
+        }
+      } else if (containerRef.current) {
+        // For demo views, capture the container
+        const canvas = document.createElement('canvas');
+        canvas.width = 1920;
+        canvas.height = 1080;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#1a1a2e';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = '#fff';
+          ctx.font = '24px monospace';
+          ctx.fillText(`M.O.U.S.E. GCS Snapshot - ${new Date().toISOString()}`, 50, 100);
+          ctx.fillText(`Camera: ${activeCam.toUpperCase()} | Mode: ${thermalMode ? 'THERMAL' : 'NORMAL'}`, 50, 150);
+          imageData = canvas.toDataURL('image/png');
+        }
+      }
+
+      if (imageData) {
+        // Create download link
+        const link = document.createElement('a');
+        link.download = `mouse_snapshot_${Date.now()}.png`;
+        link.href = imageData;
+        link.click();
+        
+        // Upload to Google Drive (send base64 data)
+        const base64Data = imageData.split(',')[1];
+        
+        try {
+          const response = await fetch('/api/drive/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              fileName: `snapshot_${Date.now()}.png`,
+              mimeType: 'image/png',
+              data: base64Data
+            })
+          });
+          
+          if (response.ok) {
+            const result = await response.json();
+            toast.success("Snapshot saved and uploaded to Google Drive", {
+              description: result.webViewLink ? "Click to view" : undefined,
+              action: result.webViewLink ? {
+                label: "Open",
+                onClick: () => window.open(result.webViewLink, '_blank')
+              } : undefined
+            });
+          } else {
+            toast.success("Snapshot saved locally (Drive upload pending)");
+          }
+        } catch {
+          toast.success("Snapshot saved locally");
+        }
+      }
+    } catch (error) {
+      toast.error("Failed to capture snapshot");
+    }
+  };
+
+  // Recording functionality
+  const handleToggleRecording = async () => {
+    if (isRecording) {
+      // Stop recording
+      if (mediaRecorderRef.current) {
+        mediaRecorderRef.current.stop();
+      }
+      setIsRecording(false);
+    } else {
+      // Start recording
+      if (activeCam === 'webcam' && webcamStream) {
+        try {
+          const mediaRecorder = new MediaRecorder(webcamStream, {
+            mimeType: 'video/webm;codecs=vp9'
+          });
+          
+          const chunks: Blob[] = [];
+          
+          mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) {
+              chunks.push(e.data);
+            }
+          };
+          
+          mediaRecorder.onstop = async () => {
+            const blob = new Blob(chunks, { type: 'video/webm' });
+            
+            // Download locally
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.download = `mouse_recording_${Date.now()}.webm`;
+            link.href = url;
+            link.click();
+            URL.revokeObjectURL(url);
+            
+            // Upload to Google Drive
+            setIsUploading(true);
+            try {
+              // Convert blob to base64
+              const reader = new FileReader();
+              reader.onload = async () => {
+                const base64Data = (reader.result as string).split(',')[1];
+                
+                try {
+                  const response = await fetch('/api/drive/upload', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      fileName: `recording_${Date.now()}.webm`,
+                      mimeType: 'video/webm',
+                      data: base64Data
+                    })
+                  });
+                  
+                  if (response.ok) {
+                    const result = await response.json();
+                    toast.success("Recording uploaded to Google Drive", {
+                      description: result.webViewLink ? "Click to view" : undefined,
+                      action: result.webViewLink ? {
+                        label: "Open",
+                        onClick: () => window.open(result.webViewLink, '_blank')
+                      } : undefined
+                    });
+                  } else {
+                    toast.success("Recording saved locally (Drive upload failed)");
+                  }
+                } catch {
+                  toast.success("Recording saved locally");
+                } finally {
+                  setIsUploading(false);
+                }
+              };
+              reader.onerror = () => {
+                toast.success("Recording saved locally");
+                setIsUploading(false);
+              };
+              reader.readAsDataURL(blob);
+            } catch {
+              toast.success("Recording saved locally");
+              setIsUploading(false);
+            }
+          };
+          
+          mediaRecorderRef.current = mediaRecorder;
+          mediaRecorder.start(1000); // Collect data every second
+          setIsRecording(true);
+          toast.success("Recording started");
+        } catch (error) {
+          toast.error("Failed to start recording");
+        }
+      } else {
+        toast.error("Recording requires webcam mode");
+      }
+    }
+  };
+
+  const formatDuration = (seconds: number) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
   if (!visible) {
@@ -316,12 +554,17 @@ export function VideoFeed() {
 
   return (
     <div 
+      ref={containerRef}
       className={cn(
         "absolute transition-all duration-300 z-[100] bg-black border-2 border-primary/50 shadow-2xl overflow-hidden group",
         isMain 
           ? "inset-2 sm:inset-4 bottom-32 sm:bottom-52 top-16 right-10 sm:right-84" 
-          : "bottom-32 sm:bottom-52 left-2 sm:left-20 w-48 sm:w-80 h-32 sm:h-48 rounded-lg"
+          : "w-48 sm:w-80 h-32 sm:h-48 rounded-lg"
       )}
+      style={isMain ? {} : {
+        left: position.x,
+        bottom: `calc(100vh - ${position.y + 192}px)`
+      }}
       onMouseEnter={() => setShowControls(true)}
       onMouseLeave={() => setShowControls(false)}
     >
@@ -329,8 +572,23 @@ export function VideoFeed() {
       {/* Header */}
       <div className="absolute top-0 left-0 right-0 h-8 bg-black/60 backdrop-blur flex items-center justify-between px-2 z-10">
         <div className="text-xs font-mono text-primary flex items-center gap-2">
+          {/* Drag handle */}
+          {!isMain && (
+            <button
+              onMouseDown={handlePanelDragStart}
+              className="cursor-move p-0.5 hover:text-white text-muted-foreground"
+              title="Drag to move"
+              data-testid="button-drag-camera"
+            >
+              <Move className="h-3 w-3" />
+            </button>
+          )}
           <span className={cn("w-2 h-2 rounded-full", isRecording ? "bg-red-500 animate-pulse" : "bg-red-500")} />
-          {isRecording ? "REC" : "LIVE"}: {
+          {isRecording ? (
+            <span className="text-red-500">REC {formatDuration(recordingDuration)}</span>
+          ) : (
+            <span>LIVE</span>
+          )}: {
             activeCam === 'gimbal' ? (thermalMode ? 'THERMAL' : cameraConfig.model) : 
             activeCam === 'thermal' ? `THERMAL ${cameraConfig.thermalResolution}` : 
             activeCam === 'webcam' ? 'LAPTOP CAM' : 
@@ -668,16 +926,14 @@ export function VideoFeed() {
           </Button>
         </div>
 
-        {/* Bottom Controls */}
-        <div className={cn(
-          "absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-2 transition-opacity z-20",
-          showControls || isMain ? "opacity-100" : "opacity-0"
-        )}>
+        {/* Bottom Controls - Always visible */}
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-2 z-20">
           <Button 
             variant="secondary" 
             size="sm" 
             className="h-7 bg-black/60 hover:bg-black/80 border border-white/20 text-xs"
             onClick={handleSnapshot}
+            data-testid="button-snapshot"
           >
             <Camera className="h-3 w-3 mr-1" />
             Snapshot
@@ -687,9 +943,20 @@ export function VideoFeed() {
             size="sm" 
             className={cn("h-7 border border-white/20 text-xs", !isRecording && "bg-black/60 hover:bg-black/80")}
             onClick={handleToggleRecording}
+            disabled={isUploading}
+            data-testid="button-record"
           >
-            <Video className="h-3 w-3 mr-1" />
-            {isRecording ? "Stop" : "Record"}
+            {isUploading ? (
+              <>
+                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                Uploading...
+              </>
+            ) : (
+              <>
+                <Video className="h-3 w-3 mr-1" />
+                {isRecording ? "Stop" : "Record"}
+              </>
+            )}
           </Button>
         </div>
 
