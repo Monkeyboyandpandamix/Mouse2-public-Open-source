@@ -85,11 +85,15 @@ const allPermissions: Permission[] = [
   { id: "emergency_override", name: "Emergency Override", description: "Override emergency actions" },
   { id: "object_tracking", name: "Object Tracking", description: "Use tracking features" },
   { id: "broadcast_audio", name: "Broadcast Audio", description: "Use speaker system" },
+  { id: "manage_geofences", name: "Manage Geofences", description: "Create and edit geofence zones" },
+  { id: "access_flight_recorder", name: "Flight Recorder", description: "Access flight logs and logbook" },
+  { id: "run_terminal", name: "Terminal Commands", description: "Execute terminal commands" },
+  { id: "configure_gui_advanced", name: "GUI Configuration", description: "Customize interface layout" },
 ];
 
 const defaultRolePermissions: RolePermissions = {
   admin: allPermissions.map(p => p.id),
-  operator: ["arm_disarm", "flight_control", "mission_planning", "camera_control", "view_telemetry", "view_map", "view_camera", "automation_scripts", "object_tracking", "broadcast_audio"],
+  operator: ["arm_disarm", "flight_control", "mission_planning", "camera_control", "view_telemetry", "view_map", "view_camera", "automation_scripts", "object_tracking", "broadcast_audio", "manage_geofences", "access_flight_recorder"],
   viewer: ["view_telemetry", "view_map", "view_camera"]
 };
 

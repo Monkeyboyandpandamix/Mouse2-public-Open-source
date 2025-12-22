@@ -41,12 +41,15 @@
     "senderId": "1",
     "senderName": "admin",
     "senderRole": "admin",
-    "content": "hello",
+    "content": "[Message deleted]",
     "recipientId": "1766370467555",
     "recipientName": "Mickymouse",
     "timestamp": "2025-12-22T02:48:53.587Z",
     "editedAt": null,
-    "deleted": false
+    "deleted": true,
+    "originalContent": "hello",
+    "deletedAt": "2025-12-22T05:14:54.475Z",
+    "deletedBy": null
   },
   {
     "id": "1766371736815-9a1cz07on",
@@ -68,24 +71,30 @@
     "senderId": "1",
     "senderName": "admin",
     "senderRole": "admin",
-    "content": "hello",
+    "content": "[Message deleted]",
     "recipientId": "1766370467555",
     "recipientName": "Mickymouse",
     "timestamp": "2025-12-22T02:55:09.329Z",
     "editedAt": null,
-    "deleted": false
+    "deleted": true,
+    "originalContent": "hello",
+    "deletedAt": "2025-12-22T05:14:53.656Z",
+    "deletedBy": null
   },
   {
     "id": "1766372112026-6sf7rhv3p",
     "senderId": "1",
     "senderName": "admin",
     "senderRole": "admin",
-    "content": "d",
+    "content": "[Message deleted]",
     "recipientId": null,
     "recipientName": null,
     "timestamp": "2025-12-22T02:55:12.026Z",
     "editedAt": null,
-    "deleted": false
+    "deleted": true,
+    "originalContent": "d",
+    "deletedAt": "2025-12-22T05:14:52.942Z",
+    "deletedBy": null
   },
   {
     "id": "1766372122599-juufof360",

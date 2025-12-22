@@ -29,6 +29,7 @@ import {
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Drone } from "@shared/schema";
+import { usePermissions } from "@/hooks/usePermissions";
 
 interface DroneSelectionPanelProps {
   onDroneSelected: (drone: Drone) => void;
@@ -54,6 +55,8 @@ const gpsStatusLabels: Record<string, { label: string; color: string }> = {
 
 export function DroneSelectionPanel({ onDroneSelected, onSkipPreview }: DroneSelectionPanelProps) {
   const queryClient = useQueryClient();
+  const { hasPermission, isAdmin } = usePermissions();
+  const canManageDrones = hasPermission('system_settings') || isAdmin();
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editingDrone, setEditingDrone] = useState<Drone | null>(null);
@@ -232,13 +235,14 @@ export function DroneSelectionPanel({ onDroneSelected, onSkipPreview }: DroneSel
             </Button>
           </div>
           
-          <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
-            <DialogTrigger asChild>
-              <Button data-testid="button-add-drone">
-                <Plus className="h-4 w-4 mr-2" />
-                Add Drone
-              </Button>
-            </DialogTrigger>
+          {canManageDrones && (
+            <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+              <DialogTrigger asChild>
+                <Button data-testid="button-add-drone">
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Drone
+                </Button>
+              </DialogTrigger>
             <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Add New Drone</DialogTitle>
@@ -422,7 +426,8 @@ export function DroneSelectionPanel({ onDroneSelected, onSkipPreview }: DroneSel
                 </Button>
               </DialogFooter>
             </DialogContent>
-          </Dialog>
+            </Dialog>
+          )}
         </div>
 
         {isLoading ? (
@@ -435,10 +440,12 @@ export function DroneSelectionPanel({ onDroneSelected, onSkipPreview }: DroneSel
               <Plane className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
               <h3 className="text-lg font-semibold mb-2">No Drones Configured</h3>
               <p className="text-muted-foreground mb-4">Add your first drone to get started with the ground control station</p>
-              <Button onClick={() => setShowAddDialog(true)} data-testid="button-add-first-drone">
-                <Plus className="h-4 w-4 mr-2" />
-                Add Your First Drone
-              </Button>
+              {canManageDrones && (
+                <Button onClick={() => setShowAddDialog(true)} data-testid="button-add-first-drone">
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Your First Drone
+                </Button>
+              )}
             </CardContent>
           </Card>
         ) : (
@@ -477,29 +484,33 @@ export function DroneSelectionPanel({ onDroneSelected, onSkipPreview }: DroneSel
                             <StatusIcon className="h-3 w-3 mr-1" />
                             {statusInfo.label}
                           </Badge>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
-                            onClick={(e) => handleEditDrone(drone, e)}
-                            data-testid={`button-edit-drone-${drone.id}`}
-                          >
-                            <Settings className="h-4 w-4 text-muted-foreground" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (confirm(`Remove drone ${drone.name}?`)) {
-                                deleteDroneMutation.mutate(drone.id);
-                              }
-                            }}
-                            data-testid={`button-delete-drone-${drone.id}`}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
+                          {canManageDrones && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
+                                onClick={(e) => handleEditDrone(drone, e)}
+                                data-testid={`button-edit-drone-${drone.id}`}
+                              >
+                                <Settings className="h-4 w-4 text-muted-foreground" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (confirm(`Remove drone ${drone.name}?`)) {
+                                    deleteDroneMutation.mutate(drone.id);
+                                  }
+                                }}
+                                data-testid={`button-delete-drone-${drone.id}`}
+                              >
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </>
+                          )}
                         </div>
                       </div>
                     </CardHeader>

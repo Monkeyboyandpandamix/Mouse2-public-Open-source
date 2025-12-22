@@ -52,10 +52,10 @@ export function usePermissions() {
       try {
         const parsed = JSON.parse(saved);
         // Always ensure admin has all default permissions (merge with any new ones)
-        const mergedAdmin = [...new Set([
+        const mergedAdmin = Array.from(new Set([
           ...(parsed.admin || []),
           ...defaultRolePermissions.admin
-        ])];
+        ]));
         const merged = {
           ...defaultRolePermissions,
           ...parsed,
