@@ -326,15 +326,15 @@ export function GUIConfigPanel() {
             </h2>
             <p className="text-muted-foreground">Customize the interface layout and appearance</p>
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" onClick={resetToDefaults} data-testid="button-reset-gui">
+          <div className="flex gap-2 relative z-50">
+            <Button type="button" variant="outline" onClick={() => { console.log('Reset clicked'); resetToDefaults(); }} data-testid="button-reset-gui">
               <RotateCcw className="h-4 w-4 mr-2" />
               Reset
             </Button>
-            <Button variant="secondary" onClick={applyNow} data-testid="button-apply-gui">
+            <Button type="button" variant="secondary" onClick={() => { console.log('Apply clicked'); applyNow(); }} data-testid="button-apply-gui">
               Apply Now
             </Button>
-            <Button onClick={saveSettings} data-testid="button-save-gui">
+            <Button type="button" onClick={() => { console.log('Save clicked'); saveSettings(); }} data-testid="button-save-gui">
               <Save className="h-4 w-4 mr-2" />
               Save
             </Button>
