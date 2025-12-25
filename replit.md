@@ -72,7 +72,7 @@ The application can be run as a native desktop app using Electron:
 - Audio broadcast system with Pi GPIO speaker, USB speaker, and Orange Cube+ buzzer support
 - Flight controls including arm/disarm, takeoff, land, RTL, and emergency stop
 - **Automatic Flight Recording**: Flight sessions auto-start on takeoff and auto-end on landing. Captures enhanced telemetry including motor RPM/current, vibration XYZ, battery temp, GPS HDOP, air speed, wind speed/direction, and distance from home. Calculates total flight time, max altitude, and distance traveled. Sessions sync to Google Sheets on completion
-- Gripper control for payload drop/pickup operations
+- **Servo/Gripper Control**: Hardware gripper control via GPIO 4 on Raspberry Pi using pigpio (preferred) or RPi.GPIO. API endpoints `/api/servo/control` (POST) and `/api/servo/status` (GET) available. On non-Pi platforms, returns simulated responses. Run `sudo ./scripts/setup-gpio-access.sh` once on Pi to enable sudo-less operation
 - Google Sheets backup integration for data persistence
 - Google Drive integration for video footage storage
 - Laptop webcam testing mode for camera validation with object detection overlay
