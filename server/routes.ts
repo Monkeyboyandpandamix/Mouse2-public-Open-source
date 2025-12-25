@@ -4,6 +4,10 @@ import { storage } from "./storage";
 import { WebSocketServer, WebSocket } from "ws";
 import { spawn } from "child_process";
 import { existsSync } from "fs";
+
+// Use system Python to ensure Adafruit libraries are available
+// On Raspberry Pi, venv may not have the hardware libraries but system Python does
+const PYTHON_EXEC = process.env.PYTHON_PATH ?? "/usr/bin/python3";
 import {
   insertSettingsSchema,
   insertMissionSchema,
@@ -1361,7 +1365,7 @@ export async function registerRoutes(
         args.push('--value', String(angle));
       }
       
-      const python = spawn('python3', args);
+      const python = spawn(PYTHON_EXEC, args);
       let output = '';
       let errorOutput = '';
       let responded = false;
@@ -1466,7 +1470,7 @@ export async function registerRoutes(
       // On Pi, call the Python script
       const args = ['scripts/bme688_monitor.py', 'read', '--json'];
       
-      const python = spawn('python3', args);
+      const python = spawn(PYTHON_EXEC, args);
       let output = '';
       let errorOutput = '';
       let responded = false;
@@ -1526,7 +1530,7 @@ export async function registerRoutes(
         });
       }
       
-      const python = spawn('python3', ['scripts/bme688_monitor.py', 'status']);
+      const python = spawn(PYTHON_EXEC, ['scripts/bme688_monitor.py', 'status']);
       let output = '';
       let responded = false;
       

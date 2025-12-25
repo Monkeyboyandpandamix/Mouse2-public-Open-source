@@ -48,11 +48,9 @@ export DEVICE_ROLE=ONBOARD
 # Create data directory
 mkdir -p "$DATA_DIR"
 
-# Activate Python virtual environment if it exists (for Adafruit libraries)
-if [ -d "venv" ]; then
-    echo "Activating Python virtual environment..."
-    source venv/bin/activate
-fi
+# Note: We use system Python (/usr/bin/python3) for sensor/servo scripts
+# because Adafruit libraries are typically installed system-wide on Raspberry Pi
+# If you need a venv, set PYTHON_PATH environment variable to point to it
 
 # Install dependencies
 install_deps() {
