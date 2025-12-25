@@ -61,8 +61,28 @@ export default function BME688Panel() {
       if (res.ok) {
         const data = await res.json();
         if (data.success) {
-          setReading(data);
-          setHistory(prev => [...prev.slice(-29), data]);
+          const transformed: BME688Reading = {
+            success: data.success,
+            simulated: data.simulated,
+            timestamp: data.timestamp,
+            tempC: data.temperature_c ?? 0,
+            tempF: data.temperature_f ?? 0,
+            humidity: data.humidity ?? 0,
+            pressure: data.pressure ?? 0,
+            gasOhms: data.gas_resistance ?? 0,
+            altitude: data.altitude ?? 0,
+            iaqScore: data.iaq_score ?? 0,
+            vocPpm: data.voc_level ?? 0,
+            vscPpb: data.vsc_level ?? 0,
+            co2Ppm: data.co2_level ?? 0,
+            h2Ppm: data.h2_level ?? 0,
+            coPpm: data.co_level ?? 0,
+            ethanolPpm: data.ethanol_level ?? 0,
+            healthRisk: data.health_risk_level ?? 'GOOD',
+            healthRiskDesc: data.health_risk_description ?? 'No data available'
+          };
+          setReading(transformed);
+          setHistory(prev => [...prev.slice(-29), transformed]);
         }
       }
     } catch (e) {
