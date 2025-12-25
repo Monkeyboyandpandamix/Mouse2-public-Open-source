@@ -40,17 +40,24 @@ gas_history = deque(maxlen=10)
 
 bme = None
 
+SETUP_ERROR = None
+
 def setup_sensor():
     """Initialize BME688 sensor"""
-    global bme
+    global bme, SETUP_ERROR
     if not SENSOR_AVAILABLE:
+        SETUP_ERROR = "Adafruit libraries not installed (board, busio, adafruit_bme680)"
         return False
     try:
         i2c = busio.I2C(board.SCL, board.SDA)
         bme = adafruit_bme680.Adafruit_BME680_I2C(i2c, address=I2C_ADDRESS)
         bme.sea_level_pressure = SEA_LEVEL_PRESSURE
         return True
+    except PermissionError as e:
+        SETUP_ERROR = f"Permission denied accessing I2C. Run: sudo usermod -a -G i2c $USER and reboot"
+        return False
     except Exception as e:
+        SETUP_ERROR = str(e)
         return False
 
 def estimate_iaq(gas_ohms, humidity):
@@ -283,7 +290,8 @@ def main():
         elif args.simulate:
             data = generate_simulated_data()
         else:
-            data = {"success": False, "error": "Sensor not available"}
+            error_msg = SETUP_ERROR if SETUP_ERROR else "Sensor not available"
+            data = {"success": False, "error": error_msg}
         
         print(json.dumps(data))
         return
