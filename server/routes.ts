@@ -1335,12 +1335,12 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid action. Use 'open', 'close', or 'angle'" });
       }
       
-      // Check if running on Raspberry Pi (has pigpio or RPi.GPIO)
+      // Check if running on Raspberry Pi
       const isRaspberryPi = process.env.DEVICE_ROLE === 'ONBOARD' || 
                            existsSync('/sys/firmware/devicetree/base/model');
       
-      if (!isRaspberryPi) {
-        // Return simulated response for non-Pi environments
+      // Helper to return simulated response
+      const returnSimulated = () => {
         return res.json({ 
           success: true, 
           simulated: true,
@@ -1348,9 +1348,14 @@ export async function registerRoutes(
           angle: action === 'open' ? 180 : action === 'close' ? 0 : angle,
           message: `Gripper ${action} (simulated - not on Raspberry Pi)`
         });
+      };
+      
+      // If not on Pi, return simulation
+      if (!isRaspberryPi) {
+        return returnSimulated();
       }
       
-      // Execute the Python script for actual hardware control
+      // On Pi, try to call Python script
       const args = ['scripts/servo_control.py', action, '--json'];
       if (action === 'angle' && angle !== undefined) {
         args.push('--value', String(angle));
@@ -1359,6 +1364,7 @@ export async function registerRoutes(
       const python = spawn('python3', args);
       let output = '';
       let errorOutput = '';
+      let responded = false;
       
       python.stdout.on('data', (data: Buffer) => {
         output += data.toString();
@@ -1368,7 +1374,18 @@ export async function registerRoutes(
         errorOutput += data.toString();
       });
       
+      python.on('error', (err) => {
+        if (!responded) {
+          responded = true;
+          // Python not available, return simulated
+          returnSimulated();
+        }
+      });
+      
       python.on('close', (code: number) => {
+        if (responded) return;
+        responded = true;
+        
         if (code !== 0) {
           return res.status(500).json({ 
             error: "Servo control failed", 
@@ -1412,8 +1429,8 @@ export async function registerRoutes(
       const isRaspberryPi = process.env.DEVICE_ROLE === 'ONBOARD' || 
                            existsSync('/sys/firmware/devicetree/base/model');
       
-      // For non-Pi environments, return simulated data directly (no Python needed)
-      if (!isRaspberryPi) {
+      // Helper to return simulated data
+      const returnSimulated = () => {
         const temp = 68 + (Math.random() * 10 - 5);
         const humidity = 45 + (Math.random() * 20 - 10);
         const pressure = 1013.25 + (Math.random() * 10 - 5);
@@ -1439,13 +1456,20 @@ export async function registerRoutes(
           health_risk_level: 'GOOD',
           health_risk_description: 'Air quality is good. No health concerns.'
         });
+      };
+      
+      // For non-Pi environments, return simulated data directly
+      if (!isRaspberryPi) {
+        return returnSimulated();
       }
       
+      // On Pi, call the Python script
       const args = ['scripts/bme688_monitor.py', 'read', '--json'];
       
       const python = spawn('python3', args);
       let output = '';
       let errorOutput = '';
+      let responded = false;
       
       python.stdout.on('data', (data: Buffer) => {
         output += data.toString();
@@ -1456,10 +1480,16 @@ export async function registerRoutes(
       });
       
       python.on('error', (err) => {
-        res.status(500).json({ error: "Failed to start sensor reader", details: String(err) });
+        if (!responded) {
+          responded = true;
+          returnSimulated();
+        }
       });
       
       python.on('close', (code: number) => {
+        if (responded) return;
+        responded = true;
+        
         if (code !== 0) {
           return res.status(500).json({ 
             error: "BME688 read failed", 
@@ -1498,21 +1528,28 @@ export async function registerRoutes(
       
       const python = spawn('python3', ['scripts/bme688_monitor.py', 'status']);
       let output = '';
+      let responded = false;
       
       python.stdout.on('data', (data: Buffer) => {
         output += data.toString();
       });
       
       python.on('error', (err) => {
-        res.json({
-          success: true,
-          sensorAvailable: false,
-          platform: 'raspberry_pi',
-          message: 'Failed to check sensor status'
-        });
+        if (!responded) {
+          responded = true;
+          res.json({
+            success: true,
+            sensorAvailable: false,
+            platform: 'raspberry_pi',
+            message: 'Failed to check sensor status'
+          });
+        }
       });
       
       python.on('close', (code: number) => {
+        if (responded) return;
+        responded = true;
+        
         try {
           const result = JSON.parse(output);
           result.platform = 'raspberry_pi';
