@@ -9,8 +9,23 @@ import time
 import sys
 import json
 import argparse
+import os
+import glob
 from datetime import datetime
 from collections import deque
+
+# When running as root (via sudo), add user's site-packages to path
+# This allows finding Adafruit libraries installed by the regular user
+if os.geteuid() == 0:
+    # Find all user site-packages directories
+    user_site_patterns = [
+        '/home/*/.local/lib/python3.*/site-packages',
+        '/home/*/.local/lib/python3/dist-packages',
+    ]
+    for pattern in user_site_patterns:
+        for path in glob.glob(pattern):
+            if path not in sys.path:
+                sys.path.insert(0, path)
 
 try:
     import numpy as np
