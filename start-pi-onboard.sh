@@ -48,19 +48,51 @@ export DEVICE_ROLE=ONBOARD
 # Create data directory
 mkdir -p "$DATA_DIR"
 
-# Install ALL dependencies including dev (needed for TypeScript build)
-if [ ! -d "node_modules" ] || [ ! -f "node_modules/.bin/tsx" ]; then
+# Install dependencies
+install_deps() {
     echo "Installing dependencies..."
     npm install --include=dev
+    if [ $? -ne 0 ]; then
+        echo "Dependency installation failed!"
+        exit 1
+    fi
+}
+
+# Check if node_modules exists and tsx works
+if [ ! -d "node_modules" ]; then
+    install_deps
+elif [ ! -f "node_modules/.bin/tsx" ]; then
+    install_deps
 fi
 
 # Build the application
 echo ""
 echo "Building application..."
-./node_modules/.bin/tsx script/build.ts
+
+# Try building, if it fails due to module issues, clean and reinstall
+./node_modules/.bin/tsx script/build.ts 2>/tmp/build_error.log
 if [ $? -ne 0 ]; then
-    echo "Build failed! Please check for errors."
-    exit 1
+    # Check if it's a module resolution error
+    if grep -q "ERR_MODULE_NOT_FOUND" /tmp/build_error.log; then
+        echo ""
+        echo "Module resolution issue detected. Cleaning and reinstalling..."
+        rm -rf node_modules
+        rm -f package-lock.json
+        npm cache clean --force
+        install_deps
+        
+        echo ""
+        echo "Retrying build..."
+        ./node_modules/.bin/tsx script/build.ts
+        if [ $? -ne 0 ]; then
+            echo "Build failed after clean install! Please check for errors."
+            exit 1
+        fi
+    else
+        cat /tmp/build_error.log
+        echo "Build failed! Please check for errors."
+        exit 1
+    fi
 fi
 
 echo ""
