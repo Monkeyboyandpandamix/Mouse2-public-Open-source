@@ -57,10 +57,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
   const startFlightSession = async () => {
     try {
       const droneId = getCurrentDroneId();
-      const response = await apiRequest('/api/flight-sessions/start', {
-        method: 'POST',
-        body: JSON.stringify({ droneId }),
-      });
+      const response = await apiRequest('POST', '/api/flight-sessions/start', { droneId });
       const data = await response.json();
       if (data.success && data.session) {
         setActiveSessionId(data.session.id);
@@ -87,15 +84,12 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
         ? Math.round((Date.now() - flightStartTime.current.getTime()) / 1000)
         : 0;
       
-      const response = await apiRequest('/api/flight-sessions/end', {
-        method: 'POST',
-        body: JSON.stringify({ 
-          sessionId: activeSessionId,
-          droneId,
-          maxAltitude: maxAltitudeRef.current,
-          totalDistance: totalDistanceRef.current,
-          totalFlightTime
-        }),
+      const response = await apiRequest('POST', '/api/flight-sessions/end', { 
+        sessionId: activeSessionId,
+        droneId,
+        maxAltitude: maxAltitudeRef.current,
+        totalDistance: totalDistanceRef.current,
+        totalFlightTime
       });
       const data = await response.json();
       if (data.success) {
