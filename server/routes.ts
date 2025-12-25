@@ -2,6 +2,8 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { WebSocketServer, WebSocket } from "ws";
+import { spawn } from "child_process";
+import { existsSync } from "fs";
 import {
   insertSettingsSchema,
   insertMissionSchema,
@@ -1335,7 +1337,7 @@ export async function registerRoutes(
       
       // Check if running on Raspberry Pi (has pigpio or RPi.GPIO)
       const isRaspberryPi = process.env.DEVICE_ROLE === 'ONBOARD' || 
-                           require('fs').existsSync('/sys/firmware/devicetree/base/model');
+                           existsSync('/sys/firmware/devicetree/base/model');
       
       if (!isRaspberryPi) {
         // Return simulated response for non-Pi environments
@@ -1349,7 +1351,6 @@ export async function registerRoutes(
       }
       
       // Execute the Python script for actual hardware control
-      const { spawn } = require('child_process');
       const args = ['scripts/servo_control.py', action, '--json'];
       if (action === 'angle' && angle !== undefined) {
         args.push('--value', String(angle));
@@ -1392,7 +1393,7 @@ export async function registerRoutes(
   app.get("/api/servo/status", async (req, res) => {
     try {
       const isRaspberryPi = process.env.DEVICE_ROLE === 'ONBOARD' || 
-                           require('fs').existsSync('/sys/firmware/devicetree/base/model');
+                           existsSync('/sys/firmware/devicetree/base/model');
       
       res.json({
         available: isRaspberryPi,
@@ -1409,13 +1410,38 @@ export async function registerRoutes(
   app.get("/api/bme688/read", async (req, res) => {
     try {
       const isRaspberryPi = process.env.DEVICE_ROLE === 'ONBOARD' || 
-                           require('fs').existsSync('/sys/firmware/devicetree/base/model');
+                           existsSync('/sys/firmware/devicetree/base/model');
       
-      const { spawn } = require('child_process');
-      const args = ['scripts/bme688_monitor.py', 'read', '--json'];
+      // For non-Pi environments, return simulated data directly (no Python needed)
       if (!isRaspberryPi) {
-        args.push('--simulate');
+        const temp = 68 + (Math.random() * 10 - 5);
+        const humidity = 45 + (Math.random() * 20 - 10);
+        const pressure = 1013.25 + (Math.random() * 10 - 5);
+        const iaq = Math.floor(50 + Math.random() * 100);
+        return res.json({
+          success: true,
+          simulated: true,
+          timestamp: new Date().toISOString(),
+          temperature_f: Math.round(temp * 10) / 10,
+          temperature_c: Math.round((temp - 32) * 5/9 * 10) / 10,
+          humidity: Math.round(humidity * 10) / 10,
+          pressure: Math.round(pressure * 100) / 100,
+          altitude: Math.round((1013.25 - pressure) * 8.43 * 10) / 10,
+          gas_resistance: 50000 + Math.random() * 100000,
+          iaq_score: iaq,
+          iaq_level: iaq < 50 ? 'Excellent' : iaq < 100 ? 'Good' : iaq < 150 ? 'Moderate' : 'Poor',
+          voc_level: Math.round(Math.random() * 500) / 1000,
+          vsc_level: Math.round(Math.random() * 100) / 1000,
+          co2_level: 400 + Math.floor(Math.random() * 200),
+          h2_level: Math.round(Math.random() * 50) / 100,
+          co_level: Math.round(Math.random() * 10) / 100,
+          ethanol_level: Math.round(Math.random() * 100) / 1000,
+          health_risk_level: 'GOOD',
+          health_risk_description: 'Air quality is good. No health concerns.'
+        });
       }
+      
+      const args = ['scripts/bme688_monitor.py', 'read', '--json'];
       
       const python = spawn('python3', args);
       let output = '';
@@ -1427,6 +1453,10 @@ export async function registerRoutes(
       
       python.stderr.on('data', (data: Buffer) => {
         errorOutput += data.toString();
+      });
+      
+      python.on('error', (err) => {
+        res.status(500).json({ error: "Failed to start sensor reader", details: String(err) });
       });
       
       python.on('close', (code: number) => {
@@ -1454,9 +1484,18 @@ export async function registerRoutes(
   app.get("/api/bme688/status", async (req, res) => {
     try {
       const isRaspberryPi = process.env.DEVICE_ROLE === 'ONBOARD' || 
-                           require('fs').existsSync('/sys/firmware/devicetree/base/model');
+                           existsSync('/sys/firmware/devicetree/base/model');
       
-      const { spawn } = require('child_process');
+      // For non-Pi environments, return status directly
+      if (!isRaspberryPi) {
+        return res.json({
+          success: true,
+          sensorAvailable: false,
+          platform: 'other',
+          message: 'BME688 sensor simulated (not on Raspberry Pi)'
+        });
+      }
+      
       const python = spawn('python3', ['scripts/bme688_monitor.py', 'status']);
       let output = '';
       
@@ -1464,16 +1503,25 @@ export async function registerRoutes(
         output += data.toString();
       });
       
+      python.on('error', (err) => {
+        res.json({
+          success: true,
+          sensorAvailable: false,
+          platform: 'raspberry_pi',
+          message: 'Failed to check sensor status'
+        });
+      });
+      
       python.on('close', (code: number) => {
         try {
           const result = JSON.parse(output);
-          result.platform = isRaspberryPi ? 'raspberry_pi' : 'other';
+          result.platform = 'raspberry_pi';
           res.json(result);
         } catch (e) {
           res.json({
             success: true,
             sensorAvailable: false,
-            platform: isRaspberryPi ? 'raspberry_pi' : 'other',
+            platform: 'raspberry_pi',
             message: 'BME688 sensor status check failed'
           });
         }
