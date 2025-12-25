@@ -62,11 +62,12 @@ const defaultTabs: TabConfig[] = [
   { id: "feeds", name: "Camera Feeds", icon: "Video", visible: true, order: 6, isCustom: false },
   { id: "logs", name: "Flight Logs", icon: "FileText", visible: true, order: 7, isCustom: false },
   { id: "logbook", name: "Logbook", icon: "BookOpen", visible: true, order: 8, isCustom: false },
-  { id: "scripts", name: "Automation", icon: "Code", visible: true, order: 9, isCustom: false },
-  { id: "terminal", name: "Commands", icon: "Terminal", visible: true, order: 10, isCustom: false },
-  { id: "users", name: "User Access", icon: "Users", visible: true, order: 11, isCustom: false },
-  { id: "guiconfig", name: "GUI Config", icon: "LayoutDashboard", visible: true, order: 12, isCustom: false },
-  { id: "settings", name: "Settings", icon: "Settings", visible: true, order: 13, isCustom: false },
+  { id: "environment", name: "Environment", icon: "Leaf", visible: true, order: 9, isCustom: false },
+  { id: "scripts", name: "Automation", icon: "Code", visible: true, order: 10, isCustom: false },
+  { id: "terminal", name: "Commands", icon: "Terminal", visible: true, order: 11, isCustom: false },
+  { id: "users", name: "User Access", icon: "Users", visible: true, order: 12, isCustom: false },
+  { id: "guiconfig", name: "GUI Config", icon: "LayoutDashboard", visible: true, order: 13, isCustom: false },
+  { id: "settings", name: "Settings", icon: "Settings", visible: true, order: 14, isCustom: false },
 ];
 
 const defaultPanels: PanelConfig[] = [

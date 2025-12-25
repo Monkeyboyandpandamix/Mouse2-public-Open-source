@@ -11,6 +11,7 @@ import { TrackingPanel } from "@/components/panels/TrackingPanel";
 import { SpeakerPanel } from "@/components/panels/SpeakerPanel";
 import { FlightLogsPanel } from "@/components/panels/FlightLogsPanel";
 import { FlightLogbookPanel } from "@/components/panels/FlightLogbookPanel";
+import BME688Panel from "@/components/panels/BME688Panel";
 import { AutomationPanel } from "@/components/panels/AutomationPanel";
 import { TerminalCommandsPanel } from "@/components/panels/TerminalCommandsPanel";
 import { UserAccessPanel } from "@/components/panels/UserAccessPanel";
@@ -326,6 +327,12 @@ export default function Home() {
         return (
           <div className="flex-1 relative overflow-hidden">
             <FlightLogbookPanel />
+          </div>
+        );
+      case "environment":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <BME688Panel />
           </div>
         );
       case "scripts":

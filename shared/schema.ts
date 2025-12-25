@@ -352,3 +352,45 @@ export const chatUserSchema = z.object({
   role: z.string(),
 });
 export type ChatUser = z.infer<typeof chatUserSchema>;
+
+// BME688 Environmental Sensor Readings
+export const bme688ReadingSchema = z.object({
+  id: z.string(),
+  timestamp: z.string(),
+  tempC: z.number(),
+  tempF: z.number(),
+  humidity: z.number(),
+  pressure: z.number(),
+  gasOhms: z.number(),
+  altitude: z.number(),
+  iaqScore: z.number(),
+  vocPpm: z.number(),
+  vscPpb: z.number(),
+  co2Ppm: z.number(),
+  h2Ppm: z.number(),
+  coPpm: z.number(),
+  ethanolPpm: z.number(),
+  healthRisk: z.enum(['GOOD', 'MODERATE', 'HIGH', 'CRITICAL']),
+  healthRiskDesc: z.string(),
+  droneId: z.string().nullable().optional(),
+});
+
+export const insertBme688ReadingSchema = bme688ReadingSchema.omit({ id: true });
+export type InsertBme688Reading = z.infer<typeof insertBme688ReadingSchema>;
+export type Bme688Reading = z.infer<typeof bme688ReadingSchema>;
+
+// BME688 Health Risk Thresholds
+export const BME688_THRESHOLDS = {
+  VOC_MODERATE: 2.0,
+  VOC_HIGH: 5.0,
+  CO_LOW: 3,
+  CO_HIGH: 9,
+  CO_CRITICAL: 50,
+  CO2_ELEVATED: 1000,
+  CO2_HIGH: 2000,
+  H2_WARNING: 10,
+  VSC_STRONG: 100,
+  IAQ_GOOD: 100,
+  IAQ_MODERATE: 200,
+  IAQ_POOR: 300,
+} as const;

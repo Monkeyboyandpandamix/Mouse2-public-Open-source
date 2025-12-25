@@ -13,6 +13,7 @@ import {
   insertDroneSchema,
   insertMediaAssetSchema,
   insertOfflineBacklogSchema,
+  insertBme688ReadingSchema,
 } from "@shared/schema";
 import { ZodError } from "zod";
 import { syncDataToSheets, getOrCreateBackupSpreadsheet, getSpreadsheetUrl } from "./googleSheets";
@@ -1399,6 +1400,85 @@ export async function registerRoutes(
         gpio_pin: 4,
         message: isRaspberryPi ? 'Servo controller available' : 'Servo control simulated (not on Raspberry Pi)'
       });
+    } catch (error) {
+      res.status(500).json({ error: "Status check failed" });
+    }
+  });
+
+  // BME688 Environmental Sensor endpoints
+  app.get("/api/bme688/read", async (req, res) => {
+    try {
+      const isRaspberryPi = process.env.DEVICE_ROLE === 'ONBOARD' || 
+                           require('fs').existsSync('/sys/firmware/devicetree/base/model');
+      
+      const { spawn } = require('child_process');
+      const args = ['scripts/bme688_monitor.py', 'read', '--json'];
+      if (!isRaspberryPi) {
+        args.push('--simulate');
+      }
+      
+      const python = spawn('python3', args);
+      let output = '';
+      let errorOutput = '';
+      
+      python.stdout.on('data', (data: Buffer) => {
+        output += data.toString();
+      });
+      
+      python.stderr.on('data', (data: Buffer) => {
+        errorOutput += data.toString();
+      });
+      
+      python.on('close', (code: number) => {
+        if (code !== 0) {
+          return res.status(500).json({ 
+            error: "BME688 read failed", 
+            details: errorOutput || output,
+            code 
+          });
+        }
+        
+        try {
+          const result = JSON.parse(output);
+          res.json(result);
+        } catch (e) {
+          res.status(500).json({ error: "Invalid sensor response" });
+        }
+      });
+      
+    } catch (error) {
+      res.status(500).json({ error: "BME688 read error", details: String(error) });
+    }
+  });
+
+  app.get("/api/bme688/status", async (req, res) => {
+    try {
+      const isRaspberryPi = process.env.DEVICE_ROLE === 'ONBOARD' || 
+                           require('fs').existsSync('/sys/firmware/devicetree/base/model');
+      
+      const { spawn } = require('child_process');
+      const python = spawn('python3', ['scripts/bme688_monitor.py', 'status']);
+      let output = '';
+      
+      python.stdout.on('data', (data: Buffer) => {
+        output += data.toString();
+      });
+      
+      python.on('close', (code: number) => {
+        try {
+          const result = JSON.parse(output);
+          result.platform = isRaspberryPi ? 'raspberry_pi' : 'other';
+          res.json(result);
+        } catch (e) {
+          res.json({
+            success: true,
+            sensorAvailable: false,
+            platform: isRaspberryPi ? 'raspberry_pi' : 'other',
+            message: 'BME688 sensor status check failed'
+          });
+        }
+      });
+      
     } catch (error) {
       res.status(500).json({ error: "Status check failed" });
     }

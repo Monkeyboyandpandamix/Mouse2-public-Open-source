@@ -73,6 +73,13 @@ The application can be run as a native desktop app using Electron:
 - Flight controls including arm/disarm, takeoff, land, RTL, and emergency stop
 - **Automatic Flight Recording**: Flight sessions auto-start on takeoff and auto-end on landing. Captures enhanced telemetry including motor RPM/current, vibration XYZ, battery temp, GPS HDOP, air speed, wind speed/direction, and distance from home. Calculates total flight time, max altitude, and distance traveled. Sessions sync to Google Sheets on completion
 - **Servo/Gripper Control**: Hardware gripper control via GPIO 4 on Raspberry Pi using pigpio (preferred) or RPi.GPIO. API endpoints `/api/servo/control` (POST) and `/api/servo/status` (GET) available. On non-Pi platforms, returns simulated responses. Run `sudo ./scripts/setup-gpio-access.sh` once on Pi to enable sudo-less operation
+- **BME688 Environmental Monitoring**: Real-time environmental sensor integration with AI-based gas classification. Features include:
+  - Temperature (°F/°C), humidity, pressure, and altitude readings
+  - Indoor Air Quality (IAQ) score calculation
+  - AI gas classification detecting VOC, VSC, CO₂, H₂, CO, and ethanol levels
+  - Health risk assessment (GOOD, MODERATE, HIGH, CRITICAL) with color-coded alerts
+  - API endpoints `/api/bme688/read` and `/api/bme688/status` with simulation fallback for non-Pi environments
+  - Environment panel in sidebar with auto-refresh and safe levels reference
 - Google Sheets backup integration for data persistence
 - Google Drive integration for video footage storage
 - Laptop webcam testing mode for camera validation with object detection overlay

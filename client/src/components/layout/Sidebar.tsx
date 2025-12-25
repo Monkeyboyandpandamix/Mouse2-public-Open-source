@@ -13,6 +13,7 @@ import {
   LayoutDashboard,
   Route,
   BookOpen,
+  Leaf,
   LucideIcon
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -85,6 +86,7 @@ export const Sidebar = memo(function Sidebar({ activeTab, setActiveTab }: Sideba
     { id: "feeds", icon: Video, label: "Camera Feeds", requiredPermission: "view_camera" },
     { id: "logs", icon: FileText, label: "Flight Logs", requiredPermission: "access_flight_recorder" },
     { id: "logbook", icon: BookOpen, label: "Logbook", requiredPermission: "access_flight_recorder" },
+    { id: "environment", icon: Leaf, label: "Environment", requiredPermission: "view_telemetry" },
     { id: "scripts", icon: Code, label: "Automation", requiredPermission: "automation_scripts" },
     { id: "terminal", icon: Terminal, label: "Commands", requiredPermission: "run_terminal" },
     { id: "users", icon: Users, label: "User Access", alwaysShow: true },
