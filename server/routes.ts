@@ -4,10 +4,14 @@ import { storage } from "./storage";
 import { WebSocketServer, WebSocket } from "ws";
 import { spawn } from "child_process";
 import { existsSync } from "fs";
+import path from "path";
 
 // Use system Python to ensure Adafruit libraries are available
 // On Raspberry Pi, venv may not have the hardware libraries but system Python does
 const PYTHON_EXEC = process.env.PYTHON_PATH ?? "/usr/bin/python3";
+
+// Get absolute path to scripts directory (works regardless of cwd)
+const SCRIPTS_DIR = path.resolve(process.cwd(), "scripts");
 import {
   insertSettingsSchema,
   insertMissionSchema,
@@ -1360,7 +1364,7 @@ export async function registerRoutes(
       }
       
       // On Pi, try to call Python script
-      const args = ['scripts/servo_control.py', action, '--json'];
+      const args = [path.join(SCRIPTS_DIR, 'servo_control.py'), action, '--json'];
       if (action === 'angle' && angle !== undefined) {
         args.push('--value', String(angle));
       }
@@ -1468,7 +1472,7 @@ export async function registerRoutes(
       }
       
       // On Pi, call the Python script
-      const args = ['scripts/bme688_monitor.py', 'read', '--json'];
+      const args = [path.join(SCRIPTS_DIR, 'bme688_monitor.py'), 'read', '--json'];
       
       const python = spawn(PYTHON_EXEC, args);
       let output = '';
@@ -1530,7 +1534,7 @@ export async function registerRoutes(
         });
       }
       
-      const python = spawn(PYTHON_EXEC, ['scripts/bme688_monitor.py', 'status']);
+      const python = spawn(PYTHON_EXEC, [path.join(SCRIPTS_DIR, 'bme688_monitor.py'), 'status']);
       let output = '';
       let responded = false;
       
