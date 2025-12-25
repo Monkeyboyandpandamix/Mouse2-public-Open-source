@@ -26,15 +26,24 @@ except ImportError:
         print(json.dumps({"error": "GPIO access denied. Run setup script or use sudo"}))
         sys.exit(1)
 
-# Configuration
+# Configuration - ADJUST THESE FOR YOUR SERVO
 SERVO_PIN = 4          # GPIO 4 (BCM numbering)
-MIN_DUTY = 2.5         # Duty cycle for fully closed position (0 degrees)
-MAX_DUTY = 12.5        # Duty cycle for fully open position (180 degrees)
 PWM_FREQUENCY = 50     # Standard servo frequency (50Hz)
 
-# For pigpio: pulse width in microseconds
-MIN_PULSE_WIDTH = 500   # 0 degrees
-MAX_PULSE_WIDTH = 2500  # 180 degrees
+# For RPi.GPIO: duty cycle percentages
+MIN_DUTY = 2.5         # Duty cycle for fully closed position
+MAX_DUTY = 12.5        # Duty cycle for fully open position
+
+# For pigpio: pulse width in microseconds (more precise)
+# Standard servo range is 500-2500us, but you can adjust for tighter grip
+MIN_PULSE_WIDTH = 500   # Closed position - decrease for tighter grip
+MAX_PULSE_WIDTH = 2500  # Open position
+
+# Gripper-specific settings
+CLOSE_ANGLE = 0        # Angle for closed grip (0-180)
+OPEN_ANGLE = 180       # Angle for open grip (0-180)
+HOLD_TIME = 0.5        # Time to hold position before stopping PWM
+PULSE_COUNT = 3        # Number of pulses to send for reliable positioning
 
 pi = None
 pwm = None
@@ -57,10 +66,12 @@ def setup_servo():
         pwm.start(0)
         return pwm
 
-def set_angle(angle):
+def set_angle(angle, hold_time=None, pulses=1):
     """
-    Set servo to specific angle
+    Set servo to specific angle with configurable hold time and pulse count
     angle: 0 (closed) to 180 (open)
+    hold_time: how long to hold position (None = use default HOLD_TIME)
+    pulses: number of times to send the position command for reliability
     """
     global pi, pwm
     
@@ -69,16 +80,33 @@ def set_angle(angle):
     elif angle > 180:
         angle = 180
     
+    actual_hold = hold_time if hold_time is not None else HOLD_TIME
+    
     if USE_PIGPIO:
         pulse_width = MIN_PULSE_WIDTH + (angle / 180.0) * (MAX_PULSE_WIDTH - MIN_PULSE_WIDTH)
-        pi.set_servo_pulsewidth(SERVO_PIN, int(pulse_width))
-        time.sleep(0.3)
+        for i in range(pulses):
+            pi.set_servo_pulsewidth(SERVO_PIN, int(pulse_width))
+            time.sleep(actual_hold)
         pi.set_servo_pulsewidth(SERVO_PIN, 0)  # Stop signal to prevent jitter
     else:
         duty = MIN_DUTY + (angle / 180.0) * (MAX_DUTY - MIN_DUTY)
-        pwm.ChangeDutyCycle(duty)
-        time.sleep(0.3)
+        for i in range(pulses):
+            pwm.ChangeDutyCycle(duty)
+            time.sleep(actual_hold)
         pwm.ChangeDutyCycle(0)
+
+def grip_tight():
+    """
+    Close gripper with extra force for secure grip
+    Sends multiple pulses and holds longer to ensure tight closure
+    """
+    set_angle(CLOSE_ANGLE, hold_time=0.8, pulses=PULSE_COUNT)
+
+def grip_release():
+    """
+    Open gripper fully
+    """
+    set_angle(OPEN_ANGLE, hold_time=HOLD_TIME, pulses=2)
 
 def cleanup():
     """Clean up GPIO resources"""
@@ -97,6 +125,10 @@ def main():
                        help='Action to perform')
     parser.add_argument('--value', type=int, default=None,
                        help='Angle value (0-180) for angle action')
+    parser.add_argument('--tight', action='store_true',
+                       help='Use tight grip mode for close action')
+    parser.add_argument('--hold', type=float, default=None,
+                       help='Custom hold time in seconds')
     parser.add_argument('--json', action='store_true',
                        help='Output in JSON format')
     
@@ -108,23 +140,33 @@ def main():
         result = {"success": True, "action": args.action}
         
         if args.action == 'open':
-            set_angle(180)
-            result["angle"] = 180
+            grip_release()
+            result["angle"] = OPEN_ANGLE
             result["message"] = "Gripper opened"
         elif args.action == 'close':
-            set_angle(0)
-            result["angle"] = 0
-            result["message"] = "Gripper closed"
+            if args.tight:
+                grip_tight()
+                result["message"] = "Gripper closed (tight grip)"
+            else:
+                grip_tight()  # Always use tight grip for better reliability
+                result["message"] = "Gripper closed"
+            result["angle"] = CLOSE_ANGLE
         elif args.action == 'angle':
             if args.value is None:
                 result = {"success": False, "error": "Angle value required (--value)"}
             else:
-                set_angle(args.value)
+                hold = args.hold if args.hold else HOLD_TIME
+                set_angle(args.value, hold_time=hold, pulses=2)
                 result["angle"] = args.value
                 result["message"] = f"Gripper set to {args.value} degrees"
         elif args.action == 'status':
             result["gpio_library"] = "pigpio" if USE_PIGPIO else "RPi.GPIO"
             result["gpio_pin"] = SERVO_PIN
+            result["close_angle"] = CLOSE_ANGLE
+            result["open_angle"] = OPEN_ANGLE
+            result["min_pulse"] = MIN_PULSE_WIDTH
+            result["max_pulse"] = MAX_PULSE_WIDTH
+            result["hold_time"] = HOLD_TIME
             result["message"] = "Servo controller ready"
         
         if args.json:

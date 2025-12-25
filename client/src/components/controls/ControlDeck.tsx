@@ -37,6 +37,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
     return saved ? JSON.parse(saved) : false;
   });
   const [gripperOpen, setGripperOpen] = useState(false);
+  const [gripperLoading, setGripperLoading] = useState(false);
   const [baseLocation, setBaseLocation] = useState<BaseLocation | null>(null);
   const [isReturning, setIsReturning] = useState(false);
   const [customWidgets, setCustomWidgets] = useState<CustomWidget[]>([]);
@@ -387,15 +388,17 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
           variant="outline"
           className={cn(
             "h-full flex flex-col gap-1 relative overflow-hidden",
-            !canFlightControl && "opacity-50 cursor-not-allowed",
+            (!canFlightControl || gripperLoading) && "opacity-50 cursor-not-allowed",
             gripperOpen ? "border-amber-500 text-amber-500" : "border-primary text-primary"
           )}
-          disabled={!canFlightControl}
+          disabled={!canFlightControl || gripperLoading}
           onClick={async () => {
-            if (!canFlightControl) {
-              toast.error("You don't have flight control permission");
+            if (!canFlightControl || gripperLoading) {
+              if (!canFlightControl) toast.error("You don't have flight control permission");
               return;
             }
+            
+            setGripperLoading(true);
             const newState = !gripperOpen;
             const action = newState ? 'open' : 'close';
             
@@ -418,9 +421,9 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
                 toast.error(err.error || 'Gripper control failed');
               }
             } catch (e) {
-              // Fallback for offline/error - still update UI state
-              setGripperOpen(newState);
-              toast.info(`Gripper ${action} (offline mode)`);
+              toast.error('Gripper control failed - check connection');
+            } finally {
+              setGripperLoading(false);
             }
           }}
           data-testid="button-gripper"
@@ -429,8 +432,8 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
             "absolute inset-0 opacity-10 transition-colors",
              gripperOpen ? "bg-amber-500" : "bg-primary"
           )} />
-          <Hand className={cn("h-6 w-6 transition-transform", gripperOpen ? "scale-x-[-1]" : "")} />
-          <span className="font-bold tracking-wider text-[10px]">{gripperOpen ? "RELEASE" : "GRAB"}</span>
+          <Hand className={cn("h-6 w-6 transition-transform", gripperLoading ? "animate-pulse" : "", gripperOpen ? "scale-x-[-1]" : "")} />
+          <span className="font-bold tracking-wider text-[10px]">{gripperLoading ? "..." : (gripperOpen ? "RELEASE" : "GRAB")}</span>
         </Button>
       </div>
 
