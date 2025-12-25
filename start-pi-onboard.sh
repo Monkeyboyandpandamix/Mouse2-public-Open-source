@@ -48,6 +48,12 @@ export DEVICE_ROLE=ONBOARD
 # Create data directory
 mkdir -p "$DATA_DIR"
 
+# Activate Python virtual environment if it exists (for Adafruit libraries)
+if [ -d "venv" ]; then
+    echo "Activating Python virtual environment..."
+    source venv/bin/activate
+fi
+
 # Install dependencies
 install_deps() {
     echo "Installing dependencies..."
