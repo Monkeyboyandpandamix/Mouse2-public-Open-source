@@ -1431,6 +1431,40 @@ export async function registerRoutes(
     }
   });
 
+  // Debug endpoint to test Python execution
+  app.get("/api/bme688/debug", async (req, res) => {
+    const scriptPath = path.join(SCRIPTS_DIR, 'bme688_monitor.py');
+    const pythonExec = PYTHON_EXEC;
+    
+    const python = spawn(pythonExec, [scriptPath, 'status', '--json']);
+    let output = '';
+    let errorOutput = '';
+    
+    python.stdout.on('data', (data: Buffer) => { output += data.toString(); });
+    python.stderr.on('data', (data: Buffer) => { errorOutput += data.toString(); });
+    
+    python.on('close', (code: number) => {
+      res.json({
+        pythonExec,
+        scriptPath,
+        scriptExists: existsSync(scriptPath),
+        scriptsDir: SCRIPTS_DIR,
+        cwd: process.cwd(),
+        exitCode: code,
+        stdout: output,
+        stderr: errorOutput,
+        env: {
+          DEVICE_ROLE: process.env.DEVICE_ROLE,
+          PATH: process.env.PATH?.substring(0, 200)
+        }
+      });
+    });
+    
+    python.on('error', (err) => {
+      res.json({ error: String(err), pythonExec, scriptPath });
+    });
+  });
+
   // BME688 Environmental Sensor endpoints
   app.get("/api/bme688/read", async (req, res) => {
     try {
