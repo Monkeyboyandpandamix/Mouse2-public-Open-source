@@ -1323,5 +1323,86 @@ export async function registerRoutes(
     }
   });
 
+  // Servo/Gripper control endpoints (for Raspberry Pi deployment)
+  app.post("/api/servo/control", async (req, res) => {
+    try {
+      const { action, angle } = req.body;
+      
+      if (!action || !['open', 'close', 'angle'].includes(action)) {
+        return res.status(400).json({ error: "Invalid action. Use 'open', 'close', or 'angle'" });
+      }
+      
+      // Check if running on Raspberry Pi (has pigpio or RPi.GPIO)
+      const isRaspberryPi = process.env.DEVICE_ROLE === 'ONBOARD' || 
+                           require('fs').existsSync('/sys/firmware/devicetree/base/model');
+      
+      if (!isRaspberryPi) {
+        // Return simulated response for non-Pi environments
+        return res.json({ 
+          success: true, 
+          simulated: true,
+          action,
+          angle: action === 'open' ? 180 : action === 'close' ? 0 : angle,
+          message: `Gripper ${action} (simulated - not on Raspberry Pi)`
+        });
+      }
+      
+      // Execute the Python script for actual hardware control
+      const { spawn } = require('child_process');
+      const args = ['scripts/servo_control.py', action, '--json'];
+      if (action === 'angle' && angle !== undefined) {
+        args.push('--value', String(angle));
+      }
+      
+      const python = spawn('python3', args);
+      let output = '';
+      let errorOutput = '';
+      
+      python.stdout.on('data', (data: Buffer) => {
+        output += data.toString();
+      });
+      
+      python.stderr.on('data', (data: Buffer) => {
+        errorOutput += data.toString();
+      });
+      
+      python.on('close', (code: number) => {
+        if (code !== 0) {
+          return res.status(500).json({ 
+            error: "Servo control failed", 
+            details: errorOutput || output,
+            code 
+          });
+        }
+        
+        try {
+          const result = JSON.parse(output);
+          res.json(result);
+        } catch (e) {
+          res.json({ success: true, message: output.trim() });
+        }
+      });
+      
+    } catch (error) {
+      res.status(500).json({ error: "Servo control error", details: String(error) });
+    }
+  });
+
+  app.get("/api/servo/status", async (req, res) => {
+    try {
+      const isRaspberryPi = process.env.DEVICE_ROLE === 'ONBOARD' || 
+                           require('fs').existsSync('/sys/firmware/devicetree/base/model');
+      
+      res.json({
+        available: isRaspberryPi,
+        platform: isRaspberryPi ? 'raspberry_pi' : 'other',
+        gpio_pin: 4,
+        message: isRaspberryPi ? 'Servo controller available' : 'Servo control simulated (not on Raspberry Pi)'
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Status check failed" });
+    }
+  });
+
   return httpServer;
 }

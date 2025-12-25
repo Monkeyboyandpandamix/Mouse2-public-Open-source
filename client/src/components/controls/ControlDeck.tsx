@@ -397,12 +397,37 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
             gripperOpen ? "border-amber-500 text-amber-500" : "border-primary text-primary"
           )}
           disabled={!canFlightControl}
-          onClick={() => {
+          onClick={async () => {
             if (!canFlightControl) {
               toast.error("You don't have flight control permission");
               return;
             }
-            setGripperOpen(!gripperOpen);
+            const newState = !gripperOpen;
+            const action = newState ? 'open' : 'close';
+            
+            try {
+              const res = await fetch('/api/servo/control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action })
+              });
+              
+              if (res.ok) {
+                const data = await res.json();
+                setGripperOpen(newState);
+                toast.success(data.message || `Gripper ${action}ed`);
+                window.dispatchEvent(new CustomEvent('flight-command', { 
+                  detail: { command: 'gripper', action } 
+                }));
+              } else {
+                const err = await res.json();
+                toast.error(err.error || 'Gripper control failed');
+              }
+            } catch (e) {
+              // Fallback for offline/error - still update UI state
+              setGripperOpen(newState);
+              toast.info(`Gripper ${action} (offline mode)`);
+            }
           }}
           data-testid="button-gripper"
         > 

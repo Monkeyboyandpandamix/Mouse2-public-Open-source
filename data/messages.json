@@ -110,5 +110,35 @@
     "originalContent": "@viewer1 hello",
     "deletedAt": "2025-12-22T02:55:29.779Z",
     "deletedBy": null
+  },
+  {
+    "id": "1766635361761-13radv29y",
+    "senderId": "1",
+    "senderName": "admin",
+    "senderRole": "admin",
+    "content": "[Message deleted]",
+    "recipientId": "3",
+    "recipientName": "viewer1",
+    "timestamp": "2025-12-25T04:02:41.761Z",
+    "editedAt": null,
+    "deleted": true,
+    "originalContent": "herllo",
+    "deletedAt": "2025-12-25T04:02:54.101Z",
+    "deletedBy": null
+  },
+  {
+    "id": "1766635364738-ypgcn31fc",
+    "senderId": "1",
+    "senderName": "admin",
+    "senderRole": "admin",
+    "content": "[Message deleted]",
+    "recipientId": "3",
+    "recipientName": "viewer1",
+    "timestamp": "2025-12-25T04:02:44.738Z",
+    "editedAt": null,
+    "deleted": true,
+    "originalContent": "hows it going",
+    "deletedAt": "2025-12-25T04:02:52.525Z",
+    "deletedBy": null
   }
 ]
