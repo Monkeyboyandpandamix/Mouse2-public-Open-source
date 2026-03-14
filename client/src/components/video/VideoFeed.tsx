@@ -113,6 +113,7 @@ export function VideoFeed() {
   const lockedObjectIdRef = useRef<string | null>(null);
   const frameCountRef = useRef(0);
   const globalMotionRef = useRef({ dx: 0, dy: 0 });
+  const lastMappingSyncRef = useRef(0);
   
   useEffect(() => {
     localStorage.setItem('mouse_camera_config', JSON.stringify(cameraConfig));
@@ -484,6 +485,96 @@ export function VideoFeed() {
     // Track and classify objects
     const objects = trackAndClassifyObjects(mergedRegions, currentFrame);
     setDetectedObjects(objects);
+    window.dispatchEvent(
+      new CustomEvent("visual-odometry-update", {
+        detail: {
+          dx: globalMotionRef.current.dx,
+          dy: globalMotionRef.current.dy,
+          confidence: Math.min(1, Math.max(0, objects.length / 6)),
+          frameWidth: width,
+          frameHeight: height,
+          timestamp: Date.now(),
+        },
+      }),
+    );
+
+    if (objects.length > 0) {
+      const centerX = width / 2;
+      const centerY = height / 2;
+      let highestRisk = 0;
+      let avoidance = { yaw: 0, forward: 0, lateral: 0 };
+
+      for (const obj of objects) {
+        const objCx = obj.x + obj.width / 2;
+        const objCy = obj.y + obj.height / 2;
+        const normX = (objCx - centerX) / Math.max(1, centerX);
+        const normY = (objCy - centerY) / Math.max(1, centerY);
+        const areaRatio = (obj.width * obj.height) / Math.max(1, width * height);
+        const centeredness = Math.max(0, 1 - Math.hypot(normX, normY));
+        const confidenceFactor = Math.max(0.25, Math.min(1, obj.confidence / 100));
+        const risk = Math.max(0, Math.min(1, areaRatio * 2.8 * centeredness * confidenceFactor));
+
+        if (risk > highestRisk) {
+          highestRisk = risk;
+          avoidance = {
+            yaw: Math.max(-1, Math.min(1, normX > 0 ? -risk : risk)),
+            forward: Math.max(-1, Math.min(0, -risk)),
+            lateral: Math.max(-1, Math.min(1, normX > 0 ? -risk : risk)),
+          };
+        }
+      }
+
+      const riskLevel = highestRisk > 0.55 ? "high" : highestRisk > 0.3 ? "medium" : highestRisk > 0.12 ? "low" : "none";
+      window.dispatchEvent(
+        new CustomEvent("obstacle-update", {
+          detail: {
+            riskLevel,
+            avoidanceYaw: avoidance.yaw,
+            avoidanceForward: avoidance.forward,
+            avoidanceLateral: avoidance.lateral,
+          },
+        }),
+      );
+    } else {
+      window.dispatchEvent(
+        new CustomEvent("obstacle-update", {
+          detail: { riskLevel: "none", avoidanceYaw: 0, avoidanceForward: 0, avoidanceLateral: 0 },
+        }),
+      );
+    }
+
+    const now = Date.now();
+    if (now - lastMappingSyncRef.current > 1000) {
+      lastMappingSyncRef.current = now;
+      void fetch("/api/mapping/3d/frame", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          timestamp: now,
+          cameraMode: activeCam,
+          thermalMode,
+          frameWidth: width,
+          frameHeight: height,
+          odometry: {
+            dx: globalMotionRef.current.dx,
+            dy: globalMotionRef.current.dy,
+            confidence: Math.min(1, Math.max(0.05, objects.length / 8)),
+          },
+          detections: objects.map((obj) => ({
+            id: obj.id,
+            type: obj.type,
+            confidence: obj.confidence,
+            x: obj.x,
+            y: obj.y,
+            width: obj.width,
+            height: obj.height,
+            isMoving: obj.isMoving,
+          })),
+        }),
+      }).catch(() => {
+        // Mapping backend can be offline; video feed should continue.
+      });
+    }
     
     prevFrameRef.current = currentFrame;
   };

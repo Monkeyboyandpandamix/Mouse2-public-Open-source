@@ -31,6 +31,7 @@ import { Lock } from "lucide-react";
 import { MapContainer, TileLayer, Circle as LeafletCircle, Polygon, Marker, useMapEvents, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { NoFlyZoneLegend } from "@/components/map/NoFlyZoneLegend";
 
 interface GeofenceZone {
   id: string;
@@ -181,7 +182,7 @@ export function GeofencingPanel() {
     if (!searchQuery.trim()) return;
     setIsSearching(true);
     try {
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=1`);
+      const response = await fetch(`/api/geocode?q=${encodeURIComponent(searchQuery)}`);
       if (response.ok) {
         const results = await response.json();
         if (results.length > 0) {
@@ -538,6 +539,8 @@ export function GeofencingPanel() {
             My Location
           </Button>
         </div>
+
+        <NoFlyZoneLegend className="absolute bottom-4 right-4 z-[1000]" />
       </div>
 
       {/* Right - Controls */}

@@ -15,6 +15,18 @@ interface MotorData {
   status: 'ok' | 'warning' | 'error';
 }
 
+interface SensorHealth {
+  lidarRange: number | null;
+  cpuTemp: number | null;
+  escTemp: number | null;
+  vibration: number | null;
+  barometer: number | null;
+  imuStatus: string;
+  compassStatus: string;
+}
+
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+
 export function TelemetryPanel() {
   const [motorCount, setMotorCount] = useState(() => {
     const saved = localStorage.getItem('mouse_motor_count');
@@ -25,10 +37,24 @@ export function TelemetryPanel() {
 
   const [attitude, setAttitude] = useState({ pitch: 0, roll: 0, yaw: 0 });
   const [heading, setHeading] = useState(0);
+  const [sensorHealth, setSensorHealth] = useState<SensorHealth>({
+    lidarRange: null,
+    cpuTemp: null,
+    escTemp: null,
+    vibration: null,
+    barometer: null,
+    imuStatus: "NO DATA",
+    compassStatus: "NO DATA",
+  });
   
   // Flight state
   const [altitude, setAltitude] = useState(0);
   const [groundSpeed, setGroundSpeed] = useState(0);
+  const [batteryPercent, setBatteryPercent] = useState(100);
+  const [batteryVoltage, setBatteryVoltage] = useState(16.8);
+  const [batteryCurrent, setBatteryCurrent] = useState(0);
+  const [gpsStatus, setGpsStatus] = useState<"no_fix" | "2d_fix" | "3d_fix">("no_fix");
+  const [gpsSatellites, setGpsSatellites] = useState(0);
   const [flightMode, setFlightMode] = useState<'idle' | 'takeoff' | 'flying' | 'landing' | 'rtl'>('idle');
   // Default location - Burlington, NC
   const [position, setPosition] = useState({ lat: 36.0957, lng: -79.4378 });
@@ -48,6 +74,9 @@ export function TelemetryPanel() {
     }
   }, []);
   const [distToHome, setDistToHome] = useState(0);
+  const lastExternalTelemetryTsRef = useRef(0);
+  const batteryPercentRef = useRef(100);
+  const [guidedTarget, setGuidedTarget] = useState<{ lat: number; lng: number } | null>(null);
   
   // Use refs to avoid stale closures
   const positionRef = useRef(position);
@@ -61,6 +90,10 @@ export function TelemetryPanel() {
   useEffect(() => {
     homePositionRef.current = homePosition;
   }, [homePosition]);
+
+  useEffect(() => {
+    batteryPercentRef.current = batteryPercent;
+  }, [batteryPercent]);
   
   // Calculate distance between two points in meters
   const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number) => {
@@ -91,10 +124,11 @@ export function TelemetryPanel() {
         setFlightMode('idle');
         setAltitude(0);
         setGroundSpeed(0);
+        setBatteryCurrent(0);
       }
     };
-    const handleFlightCommand = (e: CustomEvent<{ command: string; target?: any }>) => {
-      const { command, target } = e.detail;
+    const handleFlightCommand = (e: CustomEvent<{ command: string; target?: any; corrections?: any }>) => {
+      const { command, target, corrections } = e.detail;
       switch (command) {
         case 'takeoff':
           setFlightMode('takeoff');
@@ -115,6 +149,28 @@ export function TelemetryPanel() {
           setFlightMode('idle');
           setAltitude(0);
           setGroundSpeed(0);
+          setGuidedTarget(null);
+          break;
+        case 'guided-waypoint':
+          if (target && typeof target.lat === 'number' && typeof target.lng === 'number') {
+            setGuidedTarget({ lat: target.lat, lng: target.lng });
+            setFlightMode('rtl');
+          }
+          break;
+        case 'stabilize_adjust':
+          if (corrections) {
+            setAttitude(prev => ({
+              pitch: prev.pitch + (corrections.pitch || 0),
+              roll: prev.roll + (corrections.roll || 0),
+              yaw: prev.yaw + (corrections.yaw || 0),
+            }));
+            setAltitude(prev => Math.max(0, prev + (corrections.throttle || 0)));
+            setGroundSpeed(prev => Math.max(0, prev + (corrections.forward || 0)));
+            setHeading(prev => {
+              const next = prev + (corrections.yaw || 0);
+              return ((next % 360) + 360) % 360;
+            });
+          }
           break;
       }
     };
@@ -152,19 +208,212 @@ export function TelemetryPanel() {
       groundSpeed?: number;
       position?: { lat: number; lng: number };
       motors?: MotorData[];
+      cpuTemp?: number;
+      vibrationX?: number;
+      vibrationY?: number;
+      vibrationZ?: number;
+      pressure?: number;
+      lidarRange?: number;
+      source?: string;
+      batteryPercent?: number;
+      batteryVoltage?: number;
+      batteryCurrent?: number;
+      gpsFixType?: number | string;
+      gpsStatus?: string;
+      gpsSatellites?: number;
     }>) => {
       const data = e.detail;
+      (window as any).__currentTelemetry = { ...(window as any).__currentTelemetry, ...data };
+      if (data.source !== 'sim') {
+        lastExternalTelemetryTsRef.current = Date.now();
+      }
       if (data.attitude) setAttitude(data.attitude);
       if (data.heading !== undefined) setHeading(data.heading);
       if (data.altitude !== undefined) setAltitude(data.altitude);
       if (data.groundSpeed !== undefined) setGroundSpeed(data.groundSpeed);
       if (data.position) setPosition(data.position);
       if (data.motors) setMotors(data.motors);
+      if (typeof data.batteryPercent === "number") {
+        setBatteryPercent(clamp(data.batteryPercent, 0, 100));
+      } else if (typeof data.batteryVoltage === "number") {
+        const inferred = clamp(((data.batteryVoltage - 13.2) / (16.8 - 13.2)) * 100, 0, 100);
+        setBatteryPercent(inferred);
+      }
+      if (typeof data.batteryVoltage === "number") {
+        setBatteryVoltage(data.batteryVoltage);
+      } else {
+        setBatteryVoltage(13.2 + (batteryPercentRef.current / 100) * (16.8 - 13.2));
+      }
+      if (typeof data.batteryCurrent === "number") setBatteryCurrent(Math.max(0, data.batteryCurrent));
+      if (typeof data.gpsSatellites === "number") setGpsSatellites(Math.max(0, Math.round(data.gpsSatellites)));
+      if (data.gpsStatus === "3d_fix" || data.gpsStatus === "2d_fix" || data.gpsStatus === "no_fix") {
+        setGpsStatus(data.gpsStatus);
+      } else if (data.gpsFixType === 3) {
+        setGpsStatus("3d_fix");
+      } else if (data.gpsFixType === 2) {
+        setGpsStatus("2d_fix");
+      } else if (data.gpsFixType === 0 || data.gpsFixType === "no_fix") {
+        setGpsStatus("no_fix");
+      }
+      setSensorHealth((prev) => {
+        const escTempFromMotors = data.motors?.length
+          ? Math.max(...data.motors.map((m) => m.temp ?? 0))
+          : prev.escTemp;
+        const vibrationMagnitude =
+          typeof data.vibrationX === "number" &&
+          typeof data.vibrationY === "number" &&
+          typeof data.vibrationZ === "number"
+            ? Math.sqrt(data.vibrationX ** 2 + data.vibrationY ** 2 + data.vibrationZ ** 2)
+            : prev.vibration;
+        return {
+          lidarRange: typeof data.lidarRange === "number" ? data.lidarRange : prev.lidarRange,
+          cpuTemp: typeof data.cpuTemp === "number" ? data.cpuTemp : prev.cpuTemp,
+          escTemp: typeof escTempFromMotors === "number" ? escTempFromMotors : prev.escTemp,
+          vibration: typeof vibrationMagnitude === "number" ? vibrationMagnitude : prev.vibration,
+          barometer: typeof data.pressure === "number" ? data.pressure : prev.barometer,
+          imuStatus: data.attitude ? "OK" : prev.imuStatus,
+          compassStatus: typeof data.heading === "number" ? "OK" : prev.compassStatus,
+        };
+      });
     };
 
     window.addEventListener('telemetry-update' as any, handleTelemetryUpdate);
     return () => window.removeEventListener('telemetry-update' as any, handleTelemetryUpdate);
   }, []);
+
+  // Pull environmental pressure/temperature when available to populate sensor tab.
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/bme688/read");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setSensorHealth((prev) => ({
+          ...prev,
+          barometer: typeof data.pressure === "number" ? data.pressure : prev.barometer,
+          cpuTemp:
+            typeof data.temperature_c === "number"
+              ? Math.max(prev.cpuTemp ?? 0, data.temperature_c)
+              : prev.cpuTemp,
+        }));
+      } catch {
+        // ignore polling errors
+      }
+    };
+    poll();
+    const timer = setInterval(poll, 8000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  // Local fallback telemetry simulation when no external stream is available.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!isArmed) return;
+      if (Date.now() - lastExternalTelemetryTsRef.current < 2000) return;
+
+      const altitudeStep = flightMode === 'takeoff' ? 1.2 : flightMode === 'landing' ? -1.1 : 0;
+      const nextAltitude = Math.max(0, altitude + altitudeStep);
+      const nextSpeed = flightMode === 'takeoff' || flightMode === 'flying' || flightMode === 'rtl' ? Math.max(2, groundSpeed) : Math.max(0, groundSpeed - 0.5);
+      const currentDrawA = flightMode === "idle" ? 0.4 : flightMode === "flying" ? 14 : flightMode === "rtl" ? 16 : 11;
+      const drainPctPerTick = currentDrawA / 65 / 4; // ~65A equivalent pack draw over 1s at 250ms tick
+      const nextBatteryPercent = clamp(batteryPercent - drainPctPerTick, 0, 100);
+      const nextBatteryVoltage = 13.2 + (nextBatteryPercent / 100) * (16.8 - 13.2);
+      const yawDelta = flightMode === 'rtl' ? 1.5 : 0.2;
+      const nextYaw = attitude.yaw + yawDelta;
+      const nextHeading = ((heading + yawDelta) % 360 + 360) % 360;
+
+      if (flightMode === 'takeoff' && nextAltitude > 8) {
+        setFlightMode('flying');
+      }
+      if (flightMode === 'landing' && nextAltitude <= 0.1) {
+        setFlightMode('idle');
+      }
+
+      const movementScale = nextSpeed * 0.00001;
+      const rad = (nextHeading * Math.PI) / 180;
+      let nextPosition = {
+        lat: position.lat + Math.cos(rad) * movementScale,
+        lng: position.lng + Math.sin(rad) * movementScale,
+      };
+
+      if (guidedTarget) {
+        const dLat = guidedTarget.lat - position.lat;
+        const dLng = guidedTarget.lng - position.lng;
+        const dist = Math.sqrt(dLat * dLat + dLng * dLng);
+        if (dist < 0.00001) {
+          setGuidedTarget(null);
+        } else {
+          const step = Math.min(0.15, movementScale / Math.max(dist, 0.0000001));
+          nextPosition = {
+            lat: position.lat + dLat * step,
+            lng: position.lng + dLng * step,
+          };
+        }
+      }
+
+      setBatteryPercent(nextBatteryPercent);
+      setBatteryVoltage(nextBatteryVoltage);
+      setBatteryCurrent(currentDrawA);
+      setGpsSatellites((prev) => (flightMode === "idle" ? Math.max(0, prev - 1) : Math.min(16, Math.max(8, prev + 1))));
+      setGpsStatus(flightMode === "idle" ? "no_fix" : "3d_fix");
+
+      window.dispatchEvent(
+        new CustomEvent('telemetry-update', {
+          detail: {
+            source: 'sim',
+            attitude: {
+              pitch: flightMode === 'takeoff' ? Math.max(0, 10 - nextAltitude) : attitude.pitch * 0.95,
+              roll: attitude.roll * 0.95,
+              yaw: nextYaw,
+            },
+            heading: nextHeading,
+            altitude: nextAltitude,
+            groundSpeed: nextSpeed,
+            position: nextPosition,
+            batteryPercent: nextBatteryPercent,
+            batteryVoltage: nextBatteryVoltage,
+            batteryCurrent: currentDrawA,
+            gpsStatus: flightMode === "idle" ? "no_fix" : "3d_fix",
+            gpsSatellites: flightMode === "idle" ? 0 : Math.min(16, Math.max(8, gpsSatellites)),
+            motors: motors.length
+              ? motors.map((m) => ({
+                  ...m,
+                  rpm: flightMode === 'idle' ? 0 : Math.max(1200, m.rpm || 1800),
+                  temp: Math.min(75, (m.temp || 25) + 0.2),
+                  current: flightMode === 'idle' ? 0 : Math.max(4, m.current || 6),
+                  status: 'ok' as const,
+                }))
+              : undefined,
+          },
+        }),
+      );
+      (window as any).__currentTelemetry = {
+        ...(window as any).__currentTelemetry,
+        source: 'sim',
+        attitude: {
+          pitch: flightMode === 'takeoff' ? Math.max(0, 10 - nextAltitude) : attitude.pitch * 0.95,
+          roll: attitude.roll * 0.95,
+          yaw: nextYaw,
+        },
+        heading: nextHeading,
+        altitude: nextAltitude,
+        groundSpeed: nextSpeed,
+        position: nextPosition,
+        batteryPercent: nextBatteryPercent,
+        batteryVoltage: nextBatteryVoltage,
+        batteryCurrent: currentDrawA,
+        gpsStatus: flightMode === "idle" ? "no_fix" : "3d_fix",
+        gpsSatellites: flightMode === "idle" ? 0 : Math.min(16, Math.max(8, gpsSatellites)),
+      };
+    }, 250);
+
+    return () => clearInterval(interval);
+  }, [isArmed, flightMode, altitude, groundSpeed, heading, attitude, position, motors, guidedTarget, batteryPercent, gpsSatellites]);
 
   // Update distance to home when position changes
   useEffect(() => {
@@ -255,6 +504,18 @@ export function TelemetryPanel() {
 
             <Separator />
 
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground uppercase">Battery</span>
+                <span className={batteryPercent <= 20 ? "font-mono text-red-500" : "font-mono text-emerald-500"}>
+                  {batteryPercent.toFixed(0)}% ({batteryVoltage.toFixed(1)}V)
+                </span>
+              </div>
+              <Progress value={batteryPercent} className="h-1 bg-muted" />
+            </div>
+
+            <Separator />
+
             {/* Attitude Values */}
             <div className="grid grid-cols-3 gap-2 text-center">
               <div className="p-2 bg-muted/20 rounded border border-border/50">
@@ -307,7 +568,13 @@ export function TelemetryPanel() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">GPS Fix:</span>
-                  <span className={isArmed ? "text-emerald-500" : "text-muted-foreground"}>{isArmed ? "3D FIX" : "NO FIX"}</span>
+                  <span className={gpsStatus === "3d_fix" ? "text-emerald-500" : gpsStatus === "2d_fix" ? "text-amber-500" : "text-muted-foreground"}>
+                    {gpsStatus.replace("_", " ").toUpperCase()}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Satellites:</span>
+                  <span className="text-foreground">{gpsSatellites || 0}</span>
                 </div>
               </div>
             </div>
@@ -397,15 +664,24 @@ export function TelemetryPanel() {
           <TabsContent value="sensors" className="flex-1 overflow-y-auto px-4 mt-2 space-y-4">
             <div className="space-y-3">
               <span className="text-xs text-muted-foreground uppercase font-bold">System Health</span>
-              <p className="text-xs text-muted-foreground italic">Waiting for sensor data...</p>
+              <p className="text-xs text-muted-foreground italic">
+                {(sensorHealth.cpuTemp || sensorHealth.lidarRange || sensorHealth.vibration)
+                  ? "Live sensor telemetry"
+                  : "Waiting for sensor data..."}
+              </p>
               
               <div className="space-y-1">
                 <div className="flex justify-between text-xs">
                   <span className="text-muted-foreground">LiDAR Range</span>
-                  <span className="font-mono text-muted-foreground">---</span>
+                  <span className="font-mono text-muted-foreground">
+                    {sensorHealth.lidarRange != null ? `${sensorHealth.lidarRange.toFixed(1)}m` : "---"}
+                  </span>
                 </div>
                 <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                  <div className="h-full bg-muted-foreground w-[0%]" />
+                  <div
+                    className="h-full bg-primary"
+                    style={{ width: `${sensorHealth.lidarRange != null ? Math.min(100, (sensorHealth.lidarRange / 50) * 100) : 0}%` }}
+                  />
                 </div>
               </div>
 
@@ -414,10 +690,15 @@ export function TelemetryPanel() {
                   <span className="text-muted-foreground flex items-center gap-1">
                     <Thermometer className="h-3 w-3" /> CPU Temp
                   </span>
-                  <span className="font-mono text-muted-foreground">---</span>
+                  <span className="font-mono text-muted-foreground">
+                    {sensorHealth.cpuTemp != null ? `${sensorHealth.cpuTemp.toFixed(1)}°C` : "---"}
+                  </span>
                 </div>
                 <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                  <div className="h-full bg-muted-foreground w-[0%]" />
+                  <div
+                    className="h-full bg-amber-500"
+                    style={{ width: `${sensorHealth.cpuTemp != null ? Math.min(100, (sensorHealth.cpuTemp / 90) * 100) : 0}%` }}
+                  />
                 </div>
               </div>
 
@@ -426,20 +707,30 @@ export function TelemetryPanel() {
                   <span className="text-muted-foreground flex items-center gap-1">
                     <Thermometer className="h-3 w-3" /> ESC Temp
                   </span>
-                  <span className="font-mono text-muted-foreground">---</span>
+                  <span className="font-mono text-muted-foreground">
+                    {sensorHealth.escTemp != null ? `${sensorHealth.escTemp.toFixed(1)}°C` : "---"}
+                  </span>
                 </div>
                 <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                  <div className="h-full bg-muted-foreground w-[0%]" />
+                  <div
+                    className="h-full bg-amber-400"
+                    style={{ width: `${sensorHealth.escTemp != null ? Math.min(100, (sensorHealth.escTemp / 90) * 100) : 0}%` }}
+                  />
                 </div>
               </div>
               
               <div className="space-y-1">
                 <div className="flex justify-between text-xs">
                   <span className="text-muted-foreground">Vibration</span>
-                  <span className="font-mono text-muted-foreground">---</span>
+                  <span className="font-mono text-muted-foreground">
+                    {sensorHealth.vibration != null ? sensorHealth.vibration.toFixed(2) : "---"}
+                  </span>
                 </div>
                 <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                  <div className="h-full bg-muted-foreground w-[0%]" />
+                  <div
+                    className="h-full bg-destructive"
+                    style={{ width: `${sensorHealth.vibration != null ? Math.min(100, sensorHealth.vibration * 100) : 0}%` }}
+                  />
                 </div>
               </div>
             </div>
@@ -452,15 +743,17 @@ export function TelemetryPanel() {
               <div className="space-y-2 text-xs">
                 <div className="flex justify-between p-2 bg-muted/20 rounded">
                   <span className="text-muted-foreground">Barometer</span>
-                  <span className="font-mono text-muted-foreground">---</span>
+                  <span className="font-mono text-muted-foreground">
+                    {sensorHealth.barometer != null ? `${sensorHealth.barometer.toFixed(1)} hPa` : "---"}
+                  </span>
                 </div>
                 <div className="flex justify-between p-2 bg-muted/20 rounded">
                   <span className="text-muted-foreground">IMU Status</span>
-                  <span className="font-mono text-muted-foreground">NO DATA</span>
+                  <span className="font-mono text-muted-foreground">{sensorHealth.imuStatus}</span>
                 </div>
                 <div className="flex justify-between p-2 bg-muted/20 rounded">
                   <span className="text-muted-foreground">Compass</span>
-                  <span className="font-mono text-muted-foreground">NO DATA</span>
+                  <span className="font-mono text-muted-foreground">{sensorHealth.compassStatus}</span>
                 </div>
               </div>
             </div>

@@ -8,12 +8,16 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
 import { Plus, Trash2, Save, Play, MapPin, Navigation, Search, AlertTriangle, Clock, Bell, RotateCcw, Radar, Edit, X, Check, Lock, Hand } from "lucide-react";
 import { useState, useCallback, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { MissionMap } from "@/components/map/MissionMap";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useNoFlyZones } from "@/hooks/useNoFlyZones";
+import { planRouteAvoidingNoFlyZones, segmentIntersectsNoFlyZones } from "@/lib/noFlyZones";
+import type { NoFlyZone } from "@/lib/noFlyZones";
 
 interface Mission {
   id: number;
@@ -75,6 +79,80 @@ export function MissionPlanningPanel() {
     patrolRadius: "20"
   });
   const [isExecuting, setIsExecuting] = useState(false);
+  const [autoAvoidNoFlyZones, setAutoAvoidNoFlyZones] = useState(true);
+  const [overrideNoFlyRestrictions, setOverrideNoFlyRestrictions] = useState(false);
+  const [hasRestrictedAirspaceAuthorization, setHasRestrictedAirspaceAuthorization] = useState(false);
+  const [authorizationCode, setAuthorizationCode] = useState("");
+  const [authorizationExpiresAt, setAuthorizationExpiresAt] = useState<string | null>(null);
+  const [validatingAuthorization, setValidatingAuthorization] = useState(false);
+  const [partTimeRestrictedZones, setPartTimeRestrictedZones] = useState<NoFlyZone[]>([]);
+  const noFlyZones = useNoFlyZones();
+
+  useEffect(() => {
+    let active = true;
+
+    const parsePartTimeRestrictions = async () => {
+      try {
+        const res = await fetch("/airspace/Part_Time_National_Security_UAS_Flight_Restrictions.geojson");
+        if (!res.ok) return;
+        const geojson = await res.json();
+        if (!active) return;
+
+        const now = new Date();
+        const features = Array.isArray(geojson?.features) ? geojson.features : [];
+        const zones: NoFlyZone[] = [];
+
+        for (const feature of features) {
+          const props = feature?.properties || {};
+          const alertTime = props.ALERTTIME ? new Date(props.ALERTTIME) : null;
+          const activeTime = props.ACTIVETIME ? new Date(props.ACTIVETIME) : alertTime;
+          const endTime = props.ENDTIME ? new Date(props.ENDTIME) : null;
+          const isActiveNow =
+            (!activeTime || activeTime <= now) &&
+            (!endTime || endTime >= now);
+
+          if (!isActiveNow) continue;
+
+          const id = String(props.FAA_ID || props.OBJECTID || `part-time-${zones.length + 1}`);
+          const name = String(props.Facility || props.Base || "Part-Time Restriction");
+          const geometry = feature?.geometry;
+
+          if (geometry?.type === "Polygon" && Array.isArray(geometry.coordinates?.[0])) {
+            const points = geometry.coordinates[0]
+              .map((coord: any) => {
+                if (!Array.isArray(coord) || coord.length < 2) return null;
+                return { lat: Number(coord[1]), lng: Number(coord[0]) };
+              })
+              .filter((p): p is { lat: number; lng: number } => Boolean(p && Number.isFinite(p.lat) && Number.isFinite(p.lng)));
+            if (points.length >= 3) {
+              zones.push({
+                id,
+                name: `${name} (Part-Time Active)`,
+                type: "polygon",
+                enabled: true,
+                action: "warn",
+                points,
+              });
+            }
+          }
+        }
+
+        setPartTimeRestrictedZones(zones);
+      } catch {
+        if (active) setPartTimeRestrictedZones([]);
+      }
+    };
+
+    void parsePartTimeRestrictions();
+    const timer = setInterval(() => {
+      void parsePartTimeRestrictions();
+    }, 5 * 60 * 1000);
+
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     const handleMissionUpdated = (e: Event) => {
@@ -101,6 +179,8 @@ export function MissionPlanningPanel() {
     queryKey: ["/api/missions", selectedMission, "waypoints"],
     enabled: !!selectedMission,
   });
+
+  const selectedMissionData = missions.find(m => m.id === selectedMission);
 
   const createMission = useMutation({
     mutationFn: async (mission: any) => {
@@ -132,19 +212,32 @@ export function MissionPlanningPanel() {
     },
   });
 
-  const addWaypoint = useMutation({
-    mutationFn: async (waypoint: any) => {
-      const res = await fetch("/api/waypoints", {
-        method: "POST",
+  const saveMission = useMutation({
+    mutationFn: async (mission: Mission) => {
+      const res = await fetch(`/api/missions/${mission.id}`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(waypoint),
+        body: JSON.stringify({
+          name: mission.name,
+          description: mission.description,
+          homeLatitude: mission.homeLatitude,
+          homeLongitude: mission.homeLongitude,
+          homeAltitude: mission.homeAltitude,
+          status: mission.status,
+        }),
       });
-      if (!res.ok) throw new Error("Failed to add waypoint");
+      if (!res.ok) throw new Error("Failed to save mission");
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/missions", selectedMission, "waypoints"] });
-      toast.success("Waypoint added");
+      queryClient.invalidateQueries({ queryKey: ["/api/missions"] });
+      if (selectedMission) {
+        queryClient.invalidateQueries({ queryKey: ["/api/missions", selectedMission, "waypoints"] });
+      }
+      toast.success("Mission saved");
+    },
+    onError: () => {
+      toast.error("Failed to save mission");
     },
   });
 
@@ -174,6 +267,163 @@ export function MissionPlanningPanel() {
     },
   });
 
+  const createWaypointDirect = async (payload: any) => {
+    const res = await fetch("/api/waypoints", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      throw new Error("Failed to add waypoint");
+    }
+  };
+
+  const validateAuthorizationCode = async () => {
+    if (!authorizationCode.trim()) {
+      toast.error("Authorization code is required");
+      return;
+    }
+    setValidatingAuthorization(true);
+    try {
+      const res = await fetch("/api/airspace/authorization/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: authorizationCode.trim() }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || !payload.authorized) {
+        setHasRestrictedAirspaceAuthorization(false);
+        setAuthorizationExpiresAt(null);
+        setOverrideNoFlyRestrictions(false);
+        toast.error(payload.error || "Authorization validation failed");
+        return;
+      }
+      setHasRestrictedAirspaceAuthorization(true);
+      setAuthorizationExpiresAt(payload.expiresAt || null);
+      toast.success("Restricted-airspace authorization granted");
+    } catch {
+      setHasRestrictedAirspaceAuthorization(false);
+      setAuthorizationExpiresAt(null);
+      setOverrideNoFlyRestrictions(false);
+      toast.error("Authorization validation failed");
+    } finally {
+      setValidatingAuthorization(false);
+    }
+  };
+
+  const createWaypointsForDestination = useCallback(async (lat: number, lng: number, address?: string | null) => {
+    if (!selectedMission || !selectedMissionData) return;
+
+    const startPoint =
+      waypoints.length > 0
+        ? { lat: waypoints[waypoints.length - 1].latitude, lng: waypoints[waypoints.length - 1].longitude }
+        : { lat: selectedMissionData.homeLatitude, lng: selectedMissionData.homeLongitude };
+    const destination = { lat, lng };
+
+    const targetAltitude = parseFloat(coordAlt) || 50;
+
+    // Pull fresh restricted-airspace data for this route corridor.
+    const minLat = Math.min(startPoint.lat, destination.lat) - 0.05;
+    const maxLat = Math.max(startPoint.lat, destination.lat) + 0.05;
+    const minLng = Math.min(startPoint.lng, destination.lng) - 0.05;
+    const maxLng = Math.max(startPoint.lng, destination.lng) + 0.05;
+    const liveResp = await fetch(
+      `/api/airspace/restricted?bbox=${minLng},${minLat},${maxLng},${maxLat}`,
+    ).catch(() => null);
+    const liveData = liveResp ? await liveResp.json().catch(() => null) : null;
+    const liveZones = Array.isArray(liveData?.zones) ? liveData.zones : [];
+    const staticResp = await fetch(
+      `/api/airspace/static-restricted?bbox=${minLng},${minLat},${maxLng},${maxLat}`,
+    ).catch(() => null);
+    const staticData = staticResp && staticResp.ok ? await staticResp.json().catch(() => null) : null;
+    const staticZones = Array.isArray(staticData?.zones) ? staticData.zones : [];
+    const effectiveZones = [...noFlyZones, ...partTimeRestrictedZones, ...staticZones, ...liveZones];
+    const authorizedForRestrictedAirspace =
+      hasRestrictedAirspaceAuthorization && overrideNoFlyRestrictions;
+
+    if (liveResp && !liveResp.ok && effectiveZones.length === 0) {
+      toast.error("Restricted-airspace provider unavailable. Routing aborted for safety.");
+      return;
+    }
+
+    if (overrideNoFlyRestrictions && !hasRestrictedAirspaceAuthorization) {
+      toast.error("Restricted-airspace override requires authorization.");
+      return;
+    }
+
+    const directPathCrossesRestricted = segmentIntersectsNoFlyZones(startPoint, destination, effectiveZones);
+
+    let path = [startPoint, destination];
+    if (autoAvoidNoFlyZones && !authorizedForRestrictedAirspace) {
+      const routed = planRouteAvoidingNoFlyZones(startPoint, destination, effectiveZones, {
+        clearanceMeters: 40,
+        angularSamples: 14,
+      });
+
+      if (!routed || routed.length < 2) {
+        toast.error("No safe route found around no-fly zones. Enable override to allow direct routing.");
+        return;
+      }
+      path = routed;
+    }
+
+    const intermediate = path.slice(1, -1);
+    const pointsToCreate = [...intermediate, destination];
+    const baseOrder = waypoints.length + 1;
+
+    for (let idx = 0; idx < pointsToCreate.length; idx++) {
+      const point = pointsToCreate[idx];
+      const isFinal = idx === pointsToCreate.length - 1;
+      const actionParams =
+        isFinal && selectedAction === "hover"
+          ? { hoverTime: parseInt(hoverTime) }
+          : isFinal && selectedAction === "patrol"
+            ? { patrolRadius: parseInt(patrolRadius) }
+            : isFinal && selectedAction === "alert"
+              ? { message: "Waypoint reached" }
+              : {};
+
+      await createWaypointDirect({
+        missionId: selectedMission,
+        order: baseOrder + idx,
+        latitude: point.lat,
+        longitude: point.lng,
+        altitude: targetAltitude,
+        speed: 5,
+        action: isFinal ? selectedAction : "flythrough",
+        actionParams,
+        address: isFinal ? address || null : null,
+      });
+    }
+
+    queryClient.invalidateQueries({ queryKey: ["/api/missions", selectedMission, "waypoints"] });
+
+    if (authorizedForRestrictedAirspace && directPathCrossesRestricted) {
+      toast.warning("Route override active: direct path enters no-fly airspace.");
+      return;
+    }
+
+    if (intermediate.length > 0) {
+      toast.success(`Route planned around restricted airspace with ${intermediate.length} detour waypoint(s).`);
+    } else {
+      toast.success("Waypoint added");
+    }
+  }, [
+    selectedMission,
+    selectedMissionData,
+    waypoints,
+    coordAlt,
+    noFlyZones,
+    partTimeRestrictedZones,
+    autoAvoidNoFlyZones,
+    overrideNoFlyRestrictions,
+    hasRestrictedAirspaceAuthorization,
+    selectedAction,
+    hoverTime,
+    patrolRadius,
+    queryClient,
+  ]);
+
   const searchAddress = async () => {
     if (!addressInput.trim()) {
       toast.error("Please enter an address");
@@ -201,52 +451,32 @@ export function MissionPlanningPanel() {
     }
   };
 
-  const selectAddressResult = (result: any) => {
+  const selectAddressResult = async (result: any) => {
     const lat = parseFloat(result.lat);
     const lon = parseFloat(result.lon);
     
     if (selectedMission) {
-      const actionParams = selectedAction === 'hover' ? { hoverTime: parseInt(hoverTime) } :
-                           selectedAction === 'patrol' ? { patrolRadius: parseInt(patrolRadius) } :
-                           selectedAction === 'alert' ? { message: 'Waypoint reached' } : {};
-      
-      addWaypoint.mutate({
-        missionId: selectedMission,
-        order: waypoints.length + 1,
-        latitude: lat,
-        longitude: lon,
-        altitude: parseFloat(coordAlt) || 50,
-        speed: 5,
-        action: selectedAction,
-        actionParams,
-        address: result.display_name,
-      });
-      
+      try {
+        await createWaypointsForDestination(lat, lon, result.display_name);
+      } catch {
+        toast.error("Failed to add waypoint");
+      }
       setAddressInput("");
       setAddressSuggestions([]);
     }
   };
 
-  const handleMapClick = useCallback((lat: number, lng: number) => {
+  const handleMapClick = useCallback(async (lat: number, lng: number) => {
     if (selectedMission && targetMethod === "map") {
-      const actionParams = selectedAction === 'hover' ? { hoverTime: parseInt(hoverTime) } :
-                           selectedAction === 'patrol' ? { patrolRadius: parseInt(patrolRadius) } :
-                           selectedAction === 'alert' ? { message: 'Waypoint reached' } : {};
-      
-      addWaypoint.mutate({
-        missionId: selectedMission,
-        order: waypoints.length + 1,
-        latitude: lat,
-        longitude: lng,
-        altitude: parseFloat(coordAlt) || 50,
-        speed: 5,
-        action: selectedAction,
-        actionParams,
-      });
+      try {
+        await createWaypointsForDestination(lat, lng, null);
+      } catch {
+        toast.error("Failed to add waypoint");
+      }
     }
-  }, [selectedMission, waypoints.length, selectedAction, hoverTime, patrolRadius, coordAlt, targetMethod, addWaypoint]);
+  }, [selectedMission, targetMethod, createWaypointsForDestination]);
 
-  const handleAddWaypointFromCoords = () => {
+  const handleAddWaypointFromCoords = async () => {
     const lat = parseFloat(coordLat);
     const lon = parseFloat(coordLon);
     
@@ -256,26 +486,15 @@ export function MissionPlanningPanel() {
     }
     
     if (selectedMission) {
-      const actionParams = selectedAction === 'hover' ? { hoverTime: parseInt(hoverTime) } :
-                           selectedAction === 'patrol' ? { patrolRadius: parseInt(patrolRadius) } :
-                           selectedAction === 'alert' ? { message: 'Waypoint reached' } : {};
-      
-      addWaypoint.mutate({
-        missionId: selectedMission,
-        order: waypoints.length + 1,
-        latitude: lat,
-        longitude: lon,
-        altitude: parseFloat(coordAlt) || 50,
-        speed: 5,
-        action: selectedAction,
-        actionParams,
-      });
+      try {
+        await createWaypointsForDestination(lat, lon, null);
+      } catch {
+        toast.error("Failed to add waypoint");
+      }
       setCoordLat("");
       setCoordLon("");
     }
   };
-
-  const selectedMissionData = missions.find(m => m.id === selectedMission);
 
   const startEditWaypoint = (wp: Waypoint) => {
     setEditingWaypoint(wp);
@@ -344,7 +563,13 @@ export function MissionPlanningPanel() {
           lat: selectedMissionData.homeLatitude,
           lng: selectedMissionData.homeLongitude,
           alt: selectedMissionData.homeAltitude
-        }
+        },
+        routePolicy: {
+          autoAvoidNoFlyZones,
+          overrideNoFlyRestrictions,
+          hasRestrictedAirspaceAuthorization,
+          partTimeRestrictionsActive: partTimeRestrictedZones.length > 0,
+        },
       }
     }));
     
@@ -366,6 +591,14 @@ export function MissionPlanningPanel() {
     }));
     setIsExecuting(false);
     toast.info("Mission stopped - landing");
+  };
+
+  const handleSaveMission = () => {
+    if (!selectedMissionData) {
+      toast.error("No mission selected");
+      return;
+    }
+    saveMission.mutate(selectedMissionData);
   };
 
   // Show permission denied if user doesn't have access
@@ -480,9 +713,15 @@ export function MissionPlanningPanel() {
                   <p className="text-xs text-muted-foreground">{waypoints.length} waypoints</p>
                 </div>
                 <div className="flex gap-2">
-                  <Button variant="outline" size="sm" data-testid="button-save-mission">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSaveMission}
+                    disabled={saveMission.isPending}
+                    data-testid="button-save-mission"
+                  >
                     <Save className="h-4 w-4 mr-1" />
-                    Save
+                    {saveMission.isPending ? "Saving..." : "Save"}
                   </Button>
                   {isExecuting ? (
                     <Button 
@@ -590,6 +829,61 @@ export function MissionPlanningPanel() {
                       </p>
                     </TabsContent>
                   </Tabs>
+
+                  <Separator className="my-3" />
+
+                  <div className="space-y-2 rounded-md border border-border p-2">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs">Auto-Avoid No-Fly Zones</Label>
+                      <Switch checked={autoAvoidNoFlyZones} onCheckedChange={setAutoAvoidNoFlyZones} />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Restricted-Airspace Authorization Code</Label>
+                      <div className="flex gap-1">
+                        <Input
+                          value={authorizationCode}
+                          onChange={(e) => setAuthorizationCode(e.target.value)}
+                          placeholder="Enter authorization code"
+                          className="h-8 text-xs"
+                        />
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 text-xs"
+                          onClick={validateAuthorizationCode}
+                          disabled={validatingAuthorization}
+                        >
+                          {validatingAuthorization ? "Validating..." : "Validate"}
+                        </Button>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label className="text-xs">Override Restrictions</Label>
+                      <Switch
+                        checked={overrideNoFlyRestrictions}
+                        disabled={!hasRestrictedAirspaceAuthorization}
+                        onCheckedChange={setOverrideNoFlyRestrictions}
+                      />
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      With auto-avoid enabled, destination entry inserts detour waypoints around restricted and no-fly airspace.
+                    </p>
+                    {partTimeRestrictedZones.length > 0 && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        Part-time restrictions active now: {partTimeRestrictedZones.length}
+                      </Badge>
+                    )}
+                    {hasRestrictedAirspaceAuthorization && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        Authorization active{authorizationExpiresAt ? ` until ${new Date(authorizationExpiresAt).toLocaleString()}` : ""}
+                      </Badge>
+                    )}
+                    {overrideNoFlyRestrictions && (
+                      <Badge variant="destructive" className="text-[10px]">
+                        Override active: route may pass through no-fly zones
+                      </Badge>
+                    )}
+                  </div>
 
                   <Separator className="my-3" />
 

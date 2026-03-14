@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import { Hand, ArrowUpCircle, ArrowDownCircle, Power, AlertOctagon, Navigation, Zap, Lock, Circle } from "lucide-react";
+import { Hand, ArrowUpCircle, ArrowDownCircle, Power, AlertOctagon, Navigation, Zap, Lock, Circle, Route } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -293,7 +293,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
       {/* Flight Modes */}
       <div className="flex flex-col gap-1 sm:gap-2 flex-1 min-w-0">
         <span className="text-[8px] sm:text-[10px] font-mono text-muted-foreground uppercase tracking-widest">Flight Controls</span>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 h-full">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3 h-full">
           <Button 
             variant="secondary" 
             className={cn(
@@ -377,6 +377,27 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
           >
             <AlertOctagon className="h-5 w-5" />
             <span className="text-[10px] font-mono font-bold">ABORT</span>
+          </Button>
+
+          <Button
+            variant="secondary"
+            className={cn(
+              "h-full flex flex-col gap-1 hover:bg-primary/20 hover:text-primary transition-colors p-2",
+              !canFlightControl && "opacity-50 cursor-not-allowed"
+            )}
+            disabled={!isArmed || !canFlightControl}
+            onClick={() => {
+              if (!canFlightControl) {
+                toast.error("You don't have flight control permission");
+                return;
+              }
+              toast.info("Starting GPS-denied backtrace");
+              window.dispatchEvent(new CustomEvent('flight-command', { detail: { command: 'backtrace' } }));
+            }}
+            data-testid="button-backtrace"
+          >
+            <Route className="h-5 w-5" />
+            <span className="text-[10px] font-mono">BACKTRACE</span>
           </Button>
         </div>
       </div>

@@ -209,6 +209,24 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           setMessages(prev => prev.map(m => 
             m.id === data.id ? { ...m, deleted: true, content: "[Message deleted]" } : m
           ));
+        } else if (type === 'telemetry' || type === 'telemetry_recorded') {
+          const normalized = {
+            ...data,
+            position: data.position || (
+              typeof data.latitude === 'number' && typeof data.longitude === 'number'
+                ? { lat: data.latitude, lng: data.longitude }
+                : undefined
+            ),
+            heading: data.heading ?? data.yaw ?? 0,
+            groundSpeed: data.groundSpeed ?? data.speed ?? 0,
+            source: 'ws',
+          };
+          (window as any).__currentTelemetry = normalized;
+          window.dispatchEvent(new CustomEvent('telemetry-update', { detail: normalized }));
+        } else if (type === 'sensor_data') {
+          window.dispatchEvent(new CustomEvent('sensor-update', { detail: data }));
+        } else if (type === 'motor_telemetry') {
+          window.dispatchEvent(new CustomEvent('motor-telemetry-update', { detail: data }));
         }
       } catch (e) {
         // Ignore parse errors

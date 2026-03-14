@@ -6,7 +6,7 @@ import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { Volume2, Mic, Play, Square, MessageSquare, Plus, Trash2, Check, Settings2, Radio, Loader2, Usb, Bell, Speaker, Lock } from "lucide-react";
+import { Volume2, Mic, Play, Square, MessageSquare, Plus, Trash2, Check, Radio, Loader2, Usb, Bell, Speaker, Lock } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -31,6 +31,23 @@ interface VoiceOption {
   name: string;
   lang: string;
   voiceURI: string;
+}
+
+interface AudioStatusResponse {
+  success: boolean;
+  state: {
+    deviceType: AudioDevice;
+    volume: number;
+    live: {
+      active: boolean;
+      startedAt: string | null;
+    };
+    droneMic: {
+      enabled: boolean;
+      listening: boolean;
+      volume: number;
+    };
+  };
 }
 
 export function SpeakerPanel() {
@@ -62,92 +79,56 @@ export function SpeakerPanel() {
   const [droneMicVolume, setDroneMicVolume] = useState([70]);
   const [isListeningFromDrone, setIsListeningFromDrone] = useState(false);
   const [droneMicStatus, setDroneMicStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
+  const micStreamRef = useRef<MediaStream | null>(null);
+
+  const apiJson = async (url: string, init?: RequestInit) => {
+    const response = await fetch(url, init);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `Request failed (${response.status})`);
+    }
+    return response.json();
+  };
+
+  const loadAudioStatus = async () => {
+    const status = await apiJson("/api/audio/status") as AudioStatusResponse;
+    setAudioDevice(status.state.deviceType);
+    setVolume([status.state.volume]);
+    setIsRecording(status.state.live.active);
+    setDroneMicEnabled(status.state.droneMic.enabled);
+    setIsListeningFromDrone(status.state.droneMic.listening);
+    setDroneMicVolume([status.state.droneMic.volume]);
+    setDroneMicStatus(status.state.droneMic.enabled ? "connected" : "disconnected");
+  };
 
   const playBuzzerTone = async (toneId: string) => {
-    setBuzzerPlaying(true);
-    toast.success(`Playing ${toneId} tone on Orange Cube+ buzzer`);
-    
-    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const oscillator = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
-    
-    oscillator.connect(gainNode);
-    gainNode.connect(audioContext.destination);
-    gainNode.gain.value = volume[0] / 100;
-    
-    switch (toneId) {
-      case 'alert':
-        oscillator.frequency.value = 880;
-        oscillator.type = 'square';
-        oscillator.start();
-        setTimeout(() => oscillator.stop(), 200);
-        break;
-      case 'warning':
-        oscillator.frequency.value = 440;
-        oscillator.type = 'sawtooth';
-        oscillator.start();
-        const warningInterval = setInterval(() => {
-          oscillator.frequency.value = oscillator.frequency.value === 440 ? 880 : 440;
-        }, 200);
-        setTimeout(() => { oscillator.stop(); clearInterval(warningInterval); }, 1000);
-        break;
-      case 'success':
-        oscillator.frequency.value = 523;
-        oscillator.type = 'sine';
-        oscillator.start();
-        setTimeout(() => oscillator.frequency.value = 659, 100);
-        setTimeout(() => oscillator.frequency.value = 784, 200);
-        setTimeout(() => oscillator.stop(), 400);
-        break;
-      case 'startup':
-        oscillator.frequency.value = 262;
-        oscillator.type = 'sine';
-        oscillator.start();
-        setTimeout(() => oscillator.frequency.value = 330, 150);
-        setTimeout(() => oscillator.frequency.value = 392, 300);
-        setTimeout(() => oscillator.frequency.value = 523, 450);
-        setTimeout(() => oscillator.stop(), 600);
-        break;
-      case 'landing':
-        oscillator.frequency.value = 1000;
-        oscillator.type = 'square';
-        oscillator.start();
-        const landingInterval = setInterval(() => {
-          oscillator.frequency.value = oscillator.frequency.value === 1000 ? 500 : 1000;
-        }, 500);
-        setTimeout(() => { oscillator.stop(); clearInterval(landingInterval); }, 2000);
-        break;
-      case 'emergency':
-        oscillator.frequency.value = 1500;
-        oscillator.type = 'square';
-        oscillator.start();
-        const emergencyInterval = setInterval(() => {
-          oscillator.frequency.value = oscillator.frequency.value === 1500 ? 2000 : 1500;
-        }, 100);
-        setTimeout(() => { oscillator.stop(); clearInterval(emergencyInterval); }, 3000);
-        break;
-      default:
-        oscillator.frequency.value = 440;
-        oscillator.type = 'sine';
-        oscillator.start();
-        setTimeout(() => oscillator.stop(), 500);
+    try {
+      setBuzzerPlaying(true);
+      await apiJson("/api/audio/buzzer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tone: toneId, volume: volume[0] }),
+      });
+      toast.success(`Playing ${toneId} tone on Orange Cube+ buzzer`);
+    } catch (error: any) {
+      toast.error(error.message || "Failed to trigger buzzer");
+    } finally {
+      setBuzzerPlaying(false);
     }
-    
-    await new Promise(resolve => setTimeout(resolve, 500));
-    setBuzzerPlaying(false);
   };
 
   const detectUsbDevices = async () => {
-    const mockDevices = [
-      'USB Audio Device (Generic)',
-      'Raspberry Pi Audio',
-      'External Speaker (USB)',
-    ];
-    setUsbDevices(mockDevices);
-    if (mockDevices.length > 0 && !selectedUsbDevice) {
-      setSelectedUsbDevice(mockDevices[0]);
+    try {
+      const result = await apiJson("/api/audio/output/devices");
+      const devices: string[] = Array.isArray(result.devices) ? result.devices : [];
+      setUsbDevices(devices);
+      if (devices.length > 0 && !selectedUsbDevice) {
+        setSelectedUsbDevice(devices[0]);
+      }
+      toast.success(`Found ${devices.length} audio device${devices.length === 1 ? "" : "s"}`);
+    } catch (error: any) {
+      toast.error(error.message || "Failed to detect devices");
     }
-    toast.success(`Found ${mockDevices.length} USB audio devices`);
   };
 
   useEffect(() => {
@@ -163,7 +144,55 @@ export function SpeakerPanel() {
 
     loadVoices();
     speechSynthesis.onvoiceschanged = loadVoices;
+    loadAudioStatus().catch(() => {
+      // no-op: panel remains operational with local defaults
+    });
+    detectUsbDevices().catch(() => {
+      // no-op for offline fallback
+    });
+    return () => {
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach((track) => track.stop());
+        micStreamRef.current = null;
+      }
+    };
   }, []);
+
+  useEffect(() => {
+    if (audioDevice === "usb" && selectedUsbDevice) {
+      apiJson("/api/audio/output/select", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deviceType: "usb",
+          deviceId: selectedUsbDevice,
+          volume: volume[0],
+        }),
+      }).catch(() => {});
+      return;
+    }
+    apiJson("/api/audio/output/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceType: audioDevice,
+        deviceId: audioDevice === "gpio" ? "gpio-default" : audioDevice,
+        volume: volume[0],
+      }),
+    }).catch(() => {});
+  }, [audioDevice, selectedUsbDevice]);
+
+  useEffect(() => {
+    apiJson("/api/audio/output/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        deviceType: audioDevice,
+        deviceId: audioDevice === "usb" ? selectedUsbDevice || "usb-default" : audioDevice,
+        volume: volume[0],
+      }),
+    }).catch(() => {});
+  }, [volume]);
 
   const getSelectedVoice = () => {
     const voices = speechSynthesis.getVoices();
@@ -236,31 +265,65 @@ export function SpeakerPanel() {
       return;
     }
     
-    setIsBroadcasting(true);
-    toast.success("Broadcasting to drone speaker...");
-    
-    speakText(ttsMessage, false);
-    
-    await new Promise(resolve => setTimeout(resolve, 2000 + ttsMessage.length * 50));
-    
-    setIsBroadcasting(false);
-    toast.info("Broadcast complete");
+    try {
+      setIsBroadcasting(true);
+      const result = await apiJson("/api/audio/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: ttsMessage,
+          rate: speechRate[0],
+          pitch: pitch[0],
+          volume: volume[0],
+          voiceType,
+          preview: false,
+        }),
+      });
+
+      toast.success(
+        result.playedLocally
+          ? "Broadcast sent and played on local audio backend"
+          : "Broadcast queued (audio backend in simulated mode)",
+      );
+    } catch (error: any) {
+      toast.error(error.message || "Broadcast failed");
+    } finally {
+      setIsBroadcasting(false);
+    }
   };
 
   const handleQuickMessage = async (message: string) => {
-    setIsBroadcasting(true);
-    toast.success(`Broadcasting: "${message}"`);
-    
-    speakText(message, false);
-    
-    await new Promise(resolve => setTimeout(resolve, 2000 + message.length * 50));
-    
-    setIsBroadcasting(false);
+    try {
+      setIsBroadcasting(true);
+      await apiJson("/api/audio/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: message,
+          rate: speechRate[0],
+          pitch: pitch[0],
+          volume: volume[0],
+          voiceType,
+          preview: false,
+        }),
+      });
+      toast.success(`Broadcasting: "${message}"`);
+    } catch (error: any) {
+      toast.error(error.message || "Quick message broadcast failed");
+    } finally {
+      setIsBroadcasting(false);
+    }
   };
 
   const handleStartRecording = async () => {
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      micStreamRef.current = stream;
+      await apiJson("/api/audio/live/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: "operator-mic", deviceType: audioDevice }),
+      });
       setIsRecording(true);
       toast.success("Live broadcast started - speak into microphone");
     } catch (error) {
@@ -268,7 +331,12 @@ export function SpeakerPanel() {
     }
   };
 
-  const handleStopRecording = () => {
+  const handleStopRecording = async () => {
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach((track) => track.stop());
+      micStreamRef.current = null;
+    }
+    await apiJson("/api/audio/live/stop", { method: "POST" }).catch(() => {});
     setIsRecording(false);
     toast.info("Live broadcast stopped");
   };
@@ -288,6 +356,66 @@ export function SpeakerPanel() {
     setQuickMessages(quickMessages.filter(m => m.id !== id));
     toast.info("Quick message removed");
   };
+
+  const handleToggleDroneMic = async () => {
+    try {
+      if (droneMicEnabled) {
+        await apiJson("/api/audio/drone-mic", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: false, listening: false, volume: droneMicVolume[0] }),
+        });
+        setDroneMicEnabled(false);
+        setIsListeningFromDrone(false);
+        setDroneMicStatus("disconnected");
+        toast.info("Drone microphone disconnected");
+      } else {
+        setDroneMicStatus("connecting");
+        await apiJson("/api/audio/drone-mic", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: true, listening: false, volume: droneMicVolume[0] }),
+        });
+        setDroneMicEnabled(true);
+        setDroneMicStatus("connected");
+        toast.success("Drone microphone connected");
+      }
+    } catch (error: any) {
+      setDroneMicStatus("disconnected");
+      toast.error(error.message || "Failed to update drone microphone state");
+    }
+  };
+
+  const handleToggleListenDrone = async () => {
+    const nextListeningState = !isListeningFromDrone;
+    try {
+      await apiJson("/api/audio/drone-mic", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          enabled: true,
+          listening: nextListeningState,
+          volume: droneMicVolume[0],
+        }),
+      });
+      setIsListeningFromDrone(nextListeningState);
+    } catch (error: any) {
+      toast.error(error.message || "Failed to change drone listen state");
+    }
+  };
+
+  useEffect(() => {
+    if (!droneMicEnabled) return;
+    apiJson("/api/audio/drone-mic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        enabled: true,
+        listening: isListeningFromDrone,
+        volume: droneMicVolume[0],
+      }),
+    }).catch(() => {});
+  }, [droneMicVolume]);
 
   // Show permission denied if user doesn't have access
   if (!canBroadcast) {
@@ -478,22 +606,7 @@ export function SpeakerPanel() {
             </div>
             <Button
               variant={droneMicEnabled ? "destructive" : "default"}
-              onClick={() => {
-                if (droneMicEnabled) {
-                  setDroneMicEnabled(false);
-                  setDroneMicStatus('disconnected');
-                  setIsListeningFromDrone(false);
-                  toast.info("Drone microphone disconnected");
-                } else {
-                  setDroneMicStatus('connecting');
-                  toast.info("Connecting to drone microphone...");
-                  setTimeout(() => {
-                    setDroneMicEnabled(true);
-                    setDroneMicStatus('connected');
-                    toast.success("Drone microphone connected");
-                  }, 1500);
-                }
-              }}
+              onClick={handleToggleDroneMic}
               data-testid="button-toggle-drone-mic"
             >
               {droneMicStatus === 'connecting' ? (
@@ -513,7 +626,7 @@ export function SpeakerPanel() {
                   size="lg"
                   variant={isListeningFromDrone ? "secondary" : "outline"}
                   className={`h-20 w-20 rounded-full ${isListeningFromDrone ? 'ring-2 ring-primary ring-offset-2' : ''}`}
-                  onClick={() => setIsListeningFromDrone(!isListeningFromDrone)}
+                  onClick={handleToggleListenDrone}
                   data-testid="button-listen-drone"
                 >
                   <Volume2 className={`h-8 w-8 ${isListeningFromDrone ? 'text-primary animate-pulse' : ''}`} />

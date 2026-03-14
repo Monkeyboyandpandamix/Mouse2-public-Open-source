@@ -887,6 +887,30 @@ export function TerminalCommandsPanel() {
     toast.success(`Executed: ${cmd.name}`);
   };
 
+  // Allow custom widget buttons to trigger terminal commands by command string.
+  useEffect(() => {
+    const handleExternalExecute = (e: CustomEvent<{ command?: string }>) => {
+      const commandText = e.detail?.command?.trim();
+      if (!commandText) return;
+      const matched = commands.find((cmd) => cmd.command.trim() === commandText);
+      if (matched) {
+        handleExecute(matched);
+      } else {
+        const adHoc: SystemCommand = {
+          id: `adhoc_${Date.now()}`,
+          name: "External Command",
+          description: "Triggered from custom widget",
+          category: "system",
+          command: commandText,
+        };
+        handleExecute(adHoc);
+      }
+    };
+
+    window.addEventListener('execute-command' as any, handleExternalExecute);
+    return () => window.removeEventListener('execute-command' as any, handleExternalExecute);
+  }, [commands]);
+
   const handleCopy = (cmd: string) => {
     navigator.clipboard.writeText(cmd);
     toast.success("Command copied to clipboard");

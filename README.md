@@ -82,7 +82,7 @@ The system operates in **offline-first mode** using local JSON storage with opti
 | Windows 10/11 | Yes | Use start-windows.bat |
 | Ubuntu 20.04+ | Yes | Use start-linux.sh |
 | Raspberry Pi OS | Yes | Use start-pi-onboard.sh |
-| macOS 12+ | Yes | Use start-linux.sh |
+| macOS 12+ | Yes | Use start-macos.sh |
 | Debian 11+ | Yes | Use start-linux.sh |
 
 ---
@@ -96,13 +96,22 @@ The system operates in **offline-first mode** using local JSON storage with opti
 4. Browser opens automatically to `http://localhost:5000`
 5. Login with default credentials (see User Management)
 
-### Linux / macOS
+### Linux
 ```bash
 # Make script executable (first time only)
 chmod +x start-linux.sh
 
 # Start the application
 ./start-linux.sh
+```
+
+### macOS
+```bash
+# Make script executable (first time only)
+chmod +x start-macos.sh
+
+# Start the application
+./start-macos.sh
 ```
 
 ### Raspberry Pi (Onboard Mode)
@@ -171,9 +180,14 @@ The included scripts handle everything automatically:
 start-windows.bat
 ```
 
-**Linux/macOS:**
+**Linux:**
 ```bash
 ./start-linux.sh
+```
+
+**macOS:**
+```bash
+./start-macos.sh
 ```
 
 **Raspberry Pi:**
@@ -226,7 +240,8 @@ The build scripts will:
 - `public/` - Frontend web application
 - `node_modules/` - Pre-installed dependencies
 - `start-windows.bat` - Windows launcher
-- `start-linux.sh` - Linux/macOS launcher
+- `start-linux.sh` - Linux launcher
+- `start-macos.sh` - macOS launcher
 - `start-pi-onboard.sh` - Raspberry Pi launcher
 - `.env.example` - Configuration template
 - `INSTALL.txt` - Quick installation guide
@@ -681,7 +696,8 @@ mouse-gcs/
 ├── data/                      # JSON data files (auto-created)
 ├── dist/                      # Build output
 ├── start-windows.bat          # Windows startup
-├── start-linux.sh             # Linux/macOS startup
+├── start-linux.sh             # Linux startup
+├── start-macos.sh             # macOS startup
 ├── start-pi-onboard.sh        # Raspberry Pi startup
 ├── .env.example               # Environment template
 └── package.json               # Dependencies

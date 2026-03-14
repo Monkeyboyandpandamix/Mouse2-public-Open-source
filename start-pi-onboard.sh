@@ -48,6 +48,14 @@ export DEVICE_ROLE=ONBOARD
 # Create data directory
 mkdir -p "$DATA_DIR"
 
+# Stop previous M.O.U.S.E server instances so dist/ cleanup during build
+# doesn't break a currently running server and cause ENOENT on index.html.
+if pgrep -f "node dist/index.cjs" >/dev/null 2>&1; then
+    echo "Stopping existing M.O.U.S.E server instance(s)..."
+    pkill -f "node dist/index.cjs" >/dev/null 2>&1 || true
+    sleep 1
+fi
+
 # Note: We use system Python (/usr/bin/python3) for sensor/servo scripts
 # because Adafruit libraries are typically installed system-wide on Raspberry Pi
 # If you need a venv, set PYTHON_PATH environment variable to point to it

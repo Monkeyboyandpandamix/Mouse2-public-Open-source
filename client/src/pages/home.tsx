@@ -4,6 +4,9 @@ import { Sidebar } from "@/components/layout/Sidebar";
 import { TelemetryPanel } from "@/components/telemetry/TelemetryPanel";
 import { MapInterface } from "@/components/map/MapInterface";
 import { ControlDeck } from "@/components/controls/ControlDeck";
+import { AutoStabilizationController } from "@/components/controls/AutoStabilizationController";
+import { EmergencyProtocolController } from "@/components/controls/EmergencyProtocolController";
+import { GpsDeniedNavigationController } from "@/components/navigation/GpsDeniedNavigationController";
 import { VideoFeed } from "@/components/video/VideoFeed";
 import { SettingsPanel } from "@/components/panels/SettingsPanel";
 import { MissionPlanningPanel } from "@/components/panels/MissionPlanningPanel";
@@ -30,6 +33,17 @@ interface SystemError {
   title: string;
   message: string;
   timestamp: Date;
+}
+
+interface Mapping3DStatus {
+  active: boolean;
+  framesCaptured: number;
+  coveragePercent: number;
+  confidence: number;
+  distanceEstimate: number;
+  lastFrameAt: string | null;
+  lastModelPath: string | null;
+  lastModelGeneratedAt: string | null;
 }
 
 export default function Home() {
@@ -69,6 +83,17 @@ export default function Home() {
   // Onboard mode (running on Raspberry Pi) - must be before conditional returns
   const [isOnboard, setIsOnboard] = useState(false);
   const [runtimeConfigLoaded, setRuntimeConfigLoaded] = useState(false);
+  const [mappingStatus, setMappingStatus] = useState<Mapping3DStatus>({
+    active: true,
+    framesCaptured: 0,
+    coveragePercent: 0,
+    confidence: 0,
+    distanceEstimate: 0,
+    lastFrameAt: null,
+    lastModelPath: null,
+    lastModelGeneratedAt: null,
+  });
+  const [mappingBusy, setMappingBusy] = useState(false);
 
   // Listen for session changes (logout from TopBar or UserAccessPanel)
   useEffect(() => {
@@ -167,6 +192,48 @@ export default function Home() {
         setRuntimeConfigLoaded(true); // Continue even if fetch fails
       });
   }, []);
+
+  const refreshMappingStatus = async () => {
+    const res = await fetch("/api/mapping/3d/status");
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data?.status) {
+      setMappingStatus(data.status);
+    }
+  };
+
+  const handleReconstruct3D = async () => {
+    try {
+      setMappingBusy(true);
+      const res = await fetch("/api/mapping/3d/reconstruct", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "3D reconstruction failed");
+      }
+      await refreshMappingStatus();
+    } finally {
+      setMappingBusy(false);
+    }
+  };
+
+  const handleReset3D = async () => {
+    try {
+      setMappingBusy(true);
+      await fetch("/api/mapping/3d/reset", { method: "POST" });
+      await refreshMappingStatus();
+    } finally {
+      setMappingBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== "feeds") return;
+    void refreshMappingStatus();
+    const timer = window.setInterval(() => {
+      void refreshMappingStatus();
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [activeTab]);
 
   // If not logged in, show UserAccessPanel (which has the login form)
   if (!isLoggedIn) {
@@ -299,17 +366,52 @@ export default function Home() {
               </h3>
               <div className="grid grid-cols-3 gap-2 sm:gap-4">
                 <div className="p-2 sm:p-4 bg-muted/30 rounded-lg text-center">
-                  <p className="text-lg sm:text-2xl font-bold text-primary">0</p>
+                  <p className="text-lg sm:text-2xl font-bold text-primary">{mappingStatus.framesCaptured}</p>
                   <p className="text-[10px] sm:text-xs text-muted-foreground">Images</p>
                 </div>
                 <div className="p-2 sm:p-4 bg-muted/30 rounded-lg text-center">
-                  <p className="text-lg sm:text-2xl font-bold text-amber-500">--</p>
+                  <p className="text-lg sm:text-2xl font-bold text-amber-500">{mappingStatus.coveragePercent}%</p>
                   <p className="text-[10px] sm:text-xs text-muted-foreground">Coverage</p>
                 </div>
                 <div className="p-2 sm:p-4 bg-muted/30 rounded-lg text-center">
-                  <p className="text-lg sm:text-2xl font-bold text-emerald-500">Ready</p>
+                  <p className="text-lg sm:text-2xl font-bold text-emerald-500">{mappingStatus.confidence}%</p>
                   <p className="text-[10px] sm:text-xs text-muted-foreground">Status</p>
                 </div>
+              </div>
+              <div className="mt-3 h-2 rounded bg-muted overflow-hidden">
+                <div
+                  className="h-full bg-primary transition-all"
+                  style={{ width: `${Math.max(0, Math.min(100, mappingStatus.coveragePercent))}%` }}
+                />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleReset3D}
+                  disabled={mappingBusy}
+                  data-testid="button-reset-3d-mapping"
+                >
+                  Reset Capture
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleReconstruct3D}
+                  disabled={mappingBusy || mappingStatus.framesCaptured < 10}
+                  data-testid="button-generate-3d-map"
+                >
+                  Generate 3D Map
+                </Button>
+                {mappingStatus.lastModelPath && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => window.open("/api/mapping/3d/model/latest", "_blank")}
+                    data-testid="button-open-3d-artifact"
+                  >
+                    Model Ready
+                  </Button>
+                )}
               </div>
               <div className="mt-3 sm:mt-4 p-2 sm:p-3 bg-amber-500/10 border border-amber-500/30 rounded text-[10px] sm:text-xs text-amber-500">
                 <strong>Note:</strong> For best 3D reconstruction, lock gimbal to nadir position.
@@ -383,6 +485,9 @@ export default function Home() {
 
   return (
     <div className="flex flex-col h-screen w-full bg-background overflow-hidden relative">
+      <AutoStabilizationController />
+      <EmergencyProtocolController />
+      <GpsDeniedNavigationController />
       {/* Background Grid Pattern */}
       <div className="absolute inset-0 bg-grid-pattern opacity-20 pointer-events-none z-0" />
 

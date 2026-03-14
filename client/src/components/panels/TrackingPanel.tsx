@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Target, Users, Car, Box, AlertCircle, MapPin, Search, Crosshair, Lock, Unlock, Camera, Play, Square, Loader2, Laptop, Video, Zap } from "lucide-react";
+import { Target, Users, Car, Box, AlertCircle, MapPin, Search, Lock, Unlock, Camera, Play, Square, Loader2, Laptop, Video, Zap, ScanText, Trash2, Save } from "lucide-react";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -28,6 +28,7 @@ interface DetectedObject {
   velocity?: { dx: number; dy: number };
   framesSeen: number;
   lastSeen: number;
+  areaRatio?: number;
 }
 
 interface TrackedObject {
@@ -44,11 +45,21 @@ interface TrackedObject {
   framesSeen: number;
   lastSeen: number;
   color: string;
+  areaRatio: number;
+}
+
+interface PlateRecord {
+  id: string;
+  plateText: string;
+  confidence: number;
+  targetId: string;
+  timestamp: number;
 }
 
 const VEHICLE_CLASSES = ['car', 'truck', 'bus', 'motorcycle', 'bicycle'];
 const PERSON_CLASSES = ['person'];
 const ALL_TRACKABLE_CLASSES = [...PERSON_CLASSES, ...VEHICLE_CLASSES];
+const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
 export function TrackingPanel() {
   const { hasPermission } = usePermissions();
@@ -75,6 +86,7 @@ export function TrackingPanel() {
   const [webcamError, setWebcamError] = useState<string | null>(null);
   const [isDetecting, setIsDetecting] = useState(false);
   const [videoDimensions, setVideoDimensions] = useState({ width: 640, height: 480 });
+  const [videoReady, setVideoReady] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const detectionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -83,6 +95,21 @@ export function TrackingPanel() {
   // Multi-object tracking state
   const trackedObjectsRef = useRef<Map<string, TrackedObject>>(new Map());
   const [detectedObjects, setDetectedObjects] = useState<DetectedObject[]>([]);
+  const [plateScanEnabled, setPlateScanEnabled] = useState(false);
+  const [plateRecords, setPlateRecords] = useState<PlateRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem("mouse_plate_records");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [manualPlateText, setManualPlateText] = useState("");
+  const lastPlateScanAtRef = useRef(0);
+
+  useEffect(() => {
+    localStorage.setItem("mouse_plate_records", JSON.stringify(plateRecords.slice(0, 200)));
+  }, [plateRecords]);
   
   // Load TensorFlow.js and COCO-SSD model
   const loadModel = useCallback(async () => {
@@ -121,6 +148,36 @@ export function TrackingPanel() {
     
     return unionArea > 0 ? interArea / unionArea : 0;
   };
+
+  const computeTrackMatchScore = (
+    track: TrackedObject,
+    det: { bbox: number[]; confidence: number; label: string },
+  ) => {
+    const detBox = { x: det.bbox[0], y: det.bbox[1], width: det.bbox[2], height: det.bbox[3] };
+    const trackBox = { x: track.x, y: track.y, width: track.width, height: track.height };
+    const iou = calculateIoU(detBox, trackBox);
+
+    const detCenterX = det.bbox[0] + det.bbox[2] / 2;
+    const detCenterY = det.bbox[1] + det.bbox[3] / 2;
+    const trackCenterX = track.x + track.width / 2 + track.velocity.dx * 0.5;
+    const trackCenterY = track.y + track.height / 2 + track.velocity.dy * 0.5;
+
+    const centerDist = Math.hypot(detCenterX - trackCenterX, detCenterY - trackCenterY);
+    const centerScore = Math.max(0, 1 - centerDist / 220);
+
+    const detArea = det.bbox[2] * det.bbox[3];
+    const trackArea = Math.max(1, track.width * track.height);
+    const areaRatio = Math.min(detArea, trackArea) / Math.max(detArea, trackArea);
+    const sizeScore = Math.max(0, Math.min(1, areaRatio));
+
+    const classMatch =
+      track.label === det.label ||
+      (PERSON_CLASSES.includes(track.label) && PERSON_CLASSES.includes(det.label)) ||
+      (VEHICLE_CLASSES.includes(track.label) && VEHICLE_CLASSES.includes(det.label));
+
+    const classScore = classMatch ? 1 : 0.5;
+    return (iou * 0.45 + centerScore * 0.3 + sizeScore * 0.2 + classScore * 0.05);
+  };
   
   // Hungarian-style assignment for multi-object tracking
   const assignDetectionsToTracks = (
@@ -128,31 +185,28 @@ export function TrackingPanel() {
     tracks: Map<string, TrackedObject>
   ): DetectedObject[] => {
     const now = Date.now();
-    const IOU_THRESHOLD = 0.3;
-    const MAX_FRAMES_MISSING = 15;
+    const MATCH_THRESHOLD = 0.28;
     const CONFIDENCE_SMOOTHING = 0.7;
+    const frameArea = Math.max(1, videoDimensions.width * videoDimensions.height);
     
     const assignments: DetectedObject[] = [];
     const usedDetections = new Set<number>();
     const usedTracks = new Set<string>();
     
-    // First pass: match existing tracks with detections
-    const matchScores: Array<{trackId: string, detIdx: number, iou: number}> = [];
+    // First pass: match existing tracks with detections.
+    const matchScores: Array<{trackId: string, detIdx: number, score: number}> = [];
     
     tracks.forEach((track, trackId) => {
       detections.forEach((det, detIdx) => {
-        const detBox = { x: det.bbox[0], y: det.bbox[1], width: det.bbox[2], height: det.bbox[3] };
-        const trackBox = { x: track.x, y: track.y, width: track.width, height: track.height };
-        const iou = calculateIoU(detBox, trackBox);
-        
-        if (iou > IOU_THRESHOLD) {
-          matchScores.push({ trackId, detIdx, iou });
+        const score = computeTrackMatchScore(track, det);
+        if (score > MATCH_THRESHOLD) {
+          matchScores.push({ trackId, detIdx, score });
         }
       });
     });
     
-    // Sort by IoU descending for greedy assignment
-    matchScores.sort((a, b) => b.iou - a.iou);
+    // Sort by match score descending for greedy assignment
+    matchScores.sort((a, b) => b.score - a.score);
     
     // Greedy assignment
     for (const match of matchScores) {
@@ -175,6 +229,7 @@ export function TrackingPanel() {
       // Update track
       const type = PERSON_CLASSES.includes(det.label) ? "person" : 
                    VEHICLE_CLASSES.includes(det.label) ? "vehicle" : "unknown";
+      const areaRatio = (det.bbox[2] * det.bbox[3]) / frameArea;
       
       const updatedTrack: TrackedObject = {
         ...track,
@@ -189,6 +244,7 @@ export function TrackingPanel() {
         lastSeen: now,
         label: det.label,
         type,
+        areaRatio,
       };
       
       tracks.set(match.trackId, updatedTrack);
@@ -206,13 +262,14 @@ export function TrackingPanel() {
         velocity: updatedTrack.velocity,
         framesSeen: updatedTrack.framesSeen,
         lastSeen: updatedTrack.lastSeen,
+        areaRatio: updatedTrack.areaRatio,
       });
     }
     
     // Create new tracks for unmatched detections
     detections.forEach((det, idx) => {
       if (usedDetections.has(idx)) return;
-      if (!ALL_TRACKABLE_CLASSES.includes(det.label)) return;
+      if (!ALL_TRACKABLE_CLASSES.includes(det.label) && det.confidence < 0.62) return;
       
       objectIdCounterRef.current++;
       const newId = `track_${objectIdCounterRef.current}`;
@@ -237,6 +294,7 @@ export function TrackingPanel() {
         framesSeen: 1,
         lastSeen: now,
         color,
+        areaRatio: (det.bbox[2] * det.bbox[3]) / frameArea,
       };
       
       tracks.set(newId, newTrack);
@@ -254,27 +312,45 @@ export function TrackingPanel() {
         velocity: newTrack.velocity,
         framesSeen: newTrack.framesSeen,
         lastSeen: newTrack.lastSeen,
+        areaRatio: newTrack.areaRatio,
       });
     });
     
-    // Remove stale tracks (not seen for too long)
+    // Remove stale tracks. Locked targets persist longer with predictive updates.
     tracks.forEach((track, trackId) => {
       if (!usedTracks.has(trackId)) {
+        const trackIsLocked = lockedTargets.has(trackId);
+        const maxFramesMissing = trackIsLocked ? 12 : 8;
         const framesMissing = (now - track.lastSeen) / 100;
-        if (framesMissing > MAX_FRAMES_MISSING) {
+        if (framesMissing > maxFramesMissing) {
           tracks.delete(trackId);
+          if (trackIsLocked) {
+            setLockedTargets((prev) => {
+              const next = new Set(prev);
+              next.delete(trackId);
+              return next;
+            });
+          }
         } else {
-          // Keep predicting position for a few frames using velocity
+          // Keep predicting position for temporary occlusions.
           const predictedTrack = {
             ...track,
-            x: track.x + track.velocity.dx * 0.5,
-            y: track.y + track.velocity.dy * 0.5,
-            smoothedConfidence: track.smoothedConfidence * 0.9,
+            x: track.x + track.velocity.dx * 0.65,
+            y: track.y + track.velocity.dy * 0.65,
+            smoothedConfidence: track.smoothedConfidence * (trackIsLocked ? 0.95 : 0.88),
           };
           tracks.set(trackId, predictedTrack);
           
-          // Still show the predicted object but with lower confidence
-          if (predictedTrack.smoothedConfidence > 20) {
+          // Continue rendering predicted objects for lock reacquisition.
+          if (trackingActive && trackIsLocked && predictedTrack.smoothedConfidence > 45) {
+            if (
+              predictedTrack.x < -predictedTrack.width ||
+              predictedTrack.y < -predictedTrack.height ||
+              predictedTrack.x > videoDimensions.width ||
+              predictedTrack.y > videoDimensions.height
+            ) {
+              return;
+            }
             assignments.push({
               id: trackId,
               type: predictedTrack.type,
@@ -288,6 +364,7 @@ export function TrackingPanel() {
               velocity: predictedTrack.velocity,
               framesSeen: predictedTrack.framesSeen,
               lastSeen: predictedTrack.lastSeen,
+              areaRatio: predictedTrack.areaRatio,
             });
           }
         }
@@ -332,6 +409,8 @@ export function TrackingPanel() {
     }
     setDetectedObjects([]);
     trackedObjectsRef.current.clear();
+    setLockedTargets(new Set());
+    setVideoReady(false);
   };
 
   // Ref for motion detection fallback
@@ -448,6 +527,7 @@ export function TrackingPanel() {
       
       const updateDimensions = () => {
         if (videoRef.current && videoRef.current.videoWidth > 0) {
+          setVideoReady(true);
           setVideoDimensions({
             width: videoRef.current.videoWidth,
             height: videoRef.current.videoHeight
@@ -473,17 +553,29 @@ export function TrackingPanel() {
     }
   }, [webcamStream, videoDimensions.width, videoDimensions.height]);
 
+  useEffect(() => {
+    if (webcamStream) return;
+    setDetectedObjects([]);
+    trackedObjectsRef.current.clear();
+    setLockedTargets(new Set());
+    setVideoReady(false);
+  }, [webcamStream]);
+
   // Run detection loop
   useEffect(() => {
     if (isDetecting && webcamStream) {
       detectionIntervalRef.current = setInterval(runDetection, 200);
     } else if (detectionIntervalRef.current) {
       clearInterval(detectionIntervalRef.current);
+      setDetectedObjects([]);
+      if (!trackingActive) {
+        trackedObjectsRef.current.clear();
+      }
     }
     return () => {
       if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current);
     };
-  }, [isDetecting, webcamStream, runDetection]);
+  }, [isDetecting, webcamStream, runDetection, trackingActive]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -491,8 +583,239 @@ export function TrackingPanel() {
   }, []);
 
   const filteredObjects = detectedObjects
-    .filter(obj => targetType === "all" || obj.type === targetType)
-    .filter(obj => obj.confidence >= confidenceThreshold[0]);
+    .filter((obj) => targetType === "all" || obj.type === targetType)
+    .filter((obj) => {
+      // Preserve lock continuity even when confidence dips temporarily.
+      if (lockedTargets.has(obj.id)) return true;
+      const sizeBoost = obj.areaRatio && obj.areaRatio < 0.01 ? 8 : 0;
+      const temporalBoost = Math.min(12, obj.framesSeen * 1.1);
+      return obj.confidence + sizeBoost + temporalBoost >= confidenceThreshold[0];
+    });
+
+  // Publish tracking state for downstream control/stabilization logic.
+  useEffect(() => {
+    const lockedCandidates = filteredObjects.filter((obj) => lockedTargets.has(obj.id));
+    const lockedTarget = lockedCandidates.sort(
+      (a, b) =>
+        (b.confidence + b.framesSeen * 0.8 + (b.areaRatio || 0) * 100) -
+        (a.confidence + a.framesSeen * 0.8 + (a.areaRatio || 0) * 100),
+    )[0];
+    const targetOffsetX = lockedTarget
+      ? ((lockedTarget.x + lockedTarget.width / 2) / videoDimensions.width - 0.5) * 2
+      : undefined;
+    const targetOffsetY = lockedTarget
+      ? ((lockedTarget.y + lockedTarget.height / 2) / videoDimensions.height - 0.5) * 2
+      : undefined;
+    const targetSizeRatio = lockedTarget?.areaRatio ?? 0;
+    const targetDistanceMeters =
+      targetSizeRatio > 0 ? Math.max(2, Math.min(120, 0.8 / Math.sqrt(targetSizeRatio))) : undefined;
+    const desiredDistanceMeters = followDistance[0];
+
+    window.dispatchEvent(
+      new CustomEvent("tracking-update", {
+        detail: {
+          trackingActive,
+          lockedCount: lockedTargets.size,
+          targetOffsetX,
+          targetOffsetY,
+          targetSizeRatio,
+          targetDistanceMeters,
+          desiredDistanceMeters,
+          confidence: lockedTarget?.confidence ?? null,
+        },
+      }),
+    );
+  }, [trackingActive, lockedTargets, filteredObjects, videoDimensions.width, videoDimensions.height, followDistance]);
+
+  // Publish simple obstacle avoidance hints from camera detections.
+  useEffect(() => {
+    if (!isDetecting || filteredObjects.length === 0) {
+      window.dispatchEvent(
+        new CustomEvent("obstacle-update", {
+          detail: { riskLevel: "none", avoidanceYaw: 0, avoidanceForward: 0, avoidanceLateral: 0 },
+        }),
+      );
+      return;
+    }
+
+    const centerX = videoDimensions.width / 2;
+    const centerY = videoDimensions.height / 2;
+    let highestRisk = 0;
+    let bestAvoidance = { yaw: 0, forward: 0, lateral: 0 };
+
+    for (const obj of filteredObjects) {
+      const objCx = obj.x + obj.width / 2;
+      const objCy = obj.y + obj.height / 2;
+      const normX = (objCx - centerX) / Math.max(1, centerX);
+      const normY = (objCy - centerY) / Math.max(1, centerY);
+      const areaRatio = obj.areaRatio ?? (obj.width * obj.height) / Math.max(1, videoDimensions.width * videoDimensions.height);
+      const centeredness = Math.max(0, 1 - Math.hypot(normX, normY));
+      const confidenceFactor = Math.max(0.25, Math.min(1, obj.confidence / 100));
+      const risk = Math.max(0, Math.min(1, areaRatio * 2.7 * centeredness * confidenceFactor));
+
+      if (risk > highestRisk) {
+        highestRisk = risk;
+        bestAvoidance = {
+          yaw: clamp(normX > 0 ? -risk : risk, -1, 1),
+          forward: clamp(-risk, -1, 0),
+          lateral: clamp(normX > 0 ? -risk : risk, -1, 1),
+        };
+      }
+    }
+
+    const riskLevel = highestRisk > 0.55 ? "high" : highestRisk > 0.3 ? "medium" : highestRisk > 0.12 ? "low" : "none";
+    window.dispatchEvent(
+      new CustomEvent("obstacle-update", {
+        detail: {
+          riskLevel,
+          avoidanceYaw: bestAvoidance.yaw,
+          avoidanceForward: bestAvoidance.forward,
+          avoidanceLateral: bestAvoidance.lateral,
+        },
+      }),
+    );
+  }, [filteredObjects, videoDimensions.width, videoDimensions.height, isDetecting]);
+
+  // Publish potential emergency landing zone quality inferred from camera detections.
+  useEffect(() => {
+    if (!isDetecting || !videoReady) {
+      window.dispatchEvent(
+        new CustomEvent("landing-zone-update", {
+          detail: { safe: false, clearScore: 0, blockedBy: ["camera_offline"], roadRisk: "unknown" },
+        }),
+      );
+      return;
+    }
+
+    const zoneX = videoDimensions.width * 0.3;
+    const zoneY = videoDimensions.height * 0.3;
+    const zoneW = videoDimensions.width * 0.4;
+    const zoneH = videoDimensions.height * 0.4;
+    const zoneArea = Math.max(1, zoneW * zoneH);
+
+    const blockedBy: string[] = [];
+    let occupiedArea = 0;
+    let roadRiskScore = 0;
+
+    for (const obj of filteredObjects) {
+      const interLeft = Math.max(zoneX, obj.x);
+      const interTop = Math.max(zoneY, obj.y);
+      const interRight = Math.min(zoneX + zoneW, obj.x + obj.width);
+      const interBottom = Math.min(zoneY + zoneH, obj.y + obj.height);
+      const interW = Math.max(0, interRight - interLeft);
+      const interH = Math.max(0, interBottom - interTop);
+      const overlap = interW * interH;
+      if (overlap <= 0) continue;
+
+      occupiedArea += overlap;
+      if (obj.type === "person") blockedBy.push("person");
+      if (obj.type === "vehicle") {
+        blockedBy.push("vehicle");
+        roadRiskScore += overlap / zoneArea;
+      }
+      if (obj.type === "unknown") blockedBy.push("unknown_object");
+    }
+
+    const clearScore = clamp(1 - occupiedArea / zoneArea, 0, 1);
+    const safe = clearScore >= 0.72 && blockedBy.length === 0;
+    const roadRisk = roadRiskScore > 0.18 ? "high" : roadRiskScore > 0.06 ? "medium" : "low";
+
+    window.dispatchEvent(
+      new CustomEvent("landing-zone-update", {
+        detail: {
+          safe,
+          clearScore,
+          blockedBy: Array.from(new Set(blockedBy)),
+          roadRisk,
+        },
+      }),
+    );
+  }, [filteredObjects, isDetecting, videoReady, videoDimensions.width, videoDimensions.height]);
+
+  const parsePlate = (text: string) => {
+    const sanitized = text
+      .toUpperCase()
+      .replace(/[^A-Z0-9- ]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const matches = sanitized.match(/[A-Z0-9-]{4,10}/g);
+    return matches?.[0] ?? null;
+  };
+
+  const savePlateRecord = (plateText: string, confidence: number, targetId: string) => {
+    const normalized = parsePlate(plateText);
+    if (!normalized) return;
+    setPlateRecords((prev) => {
+      const existingIdx = prev.findIndex((r) => r.plateText === normalized);
+      if (existingIdx >= 0) {
+        const copy = [...prev];
+        copy[existingIdx] = { ...copy[existingIdx], confidence: Math.max(copy[existingIdx].confidence, confidence), timestamp: Date.now(), targetId };
+        return copy.sort((a, b) => b.timestamp - a.timestamp);
+      }
+      return [
+        {
+          id: `plate_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          plateText: normalized,
+          confidence,
+          targetId,
+          timestamp: Date.now(),
+        },
+        ...prev,
+      ].slice(0, 200);
+    });
+  };
+
+  // Local plate scan: uses on-device OCR engine if one is already available in-browser.
+  const attemptLockedVehiclePlateScan = useCallback(async () => {
+    if (!videoRef.current || !canvasRef.current || !plateScanEnabled || !trackingActive) return;
+    const now = Date.now();
+    if (now - lastPlateScanAtRef.current < 2500) return;
+    lastPlateScanAtRef.current = now;
+
+    const lockedVehicles = filteredObjects.filter(
+      (obj) => lockedTargets.has(obj.id) && obj.type === "vehicle",
+    );
+    if (lockedVehicles.length === 0) return;
+    const primary = lockedVehicles.sort((a, b) => b.confidence - a.confidence)[0];
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx || video.videoWidth === 0 || video.videoHeight === 0) return;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const px = Math.max(0, Math.floor(primary.x + primary.width * 0.2));
+    const py = Math.max(0, Math.floor(primary.y + primary.height * 0.58));
+    const pw = Math.max(40, Math.floor(primary.width * 0.6));
+    const ph = Math.max(18, Math.floor(primary.height * 0.24));
+    const crop = ctx.getImageData(
+      px,
+      py,
+      Math.min(pw, canvas.width - px),
+      Math.min(ph, canvas.height - py),
+    );
+
+    const ocrEngine = (window as any).Tesseract;
+    if (ocrEngine?.recognize) {
+      try {
+        const result = await ocrEngine.recognize(crop, "eng");
+        const text = result?.data?.text || "";
+        const plate = parsePlate(text);
+        if (plate) {
+          savePlateRecord(plate, Math.round(primary.confidence), primary.id);
+          toast.success(`Plate captured: ${plate}`);
+        }
+      } catch {
+        // Keep silent to avoid toast flooding when OCR engine is absent or busy.
+      }
+    }
+  }, [filteredObjects, lockedTargets, plateScanEnabled, trackingActive]);
+
+  useEffect(() => {
+    void attemptLockedVehiclePlateScan();
+  }, [attemptLockedVehiclePlateScan, filteredObjects]);
 
   const handleLockTarget = (objectId: string) => {
     setLockedTargets(prev => {
@@ -585,6 +908,21 @@ export function TrackingPanel() {
   const handleStopTracking = () => {
     setTrackingActive(false);
     toast.info("Tracking stopped");
+  };
+
+  const saveManualPlate = () => {
+    const plate = parsePlate(manualPlateText);
+    if (!plate) {
+      toast.error("Enter a valid plate format (letters/numbers)");
+      return;
+    }
+    savePlateRecord(plate, 100, "manual");
+    setManualPlateText("");
+    toast.success(`Saved plate ${plate}`);
+  };
+
+  const deletePlate = (id: string) => {
+    setPlateRecords((prev) => prev.filter((p) => p.id !== id));
   };
 
   const getTypeIcon = (type: string) => {
@@ -806,6 +1144,54 @@ export function TrackingPanel() {
           </CardContent>
         </Card>
 
+        <Card>
+          <CardHeader className="p-3">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <ScanText className="h-4 w-4" />
+              License Plate Capture (Local)
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-3 pt-0 space-y-3">
+            <div className="flex items-center justify-between text-xs">
+              <Label className="text-xs">Auto-scan locked vehicles</Label>
+              <Switch checked={plateScanEnabled} onCheckedChange={setPlateScanEnabled} />
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Runs on-device. If a local OCR engine is available, captures are automatic. You can always save plates manually below.
+            </p>
+            <div className="flex gap-2">
+              <Input
+                value={manualPlateText}
+                onChange={(e) => setManualPlateText(e.target.value)}
+                placeholder="Manual plate entry"
+                className="h-8 text-xs"
+                onKeyDown={(e) => e.key === "Enter" && saveManualPlate()}
+              />
+              <Button size="sm" className="h-8" onClick={saveManualPlate}>
+                <Save className="h-3 w-3 mr-1" />
+                Save
+              </Button>
+            </div>
+            <div className="space-y-1 max-h-28 overflow-y-auto">
+              {plateRecords.length === 0 ? (
+                <div className="text-[11px] text-muted-foreground">No saved plates.</div>
+              ) : (
+                plateRecords.slice(0, 30).map((record) => (
+                  <div key={record.id} className="flex items-center justify-between text-xs bg-muted/40 border border-border rounded px-2 py-1">
+                    <div>
+                      <span className="font-mono font-semibold">{record.plateText}</span>
+                      <span className="ml-2 text-muted-foreground">{new Date(record.timestamp).toLocaleTimeString()}</span>
+                    </div>
+                    <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => deletePlate(record.id)}>
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ))
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
         {targetMethod === "camera" && (
           <Card>
             <CardHeader className="p-3">
@@ -877,7 +1263,7 @@ export function TrackingPanel() {
                 />
                 
                 {/* Detection overlay boxes */}
-                {filteredObjects.map((obj) => (
+                {videoReady && isDetecting && filteredObjects.map((obj) => (
                   <div
                     key={obj.id}
                     className={`absolute border-2 rounded cursor-pointer transition-all ${

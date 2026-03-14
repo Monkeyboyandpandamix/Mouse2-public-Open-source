@@ -44,6 +44,9 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { useNoFlyZones } from "@/hooks/useNoFlyZones";
+import { NoFlyZoneOverlay } from "@/components/map/NoFlyZoneOverlay";
+import { NoFlyZoneLegend } from "@/components/map/NoFlyZoneLegend";
 
 interface FlightSession {
   id: string;
@@ -145,6 +148,7 @@ export function FlightLogsPanel() {
   const [dataViewDialog, setDataViewDialog] = useState<DataViewType>(null);
   const [videoDialog, setVideoDialog] = useState(false);
   const [mapDialog, setMapDialog] = useState(false);
+  const noFlyZones = useNoFlyZones();
 
   const { data: flightSessions = [], isLoading: sessionsLoading, refetch: refetchSessions } = useQuery<FlightSession[]>({
     queryKey: ['/api/flight-sessions'],
@@ -169,7 +173,7 @@ export function FlightLogsPanel() {
   const { data: recentLogs = [] } = useQuery<FlightLog[]>({
     queryKey: ['/api/flight-logs/recent'],
     queryFn: async () => {
-      const res = await fetch('/api/flight-logs?limit=100');
+      const res = await fetch('/api/flight-logs/recent?limit=100');
       return res.json();
     },
   });
@@ -535,7 +539,7 @@ export function FlightLogsPanel() {
               {selectedSession?.endTime && ` to ${format(new Date(selectedSession.endTime), 'HH:mm')}`}
             </DialogDescription>
           </DialogHeader>
-          <div className="h-96 rounded-lg overflow-hidden border">
+          <div className="h-96 rounded-lg overflow-hidden border relative">
             <MapContainer
               center={mapCenter}
               zoom={15}
@@ -545,6 +549,7 @@ export function FlightLogsPanel() {
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 attribution='&copy; OpenStreetMap'
               />
+              <NoFlyZoneOverlay zones={noFlyZones} />
               <Polyline 
                 positions={flightPath} 
                 color="#3b82f6" 
@@ -568,6 +573,7 @@ export function FlightLogsPanel() {
                 </>
               )}
             </MapContainer>
+            <NoFlyZoneLegend className="absolute bottom-2 left-2 z-[400]" />
           </div>
           <div className="grid grid-cols-4 gap-4 mt-2">
             <div className="p-2 bg-muted/50 rounded text-center">

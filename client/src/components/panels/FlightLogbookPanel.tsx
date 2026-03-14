@@ -52,6 +52,9 @@ import { MapContainer, TileLayer, Polyline, Marker, Popup, CircleMarker } from "
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { FLIGHT_CATEGORIES } from "@shared/schema";
+import { useNoFlyZones } from "@/hooks/useNoFlyZones";
+import { NoFlyZoneOverlay } from "@/components/map/NoFlyZoneOverlay";
+import { NoFlyZoneLegend } from "@/components/map/NoFlyZoneLegend";
 
 interface FlightSession {
   id: string;
@@ -152,6 +155,7 @@ export function FlightLogbookPanel() {
   const [replayIndex, setReplayIndex] = useState(0);
   const [replaySpeed, setReplaySpeed] = useState(1);
   const replayIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const noFlyZones = useNoFlyZones();
   
   const [editForm, setEditForm] = useState({
     missionName: '',
@@ -802,7 +806,7 @@ export function FlightLogbookPanel() {
             </div>
           ) : (
             <>
-              <div className="h-80 rounded-lg overflow-hidden border">
+              <div className="h-80 rounded-lg overflow-hidden border relative">
                 <MapContainer
                   center={mapCenter}
                   zoom={15}
@@ -813,6 +817,7 @@ export function FlightLogbookPanel() {
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                     attribution='&copy; OpenStreetMap'
                   />
+                  <NoFlyZoneOverlay zones={noFlyZones} />
                   <Polyline 
                     positions={flightPath.slice(0, replayIndex + 1)} 
                     color="#3b82f6" 
@@ -852,6 +857,7 @@ export function FlightLogbookPanel() {
                     </Marker>
                   )}
                 </MapContainer>
+                <NoFlyZoneLegend className="absolute bottom-2 left-2 z-[400]" />
               </div>
 
               <div className="space-y-2">

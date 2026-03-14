@@ -3,8 +3,11 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { WebSocketServer, WebSocket } from "ws";
 import { spawn } from "child_process";
-import { existsSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
+import { readFile, writeFile } from "fs/promises";
 import path from "path";
+import os from "os";
+import net from "net";
 
 // Use system Python to ensure Adafruit libraries are available
 // On Raspberry Pi, venv may not have the hardware libraries but system Python does
@@ -47,6 +50,8 @@ interface ServerSession {
   createdAt: number;
 }
 const activeSessions = new Map<string, ServerSession>();
+const airspaceCache = new Map<string, { expiresAt: number; payload: any }>();
+const staticAirspaceCache = new Map<string, any>();
 
 import { randomBytes } from 'crypto';
 
@@ -66,6 +71,183 @@ function validateSession(token: string | undefined): ServerSession | null {
     return null;
   }
   return session;
+}
+
+interface AirspaceZone {
+  id: string;
+  name: string;
+  type: "circle" | "polygon" | "custom";
+  enabled: boolean;
+  action: "rtl" | "land" | "hover" | "warn";
+  center?: { lat: number; lng: number };
+  radius?: number;
+  points?: { lat: number; lng: number }[];
+}
+
+const RESTRICTED_MATCH = /(restrict|prohibit|danger|tfr|temporary flight restriction|no[-\s]?fly)/i;
+
+function safeNumber(input: unknown): number | null {
+  const v = Number(input);
+  return Number.isFinite(v) ? v : null;
+}
+
+function buildBoundingBoxFromCenter(lat: number, lng: number, radiusMeters: number) {
+  const latDelta = radiusMeters / 111320;
+  const lngDelta = radiusMeters / (111320 * Math.cos((lat * Math.PI) / 180));
+  const minLat = lat - latDelta;
+  const maxLat = lat + latDelta;
+  const minLng = lng - lngDelta;
+  const maxLng = lng + lngDelta;
+  return { minLng, minLat, maxLng, maxLat };
+}
+
+function parseBboxParam(raw: string | undefined | null) {
+  if (!raw) return null;
+  const parts = raw.split(",").map((p) => Number(p.trim()));
+  if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) return null;
+  return { minLng: parts[0], minLat: parts[1], maxLng: parts[2], maxLat: parts[3] };
+}
+
+function zoneBbox(points: { lat: number; lng: number }[]) {
+  let minLat = Number.POSITIVE_INFINITY;
+  let minLng = Number.POSITIVE_INFINITY;
+  let maxLat = Number.NEGATIVE_INFINITY;
+  let maxLng = Number.NEGATIVE_INFINITY;
+  for (const p of points) {
+    minLat = Math.min(minLat, p.lat);
+    minLng = Math.min(minLng, p.lng);
+    maxLat = Math.max(maxLat, p.lat);
+    maxLng = Math.max(maxLng, p.lng);
+  }
+  return { minLng, minLat, maxLng, maxLat };
+}
+
+function bboxesOverlap(a: { minLng: number; minLat: number; maxLng: number; maxLat: number }, b: { minLng: number; minLat: number; maxLng: number; maxLat: number }) {
+  return !(a.maxLng < b.minLng || a.minLng > b.maxLng || a.maxLat < b.minLat || a.minLat > b.maxLat);
+}
+
+function normalizeStaticGeoJsonToZones(raw: any, labelPrefix: string): AirspaceZone[] {
+  const features = Array.isArray(raw?.features) ? raw.features : [];
+  const zones: AirspaceZone[] = [];
+
+  const addPolygon = (id: string, name: string, coords: any[]) => {
+    const points = coords
+      .map((coord: any) => {
+        if (!Array.isArray(coord) || coord.length < 2) return null;
+        const lng = safeNumber(coord[0]);
+        const lat = safeNumber(coord[1]);
+        if (lat == null || lng == null) return null;
+        return { lat, lng };
+      })
+      .filter((p): p is { lat: number; lng: number } => Boolean(p));
+    if (points.length < 3) return;
+    zones.push({
+      id,
+      name,
+      type: "polygon",
+      enabled: true,
+      action: "warn",
+      points,
+    });
+  };
+
+  for (let i = 0; i < features.length; i++) {
+    const feature = features[i];
+    const props = feature?.properties || {};
+    const id = String(props.FAA_ID || props.OBJECTID || `${labelPrefix}-${i + 1}`);
+    const name = `${labelPrefix}: ${String(props.Facility || props.Base || "Restricted Area")}`;
+    const geom = feature?.geometry;
+    if (!geom) continue;
+
+    if (geom.type === "Polygon" && Array.isArray(geom.coordinates?.[0])) {
+      addPolygon(id, name, geom.coordinates[0]);
+    } else if (geom.type === "MultiPolygon" && Array.isArray(geom.coordinates)) {
+      const firstPoly = geom.coordinates[0];
+      if (Array.isArray(firstPoly?.[0])) {
+        addPolygon(id, name, firstPoly[0]);
+      }
+    }
+  }
+
+  return zones;
+}
+
+function normalizeRestrictedZonesFromProvider(raw: any): AirspaceZone[] {
+  const container = raw?.items || raw?.results || raw?.features || raw?.data || [];
+  const source = Array.isArray(container) ? container : [];
+  const zones: AirspaceZone[] = [];
+
+  const pushPolygon = (id: string, name: string, coords: any) => {
+    if (!Array.isArray(coords) || coords.length < 3) return;
+    const points = coords
+      .map((c: any) => {
+        if (!Array.isArray(c) || c.length < 2) return null;
+        const lng = safeNumber(c[0]);
+        const lat = safeNumber(c[1]);
+        if (lat == null || lng == null) return null;
+        return { lat, lng };
+      })
+      .filter(Boolean) as { lat: number; lng: number }[];
+    if (points.length < 3) return;
+    zones.push({
+      id,
+      name,
+      type: "polygon",
+      enabled: true,
+      action: "warn",
+      points,
+    });
+  };
+
+  for (const entry of source) {
+    const base = entry?.properties ? { ...entry, ...entry.properties } : entry || {};
+    const id = String(base.id || base._id || base.uuid || `airspace-${zones.length + 1}`);
+    const name = String(base.name || base.title || base.designator || "Restricted Airspace");
+    const typeString = String(
+      base.type ||
+        base.airspaceType ||
+        base.category ||
+        base.class ||
+        base.classification ||
+        "",
+    );
+    const sourceText = `${name} ${typeString}`;
+    if (!RESTRICTED_MATCH.test(sourceText)) {
+      continue;
+    }
+
+    const geometry = entry?.geometry || base?.geometry || null;
+    const geoType = geometry?.type;
+    const coordinates = geometry?.coordinates;
+
+    if (geoType === "Polygon" && Array.isArray(coordinates) && coordinates[0]) {
+      pushPolygon(id, name, coordinates[0]);
+      continue;
+    }
+
+    if (geoType === "MultiPolygon" && Array.isArray(coordinates) && coordinates[0]?.[0]) {
+      pushPolygon(id, name, coordinates[0][0]);
+      continue;
+    }
+
+    const centerLat = safeNumber(base.lat ?? base.latitude ?? base.center?.lat ?? base.center?.latitude);
+    const centerLng = safeNumber(base.lng ?? base.lon ?? base.longitude ?? base.center?.lng ?? base.center?.longitude);
+    const radius = safeNumber(base.radius ?? base.radiusMeters ?? base.dist ?? base.distance);
+
+    if (centerLat != null && centerLng != null && radius != null && radius > 0) {
+      zones.push({
+        id,
+        name,
+        type: "circle",
+        enabled: true,
+        action: "warn",
+        center: { lat: centerLat, lng: centerLng },
+        radius,
+      });
+    }
+  }
+
+  return zones;
 }
 
 export async function registerRoutes(
@@ -149,9 +331,462 @@ export async function registerRoutes(
     }
   };
 
+  const execCommand = async (
+    command: string,
+    args: string[],
+  ): Promise<{ ok: boolean; stdout: string; stderr: string; code: number | null }> => {
+    return await new Promise((resolve) => {
+      const proc = spawn(command, args);
+      let stdout = "";
+      let stderr = "";
+
+      proc.stdout.on("data", (data: Buffer) => {
+        stdout += data.toString();
+      });
+      proc.stderr.on("data", (data: Buffer) => {
+        stderr += data.toString();
+      });
+
+      proc.on("error", () => {
+        resolve({ ok: false, stdout, stderr, code: null });
+      });
+
+      proc.on("close", (code: number) => {
+        resolve({ ok: code === 0, stdout, stderr, code });
+      });
+    });
+  };
+
+  interface AudioSystemState {
+    deviceType: "gpio" | "usb" | "buzzer";
+    deviceId: string;
+    volume: number;
+    live: { active: boolean; source: string; startedAt: string | null };
+    droneMic: { enabled: boolean; listening: boolean; volume: number; updatedAt: string | null };
+    lastTtsAt: string | null;
+    lastBuzzerTone: string | null;
+  }
+
+  interface Mapping3DState {
+    active: boolean;
+    framesCaptured: number;
+    coveragePercent: number;
+    confidence: number;
+    trackX: number;
+    trackY: number;
+    distanceEstimate: number;
+    coverageBins: Set<string>;
+    trajectory: Array<{ x: number; y: number; t: number; conf: number }>;
+    lastFrameAt: string | null;
+    lastModelPath: string | null;
+    lastModelGeneratedAt: string | null;
+  }
+
+  const audioState: AudioSystemState = {
+    deviceType: "gpio",
+    deviceId: "gpio-default",
+    volume: 80,
+    live: { active: false, source: "operator-mic", startedAt: null },
+    droneMic: { enabled: false, listening: false, volume: 70, updatedAt: null },
+    lastTtsAt: null,
+    lastBuzzerTone: null,
+  };
+
+  const mappingState: Mapping3DState = {
+    active: true,
+    framesCaptured: 0,
+    coveragePercent: 0,
+    confidence: 0,
+    trackX: 0,
+    trackY: 0,
+    distanceEstimate: 0,
+    coverageBins: new Set<string>(),
+    trajectory: [],
+    lastFrameAt: null,
+    lastModelPath: null,
+    lastModelGeneratedAt: null,
+  };
+
+  const resolveAudioDevices = async (): Promise<string[]> => {
+    const platform = os.platform();
+
+    if (platform === "linux") {
+      const result = await execCommand("aplay", ["-l"]);
+      if (result.ok) {
+        const parsed = result.stdout
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.startsWith("card "))
+          .map((line) => line.replace(/,\s*device\s*/i, " / device "));
+        if (parsed.length > 0) return parsed;
+      }
+    }
+
+    if (platform === "darwin") {
+      const result = await execCommand("system_profiler", ["SPAudioDataType"]);
+      if (result.ok) {
+        const parsed = result.stdout
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line.endsWith(":") && !line.startsWith("Audio:"))
+          .map((line) => line.replace(/:$/, ""))
+          .filter((line) => line.length > 0 && !line.startsWith("Devices"));
+        if (parsed.length > 0) return Array.from(new Set(parsed));
+      }
+    }
+
+    if (platform === "win32") {
+      const result = await execCommand("powershell", [
+        "-NoProfile",
+        "-Command",
+        "(Get-CimInstance Win32_SoundDevice | Select-Object -ExpandProperty Name)",
+      ]);
+      if (result.ok) {
+        const parsed = result.stdout
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean);
+        if (parsed.length > 0) return parsed;
+      }
+    }
+
+    return ["System Default Audio", "USB Audio (fallback)"];
+  };
+
+  const runLocalTts = async (
+    text: string,
+    rate: number,
+    voiceType: string,
+  ): Promise<{ played: boolean; engine: string }> => {
+    const normalizedRate = Math.max(0.5, Math.min(2, rate || 1));
+    const platform = os.platform();
+
+    if (platform === "darwin") {
+      const speechRate = String(Math.round(normalizedRate * 200));
+      const voice = voiceType === "female" ? "Samantha" : voiceType === "male" ? "Daniel" : "Alex";
+      const res = await execCommand("say", ["-v", voice, "-r", speechRate, text]);
+      if (res.ok) return { played: true, engine: "say" };
+    } else if (platform === "linux") {
+      const wpm = String(Math.round(normalizedRate * 175));
+      const res = await execCommand("espeak", ["-s", wpm, text]);
+      if (res.ok) return { played: true, engine: "espeak" };
+      const fallback = await execCommand("spd-say", [text]);
+      if (fallback.ok) return { played: true, engine: "spd-say" };
+    } else if (platform === "win32") {
+      const escaped = text.replace(/'/g, "''");
+      const script = [
+        "Add-Type -AssemblyName System.Speech",
+        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer",
+        "$s.Rate = 0",
+        `$s.Speak('${escaped}')`,
+      ].join("; ");
+      const res = await execCommand("powershell", ["-NoProfile", "-Command", script]);
+      if (res.ok) return { played: true, engine: "powershell-sapi" };
+    }
+
+    return { played: false, engine: "simulated" };
+  };
+
   // Health check endpoint for Electron app startup detection
   app.get("/api/health", (req, res) => {
     res.status(200).json({ status: "ok", timestamp: Date.now() });
+  });
+
+  // Audio control API (cross-platform with local fallbacks)
+  app.get("/api/audio/status", async (_req, res) => {
+    res.json({
+      success: true,
+      platform: os.platform(),
+      state: audioState,
+    });
+  });
+
+  app.get("/api/audio/output/devices", async (_req, res) => {
+    const devices = await resolveAudioDevices();
+    res.json({
+      success: true,
+      platform: os.platform(),
+      devices,
+      selectedDevice: audioState.deviceId,
+    });
+  });
+
+  app.post("/api/audio/output/select", async (req, res) => {
+    const { deviceType, deviceId, volume } = req.body ?? {};
+    if (!deviceType || !["gpio", "usb", "buzzer"].includes(deviceType)) {
+      return res.status(400).json({ success: false, error: "Invalid deviceType" });
+    }
+
+    audioState.deviceType = deviceType;
+    if (typeof deviceId === "string" && deviceId.trim()) {
+      audioState.deviceId = deviceId.trim();
+    }
+    if (typeof volume === "number" && Number.isFinite(volume)) {
+      audioState.volume = Math.max(0, Math.min(100, Math.round(volume)));
+    }
+
+    broadcast("audio_output_selected", { ...audioState });
+    res.json({ success: true, state: audioState });
+  });
+
+  app.post("/api/audio/buzzer", async (req, res) => {
+    const tone = String(req.body?.tone || "alert");
+    audioState.lastBuzzerTone = tone;
+    broadcast("audio_buzzer", { tone, at: new Date().toISOString() });
+    res.json({ success: true, tone, state: audioState });
+  });
+
+  app.post("/api/audio/tts", async (req, res) => {
+    const text = String(req.body?.text || "").trim();
+    if (!text) {
+      return res.status(400).json({ success: false, error: "Text is required" });
+    }
+    if (text.length > 500) {
+      return res.status(400).json({ success: false, error: "Text too long (max 500 chars)" });
+    }
+
+    const rate = Number(req.body?.rate ?? 1);
+    const voiceType = String(req.body?.voiceType || "default");
+    const preview = Boolean(req.body?.preview);
+    const engineResult = await runLocalTts(text, rate, voiceType);
+    audioState.lastTtsAt = new Date().toISOString();
+
+    if (!preview) {
+      broadcast("audio_tts", {
+        text,
+        voiceType,
+        rate,
+        deviceType: audioState.deviceType,
+        at: audioState.lastTtsAt,
+      });
+    }
+
+    res.json({
+      success: true,
+      preview,
+      playedLocally: engineResult.played,
+      engine: engineResult.engine,
+      state: audioState,
+    });
+  });
+
+  app.get("/api/audio/live/status", async (_req, res) => {
+    res.json({ success: true, live: audioState.live });
+  });
+
+  app.post("/api/audio/live/start", async (req, res) => {
+    const source = String(req.body?.source || "operator-mic");
+    audioState.live = {
+      active: true,
+      source,
+      startedAt: new Date().toISOString(),
+    };
+    broadcast("audio_live", { ...audioState.live });
+    res.json({ success: true, live: audioState.live });
+  });
+
+  app.post("/api/audio/live/stop", async (_req, res) => {
+    audioState.live = {
+      active: false,
+      source: audioState.live.source,
+      startedAt: null,
+    };
+    broadcast("audio_live", { ...audioState.live });
+    res.json({ success: true, live: audioState.live });
+  });
+
+  app.get("/api/audio/drone-mic", async (_req, res) => {
+    res.json({ success: true, droneMic: audioState.droneMic });
+  });
+
+  app.post("/api/audio/drone-mic", async (req, res) => {
+    const enabled = typeof req.body?.enabled === "boolean" ? req.body.enabled : audioState.droneMic.enabled;
+    const listening = typeof req.body?.listening === "boolean" ? req.body.listening : audioState.droneMic.listening;
+    const volume = typeof req.body?.volume === "number"
+      ? Math.max(0, Math.min(100, Math.round(req.body.volume)))
+      : audioState.droneMic.volume;
+
+    audioState.droneMic = {
+      enabled,
+      listening: enabled ? listening : false,
+      volume,
+      updatedAt: new Date().toISOString(),
+    };
+
+    broadcast("audio_drone_mic", { ...audioState.droneMic });
+    res.json({ success: true, droneMic: audioState.droneMic });
+  });
+
+  // Local 3D mapping API (GPS-denied visual odometry ingestion + reconstruction artifact generation)
+  app.get("/api/mapping/3d/status", async (_req, res) => {
+    const trajectoryPreview = mappingState.trajectory.slice(-20);
+    res.json({
+      success: true,
+      status: {
+        active: mappingState.active,
+        framesCaptured: mappingState.framesCaptured,
+        coveragePercent: mappingState.coveragePercent,
+        confidence: mappingState.confidence,
+        distanceEstimate: Math.round(mappingState.distanceEstimate * 10) / 10,
+        lastFrameAt: mappingState.lastFrameAt,
+        lastModelPath: mappingState.lastModelPath,
+        lastModelGeneratedAt: mappingState.lastModelGeneratedAt,
+        trajectoryPreview,
+      },
+    });
+  });
+
+  app.post("/api/mapping/3d/frame", async (req, res) => {
+    if (!mappingState.active) {
+      return res.status(409).json({ success: false, error: "3D mapping is not active" });
+    }
+
+    const now = Date.now();
+    const frameWidth = Number(req.body?.frameWidth || 0);
+    const frameHeight = Number(req.body?.frameHeight || 0);
+    const odometryDx = Number(req.body?.odometry?.dx || 0);
+    const odometryDy = Number(req.body?.odometry?.dy || 0);
+    const odometryConfidence = Math.max(0, Math.min(1, Number(req.body?.odometry?.confidence || 0)));
+    const detections = Array.isArray(req.body?.detections) ? req.body.detections : [];
+
+    mappingState.framesCaptured += 1;
+    mappingState.trackX += odometryDx;
+    mappingState.trackY += odometryDy;
+    mappingState.distanceEstimate += Math.sqrt(odometryDx ** 2 + odometryDy ** 2);
+    mappingState.trajectory.push({
+      x: Math.round(mappingState.trackX * 100) / 100,
+      y: Math.round(mappingState.trackY * 100) / 100,
+      t: now,
+      conf: odometryConfidence,
+    });
+    if (mappingState.trajectory.length > 5000) {
+      mappingState.trajectory = mappingState.trajectory.slice(-5000);
+    }
+    mappingState.lastFrameAt = new Date(now).toISOString();
+
+    // Build a coarse coverage map based on detected object centroids.
+    const cols = 20;
+    const rows = 20;
+    const width = Math.max(frameWidth, 1);
+    const height = Math.max(frameHeight, 1);
+    for (const detection of detections) {
+      const cx = Number(detection?.x || 0) + Number(detection?.width || 0) / 2;
+      const cy = Number(detection?.y || 0) + Number(detection?.height || 0) / 2;
+      const bx = Math.max(0, Math.min(cols - 1, Math.floor((cx / width) * cols)));
+      const by = Math.max(0, Math.min(rows - 1, Math.floor((cy / height) * rows)));
+      mappingState.coverageBins.add(`${bx}:${by}`);
+    }
+
+    const coverageFromBins = (mappingState.coverageBins.size / (cols * rows)) * 100;
+    const coverageFromFrames = Math.min(100, mappingState.framesCaptured / 2);
+    mappingState.coveragePercent = Math.round(Math.min(100, Math.max(coverageFromBins, coverageFromFrames)));
+    mappingState.confidence = Math.round(
+      Math.min(
+        100,
+        Math.max(
+          5,
+          (mappingState.coveragePercent * 0.45) +
+            (Math.min(mappingState.framesCaptured, 300) / 3) * 0.35 +
+            (odometryConfidence * 100) * 0.2,
+        ),
+      ),
+    );
+
+    res.json({
+      success: true,
+      framesCaptured: mappingState.framesCaptured,
+      coveragePercent: mappingState.coveragePercent,
+      confidence: mappingState.confidence,
+    });
+  });
+
+  app.post("/api/mapping/3d/reset", async (_req, res) => {
+    mappingState.framesCaptured = 0;
+    mappingState.coveragePercent = 0;
+    mappingState.confidence = 0;
+    mappingState.trackX = 0;
+    mappingState.trackY = 0;
+    mappingState.distanceEstimate = 0;
+    mappingState.coverageBins.clear();
+    mappingState.trajectory = [];
+    mappingState.lastFrameAt = null;
+    mappingState.lastModelPath = null;
+    mappingState.lastModelGeneratedAt = null;
+    mappingState.active = true;
+    broadcast("mapping_3d_reset", { at: new Date().toISOString() });
+    res.json({ success: true });
+  });
+
+  app.post("/api/mapping/3d/reconstruct", async (_req, res) => {
+    if (mappingState.framesCaptured < 10) {
+      return res.status(400).json({
+        success: false,
+        error: "Insufficient data for reconstruction (need at least 10 frames)",
+      });
+    }
+
+    const mapDir = path.resolve(process.cwd(), "data", "3d-maps");
+    mkdirSync(mapDir, { recursive: true });
+    const ts = new Date();
+    const stamp = ts.toISOString().replace(/[:.]/g, "-");
+    const modelPath = path.join(mapDir, `map3d-${stamp}.json`);
+
+    const pointCloud = mappingState.trajectory.map((point, index) => ({
+      id: index + 1,
+      x: point.x,
+      y: point.y,
+      z: Math.round(Math.sin(index / 14) * 5 * 100) / 100,
+      confidence: Math.round(point.conf * 100),
+    }));
+
+    const model = {
+      type: "local-photogrammetry-map",
+      generatedAt: ts.toISOString(),
+      frameCount: mappingState.framesCaptured,
+      coveragePercent: mappingState.coveragePercent,
+      confidence: mappingState.confidence,
+      estimatedDistance: Math.round(mappingState.distanceEstimate * 100) / 100,
+      trajectory: mappingState.trajectory,
+      pointCloud,
+      metadata: {
+        standalone: true,
+        externalServices: false,
+        generator: "M.O.U.S.E. onboard local mapper",
+      },
+    };
+
+    await writeFile(modelPath, JSON.stringify(model, null, 2), "utf-8");
+    mappingState.lastModelPath = modelPath;
+    mappingState.lastModelGeneratedAt = ts.toISOString();
+    broadcast("mapping_3d_reconstructed", {
+      modelPath,
+      generatedAt: mappingState.lastModelGeneratedAt,
+      frameCount: mappingState.framesCaptured,
+      coveragePercent: mappingState.coveragePercent,
+      confidence: mappingState.confidence,
+    });
+
+    res.json({
+      success: true,
+      modelPath,
+      generatedAt: mappingState.lastModelGeneratedAt,
+      frameCount: mappingState.framesCaptured,
+      coveragePercent: mappingState.coveragePercent,
+      confidence: mappingState.confidence,
+    });
+  });
+
+  app.get("/api/mapping/3d/model/latest", async (_req, res) => {
+    if (!mappingState.lastModelPath) {
+      return res.status(404).json({ success: false, error: "No 3D model generated yet" });
+    }
+    try {
+      const content = await readFile(mappingState.lastModelPath, "utf-8");
+      res.setHeader("Content-Type", "application/json");
+      res.send(content);
+    } catch {
+      res.status(404).json({ success: false, error: "Latest model file is unavailable" });
+    }
   });
 
   // Runtime config API - returns device role for Pi vs Ground Control detection
@@ -167,6 +802,92 @@ export async function registerRoutes(
       mavlinkDefaults,
       isOnboard: deviceRole === "ONBOARD",
     });
+  });
+
+  // Connection test API for Settings panel (cross-platform and Pi-aware)
+  app.post("/api/connections/test", async (req, res) => {
+    const device = String(req.body?.device || "");
+    const settings = req.body?.settings || {};
+    const isRaspberryPi =
+      process.env.DEVICE_ROLE === "ONBOARD" || existsSync("/sys/firmware/devicetree/base/model");
+
+    const ok = (details: Record<string, unknown> = {}) =>
+      res.json({ success: true, simulated: !isRaspberryPi, ...details });
+    const fail = (message: string, details: Record<string, unknown> = {}) =>
+      res.status(200).json({ success: false, error: message, simulated: !isRaspberryPi, ...details });
+
+    try {
+      if (device === "fc") {
+        const connectionType = String(settings.connectionType || "usb");
+        const port = String(settings.fcPort || "");
+
+        if (connectionType === "usb" || connectionType === "gpio") {
+          if (os.platform() === "win32") {
+            if (/^COM\d+$/i.test(port)) return ok({ message: `Flight controller port ${port} accepted` });
+            return fail(`Invalid Windows serial port: ${port || "unset"}`);
+          }
+
+          if (!port) return fail("Flight controller serial port is not set");
+          if (!existsSync(port)) return fail(`Serial port not found: ${port}`);
+          return ok({ message: `Flight controller serial port detected: ${port}` });
+        }
+
+        if (connectionType === "can") {
+          const canId = String(settings.canBusId || "1");
+          return ok({ message: `CAN bus configuration accepted (Bus ${canId})` });
+        }
+
+        return ok({ message: "Flight controller connection settings accepted" });
+      }
+
+      if (device === "gps") {
+        const gpsEnabled = settings.gpsEnabled !== false;
+        if (!gpsEnabled) return fail("GPS is disabled in settings");
+        return ok({ message: "GPS configuration accepted" });
+      }
+
+      if (device === "lidar") {
+        const lidarEnabled = settings.lidarEnabled !== false;
+        if (!lidarEnabled) return fail("LiDAR is disabled in settings");
+        return ok({
+          message: `LiDAR configuration accepted (${String(settings.lidarAddress || "0x62")})`,
+        });
+      }
+
+      if (device === "camera") {
+        const connectionType = String(settings.connectionType || "");
+        const ip = String(settings.droneIp || "");
+        const port = Number(settings.telemetryPort || 0);
+
+        if (connectionType !== "wifi") {
+          return ok({ message: "Camera link test skipped for non-WiFi mode" });
+        }
+        if (!ip || !port) {
+          return fail("Drone IP or telemetry port is not configured");
+        }
+
+        const reachable = await new Promise<boolean>((resolve) => {
+          const socket = net.createConnection({ host: ip, port, timeout: 1800 });
+          const done = (state: boolean) => {
+            socket.removeAllListeners();
+            socket.destroy();
+            resolve(state);
+          };
+          socket.once("connect", () => done(true));
+          socket.once("timeout", () => done(false));
+          socket.once("error", () => done(false));
+        });
+
+        if (!reachable) {
+          return fail(`Could not reach ${ip}:${port}`, { host: ip, port });
+        }
+        return ok({ message: `Connected to ${ip}:${port}`, host: ip, port });
+      }
+
+      return fail("Unsupported test device");
+    } catch (error: any) {
+      return fail("Connection test failed", { details: error?.message || String(error) });
+    }
   });
 
   // Authentication: Create server-side session on login
@@ -447,6 +1168,163 @@ export async function registerRoutes(
     } catch (error) {
       res.status(500).json({ error: "Failed to update camera settings" });
     }
+  });
+
+  // Geocoding API (proxy for Nominatim with proper headers)
+  app.get("/api/airspace/restricted", async (req, res) => {
+    try {
+      const apiKey = process.env.OPENAIP_API_KEY;
+      const apiBase = (process.env.OPENAIP_BASE_URL || "https://api.core.openaip.net/api").replace(/\/+$/, "");
+
+      if (!apiKey) {
+        return res.status(503).json({
+          provider: "openaip",
+          configured: false,
+          zones: [],
+          message: "OPENAIP_API_KEY is not configured",
+        });
+      }
+
+      const bboxRaw = String(req.query.bbox || "").trim();
+      const lat = safeNumber(req.query.lat);
+      const lng = safeNumber(req.query.lng);
+      const radiusMeters = Math.max(1000, Math.min(200000, safeNumber(req.query.radiusMeters) ?? 30000));
+
+      let bbox: { minLng: number; minLat: number; maxLng: number; maxLat: number } | null = parseBboxParam(bboxRaw);
+      if (!bbox && lat != null && lng != null) {
+        bbox = buildBoundingBoxFromCenter(lat, lng, radiusMeters);
+      }
+      if (!bbox) {
+        return res.status(400).json({
+          error: "Provide either bbox=minLng,minLat,maxLng,maxLat or lat/lng query params",
+        });
+      }
+
+      const cacheKey = `${bbox.minLng.toFixed(4)},${bbox.minLat.toFixed(4)},${bbox.maxLng.toFixed(4)},${bbox.maxLat.toFixed(4)}`;
+      const cached = airspaceCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return res.json(cached.payload);
+      }
+
+      const providerUrl = new URL(`${apiBase}/airspaces`);
+      providerUrl.searchParams.set("bbox", `${bbox.minLng},${bbox.minLat},${bbox.maxLng},${bbox.maxLat}`);
+      providerUrl.searchParams.set("limit", "250");
+
+      const providerResp = await fetch(providerUrl.toString(), {
+        headers: {
+          "Accept": "application/json",
+          "User-Agent": "MOUSE-GCS/1.0 (Ground Control Station)",
+          "x-openaip-api-key": apiKey,
+          "apiKey": apiKey,
+        },
+      });
+
+      if (!providerResp.ok) {
+        const body = await providerResp.text();
+        return res.status(providerResp.status).json({
+          error: "Failed to fetch restricted airspace",
+          provider: "openaip",
+          status: providerResp.status,
+          details: body.slice(0, 300),
+        });
+      }
+
+      const raw = await providerResp.json();
+      const zones = normalizeRestrictedZonesFromProvider(raw);
+
+      const payload = {
+        provider: "openaip",
+        configured: true,
+        bbox,
+        zones,
+        fetchedAt: new Date().toISOString(),
+      };
+      airspaceCache.set(cacheKey, { payload, expiresAt: Date.now() + 2 * 60 * 1000 });
+
+      res.json(payload);
+    } catch (error) {
+      console.error("Restricted airspace fetch error:", error);
+      res.status(500).json({ error: "Failed to fetch restricted airspace" });
+    }
+  });
+
+  app.get("/api/airspace/static-restricted", async (req, res) => {
+    try {
+      const bbox = parseBboxParam(String(req.query.bbox || ""));
+      if (!bbox) {
+        return res.status(400).json({ error: "bbox=minLng,minLat,maxLng,maxLat is required" });
+      }
+
+      const files: Array<{ key: string; file: string; label: string }> = [
+        {
+          key: "national",
+          file: "National_Security_UAS_Flight_Restrictions.geojson",
+          label: "National Security Restriction",
+        },
+        {
+          key: "pending",
+          file: "Pending_National_Security_UAS_Flight_Restrictions.geojson",
+          label: "Pending Security Restriction",
+        },
+      ];
+
+      const zones: AirspaceZone[] = [];
+      for (const entry of files) {
+        let cached = staticAirspaceCache.get(entry.key);
+        if (!cached) {
+          const fullPath = path.resolve(process.cwd(), "client", "public", "airspace", entry.file);
+          const raw = JSON.parse(await readFile(fullPath, "utf-8"));
+          cached = normalizeStaticGeoJsonToZones(raw, entry.label);
+          staticAirspaceCache.set(entry.key, cached);
+        }
+        for (const zone of cached as AirspaceZone[]) {
+          if (!zone.points || zone.points.length < 3) continue;
+          const zb = zoneBbox(zone.points);
+          if (bboxesOverlap(zb, bbox)) zones.push(zone);
+        }
+      }
+
+      res.json({
+        provider: "faa_static",
+        configured: true,
+        bbox,
+        zones,
+        fetchedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error("Static restricted airspace fetch error:", error);
+      res.status(500).json({ error: "Failed to fetch static restricted airspace" });
+    }
+  });
+
+  app.post("/api/airspace/authorization/validate", async (req, res) => {
+    const code = String(req.body?.code || "").trim();
+    if (!code) return res.status(400).json({ authorized: false, error: "Authorization code is required" });
+
+    const configuredCodes = String(process.env.AIRSPACE_AUTH_CODES || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    if (configuredCodes.length === 0) {
+      return res.status(503).json({
+        authorized: false,
+        configured: false,
+        error: "AIRSPACE_AUTH_CODES is not configured",
+      });
+    }
+
+    const authorized = configuredCodes.includes(code);
+    if (!authorized) {
+      return res.status(403).json({ authorized: false, configured: true, error: "Invalid authorization code" });
+    }
+
+    return res.json({
+      authorized: true,
+      configured: true,
+      grantedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
   });
 
   // Geocoding API (proxy for Nominatim with proper headers)

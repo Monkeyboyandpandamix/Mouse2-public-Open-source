@@ -24,7 +24,7 @@ import {
   Download,
   Lock
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
 
@@ -84,11 +84,107 @@ export function AutomationPanel() {
   const { hasPermission } = usePermissions();
   const canAutomate = hasPermission('automation_scripts');
   
-  const [scripts, setScripts] = useState<AutomationScript[]>(defaultScripts);
+  const [scripts, setScripts] = useState<AutomationScript[]>(() => {
+    const saved = localStorage.getItem("mouse_automation_scripts");
+    if (!saved) return defaultScripts;
+    try {
+      const parsed = JSON.parse(saved);
+      return Array.isArray(parsed) ? parsed : defaultScripts;
+    } catch {
+      return defaultScripts;
+    }
+  });
   const [selectedScript, setSelectedScript] = useState<AutomationScript | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedScript, setEditedScript] = useState<AutomationScript | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const lastTriggerRunRef = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    localStorage.setItem("mouse_automation_scripts", JSON.stringify(scripts));
+  }, [scripts]);
+
+  const executeScriptNow = (script: AutomationScript, reason: string) => {
+    toast.info(`Running "${script.name}" (${reason})...`);
+    setTimeout(() => {
+      const nowIso = new Date().toISOString();
+      setScripts((prev) =>
+        prev.map((s) => (s.id === script.id ? { ...s, lastRun: nowIso } : s)),
+      );
+      window.dispatchEvent(
+        new CustomEvent("automation-script-run", {
+          detail: { id: script.id, name: script.name, trigger: script.trigger, reason, code: script.code },
+        }),
+      );
+      toast.success(`"${script.name}" completed`);
+    }, 500);
+  };
+
+  useEffect(() => {
+    const shouldThrottle = (scriptId: string, windowMs: number) => {
+      const now = Date.now();
+      const last = lastTriggerRunRef.current[scriptId] || 0;
+      if (now - last < windowMs) return true;
+      lastTriggerRunRef.current[scriptId] = now;
+      return false;
+    };
+
+    const runEnabledForTrigger = (trigger: AutomationScript["trigger"], reason: string, throttleMs = 5000) => {
+      scripts
+        .filter((s) => s.enabled && s.trigger === trigger)
+        .forEach((script) => {
+          if (shouldThrottle(script.id, throttleMs)) return;
+          executeScriptNow(script, reason);
+        });
+    };
+
+    const onFlightCommand = (e: CustomEvent<{ command?: string }>) => {
+      const cmd = e.detail?.command;
+      if (cmd === "takeoff") runEnabledForTrigger("takeoff", "Takeoff event");
+      if (cmd === "land") runEnabledForTrigger("landing", "Landing event");
+      if (cmd === "guided-waypoint") runEnabledForTrigger("waypoint", "Waypoint event");
+    };
+
+    const onWaypointReached = () => {
+      runEnabledForTrigger("waypoint", "Waypoint reached");
+    };
+
+    const onTelemetry = (e: CustomEvent<any>) => {
+      const data = e.detail || {};
+      const battery =
+        typeof data.batteryPercent === "number"
+          ? data.batteryPercent
+          : typeof data.battery === "number"
+            ? data.battery
+            : null;
+      if (battery != null && battery <= 20) {
+        runEnabledForTrigger("battery_low", `Battery low (${Math.round(battery)}%)`, 15000);
+      }
+
+      const gpsLost =
+        data.gpsStatus === "no_fix" ||
+        data.gpsFixType === 0 ||
+        data.gpsFixType === "no_fix";
+      if (gpsLost) {
+        runEnabledForTrigger("gps_lost", "GPS fix lost", 12000);
+      }
+    };
+
+    const onDisconnect = () => {
+      runEnabledForTrigger("disconnect", "Connection lost", 12000);
+    };
+
+    window.addEventListener("flight-command" as any, onFlightCommand);
+    window.addEventListener("waypoint-reached" as any, onWaypointReached);
+    window.addEventListener("telemetry-update" as any, onTelemetry);
+    window.addEventListener("connection-lost" as any, onDisconnect);
+    return () => {
+      window.removeEventListener("flight-command" as any, onFlightCommand);
+      window.removeEventListener("waypoint-reached" as any, onWaypointReached);
+      window.removeEventListener("telemetry-update" as any, onTelemetry);
+      window.removeEventListener("connection-lost" as any, onDisconnect);
+    };
+  }, [scripts]);
 
   // Show permission denied if user doesn't have access
   if (!canAutomate) {
@@ -157,13 +253,7 @@ async function run() {
   };
 
   const handleRunScript = (script: AutomationScript) => {
-    toast.info(`Running "${script.name}"...`);
-    setTimeout(() => {
-      setScripts(prev => prev.map(s => 
-        s.id === script.id ? { ...s, lastRun: new Date().toISOString() } : s
-      ));
-      toast.success(`"${script.name}" completed`);
-    }, 1500);
+    executeScriptNow(script, "Manual run");
   };
 
   const getTriggerBadge = (trigger: string) => {

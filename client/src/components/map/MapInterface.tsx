@@ -11,23 +11,13 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import type { Drone } from "@shared/schema";
-
-interface GeofenceZone {
-  id: string;
-  name: string;
-  type: "circle" | "polygon";
-  enabled: boolean;
-  action: "rtl" | "land" | "hover" | "warn";
-  center?: { lat: number; lng: number };
-  radius?: number;
-  points?: { lat: number; lng: number }[];
-  maxAltitude?: number;
-  minAltitude?: number;
-}
+import { NoFlyZoneOverlay } from "@/components/map/NoFlyZoneOverlay";
+import { NoFlyZoneLegend } from "@/components/map/NoFlyZoneLegend";
+import { RegulatoryGeoJsonOverlay } from "@/components/map/RegulatoryGeoJsonOverlay";
+import { useNoFlyZones } from "@/hooks/useNoFlyZones";
 
 interface Waypoint {
   id: number;
@@ -113,6 +103,16 @@ const HomeIcon = L.divIcon({
   html: `<div class="flex items-center justify-center w-6 h-6 bg-emerald-500 text-white rounded-sm border-2 border-white font-bold text-xs shadow-md">H</div>`,
   iconSize: [24, 24],
   iconAnchor: [12, 12],
+});
+
+const EstimatedNavIcon = L.divIcon({
+  className: "bg-transparent",
+  html: `<div class="relative flex items-center justify-center w-8 h-8">
+          <div class="absolute w-full h-full rounded-full bg-amber-400/30 animate-ping"></div>
+          <div class="w-4 h-4 rounded-full border-2 border-white bg-amber-400"></div>
+         </div>`,
+  iconSize: [32, 32],
+  iconAnchor: [16, 16],
 });
 
 const WaypointIcon = (num: number) => L.divIcon({
@@ -291,6 +291,7 @@ function MapCenterPersist() {
 
 export function MapInterface() {
   const [currentLocation, setCurrentLocation] = useState<[number, number]>([DEFAULT_LAT, DEFAULT_LNG]);
+  const noFlyZones = useNoFlyZones();
   
   // Get user's actual GPS location on mount
   useEffect(() => {
@@ -316,14 +317,26 @@ export function MapInterface() {
   const [searchResult, setSearchResult] = useState<{lat: number; lon: number; name: string} | null>(null);
   const [showAdsb, setShowAdsb] = useState(true);
   const [aircraft, setAircraft] = useState<Aircraft[]>(defaultAircraft);
+  const [liveTelemetryPosition, setLiveTelemetryPosition] = useState<[number, number] | null>(null);
+  const [gpsDeniedNav, setGpsDeniedNav] = useState<{
+    active: boolean;
+    method: "visual" | "dead" | "hybrid";
+    estimatedPosition: { lat: number; lng: number } | null;
+    breadcrumbs: { lat: number; lng: number }[];
+    backtracing: boolean;
+  }>({
+    active: false,
+    method: "hybrid",
+    estimatedPosition: null,
+    breadcrumbs: [],
+    backtracing: false,
+  });
   
   // ADS-B panel drag state (using top/left positioning)
   const [adsbPosition, setAdsbPosition] = useState({ x: 16, y: 200 });
   const [adsbDragging, setAdsbDragging] = useState(false);
   const [adsbDragOffset, setAdsbDragOffset] = useState({ x: 0, y: 0 });
   
-  // Shared state for geofence zones and waypoints
-  const [geofenceZones, setGeofenceZones] = useState<GeofenceZone[]>([]);
   const [selectedMissionId, setSelectedMissionId] = useState<number | null>(null);
   
   // Fetch waypoints for selected mission
@@ -381,39 +394,21 @@ export function MapInterface() {
     window.addEventListener('drone-selected' as any, handleDroneChange);
     return () => window.removeEventListener('drone-selected' as any, handleDroneChange);
   }, []);
-  
-  // Load geofence zones from localStorage and listen for updates
+
+  // Use live telemetry position for selected drone when available.
   useEffect(() => {
-    const loadZones = () => {
-      const saved = localStorage.getItem('mouse_geofence_zones');
-      if (saved) {
-        try {
-          setGeofenceZones(JSON.parse(saved));
-        } catch (e) {
-          console.error('Failed to parse geofence zones:', e);
-        }
+    const handleTelemetry = (e: CustomEvent<{ position?: { lat: number; lng: number }; latitude?: number; longitude?: number }>) => {
+      const pos = e.detail?.position || (
+        typeof e.detail?.latitude === "number" && typeof e.detail?.longitude === "number"
+          ? { lat: e.detail.latitude, lng: e.detail.longitude }
+          : null
+      );
+      if (pos) {
+        setLiveTelemetryPosition([pos.lat, pos.lng]);
       }
     };
-    
-    loadZones();
-    
-    // Listen for geofence updates from GeofencingPanel
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'mouse_geofence_zones') {
-        loadZones();
-      }
-    };
-    
-    // Custom event for same-tab updates
-    const handleGeofenceUpdate = () => loadZones();
-    
-    window.addEventListener('storage', handleStorageChange);
-    window.addEventListener('geofence-updated', handleGeofenceUpdate);
-    
-    return () => {
-      window.removeEventListener('storage', handleStorageChange);
-      window.removeEventListener('geofence-updated', handleGeofenceUpdate);
-    };
+    window.addEventListener("telemetry-update" as any, handleTelemetry);
+    return () => window.removeEventListener("telemetry-update" as any, handleTelemetry);
   }, []);
   
   // Auto-select first mission if none selected (only once)
@@ -443,6 +438,29 @@ export function MapInterface() {
 
     window.addEventListener('adsb-update' as any, handleAdsbUpdate);
     return () => window.removeEventListener('adsb-update' as any, handleAdsbUpdate);
+  }, []);
+
+  // Listen for GPS-denied fused position updates.
+  useEffect(() => {
+    const handleGpsDenied = (
+      e: CustomEvent<{
+        active: boolean;
+        method: "visual" | "dead" | "hybrid";
+        estimatedPosition: { lat: number; lng: number } | null;
+        breadcrumbs: { lat: number; lng: number }[];
+        backtracing: boolean;
+      }>,
+    ) => {
+      setGpsDeniedNav({
+        active: Boolean(e.detail?.active),
+        method: e.detail?.method || "hybrid",
+        estimatedPosition: e.detail?.estimatedPosition || null,
+        breadcrumbs: e.detail?.breadcrumbs || [],
+        backtracing: Boolean(e.detail?.backtracing),
+      });
+    };
+    window.addEventListener("gps-denied-position-update" as any, handleGpsDenied);
+    return () => window.removeEventListener("gps-denied-position-update" as any, handleGpsDenied);
   }, []);
 
   const getTileUrl = () => {
@@ -518,7 +536,11 @@ export function MapInterface() {
   // Get selected drone's GPS position for centering
   const selectedDrone = selectedDroneId ? allDrones.find(d => d.id === selectedDroneId) : null;
   const selectedDronePosition: [number, number] | null = 
-    selectedDrone?.latitude && selectedDrone?.longitude 
+    gpsDeniedNav.active && gpsDeniedNav.estimatedPosition
+      ? [gpsDeniedNav.estimatedPosition.lat, gpsDeniedNav.estimatedPosition.lng]
+      : liveTelemetryPosition
+      ? liveTelemetryPosition
+      : selectedDrone?.latitude && selectedDrone?.longitude 
       ? [selectedDrone.latitude, selectedDrone.longitude] 
       : null;
 
@@ -535,6 +557,8 @@ export function MapInterface() {
           attribution='&copy; OpenStreetMap'
           url={getTileUrl()}
         />
+        <NoFlyZoneOverlay zones={noFlyZones} />
+        <RegulatoryGeoJsonOverlay controlClassName="top-20 left-4" />
         
         <ZoomControls dronePosition={selectedDronePosition} operatorPosition={currentLocation} />
         <MapCenterPersist />
@@ -767,60 +791,6 @@ export function MapInterface() {
           />
         )}
         
-        {/* Geofence Zones */}
-        {geofenceZones.filter(z => z.enabled).map(zone => (
-          zone.type === 'circle' && zone.center && zone.radius ? (
-            <Circle 
-              key={zone.id}
-              center={[zone.center.lat, zone.center.lng]} 
-              pathOptions={{ 
-                color: zone.action === 'rtl' ? 'hsl(0 85% 60%)' : 
-                       zone.action === 'land' ? 'hsl(45 85% 60%)' : 
-                       zone.action === 'hover' ? 'hsl(200 85% 60%)' : 'hsl(280 85% 60%)',
-                fillColor: zone.action === 'rtl' ? 'hsl(0 85% 60%)' : 
-                           zone.action === 'land' ? 'hsl(45 85% 60%)' : 
-                           zone.action === 'hover' ? 'hsl(200 85% 60%)' : 'hsl(280 85% 60%)',
-                fillOpacity: 0.1, 
-                weight: 2, 
-                dashArray: '4' 
-              }} 
-              radius={zone.radius} 
-            >
-              <Popup>
-                <div className="font-mono text-sm">
-                  <strong>{zone.name}</strong><br/>
-                  Action: {zone.action.toUpperCase()}<br/>
-                  Radius: {zone.radius}m
-                </div>
-              </Popup>
-            </Circle>
-          ) : zone.type === 'polygon' && zone.points && zone.points.length >= 3 ? (
-            <Polygon
-              key={zone.id}
-              positions={zone.points.map(p => [p.lat, p.lng] as [number, number])}
-              pathOptions={{ 
-                color: zone.action === 'rtl' ? 'hsl(0 85% 60%)' : 
-                       zone.action === 'land' ? 'hsl(45 85% 60%)' : 
-                       zone.action === 'hover' ? 'hsl(200 85% 60%)' : 'hsl(280 85% 60%)',
-                fillColor: zone.action === 'rtl' ? 'hsl(0 85% 60%)' : 
-                           zone.action === 'land' ? 'hsl(45 85% 60%)' : 
-                           zone.action === 'hover' ? 'hsl(200 85% 60%)' : 'hsl(280 85% 60%)',
-                fillOpacity: 0.1, 
-                weight: 2, 
-                dashArray: '4' 
-              }}
-            >
-              <Popup>
-                <div className="font-mono text-sm">
-                  <strong>{zone.name}</strong><br/>
-                  Action: {zone.action.toUpperCase()}<br/>
-                  Points: {zone.points.length}
-                </div>
-              </Popup>
-            </Polygon>
-          ) : null
-        ))}
-
         {/* ADS-B Aircraft */}
         {showAdsb && aircraft.map(ac => (
           <Marker 
@@ -854,6 +824,35 @@ export function MapInterface() {
             </Popup>
           </Marker>
         ))}
+
+        {/* GPS-denied estimated position and breadcrumb trail */}
+        {gpsDeniedNav.estimatedPosition && (
+          <>
+            <Marker
+              position={[gpsDeniedNav.estimatedPosition.lat, gpsDeniedNav.estimatedPosition.lng]}
+              icon={EstimatedNavIcon}
+            >
+              <Popup>
+                <div className="font-mono text-xs">
+                  <strong>GPS-Denied Navigation</strong><br />
+                  Mode: {gpsDeniedNav.method.toUpperCase()}<br />
+                  Status: {gpsDeniedNav.active ? "ACTIVE" : "STANDBY"}<br />
+                  {gpsDeniedNav.backtracing ? "Backtrace in progress" : "Estimating local pose"}
+                </div>
+              </Popup>
+            </Marker>
+            {gpsDeniedNav.breadcrumbs.length > 1 && (
+              <Polyline
+                positions={gpsDeniedNav.breadcrumbs.map((p) => [p.lat, p.lng] as [number, number])}
+                pathOptions={{
+                  color: gpsDeniedNav.backtracing ? "#f59e0b" : "#38bdf8",
+                  weight: 2,
+                  dashArray: "3,6",
+                }}
+              />
+            )}
+          </>
+        )}
       </MapContainer>
 
       {/* Search Bar Overlay */}
@@ -909,7 +908,13 @@ export function MapInterface() {
              <MapIcon className="w-3 h-3 mr-2" /> Street
            </Button>
         </div>
+        <div className="bg-card/80 backdrop-blur-md px-3 py-2 rounded-lg border border-border shadow-lg text-xs">
+          <div className="font-semibold">No-Fly Overlay</div>
+          <div className="text-muted-foreground">{noFlyZones.length} restricted zone(s)</div>
+        </div>
       </div>
+
+      <NoFlyZoneLegend className="absolute bottom-4 right-4 z-[400]" />
 
       {/* ADS-B Panel - Draggable */}
       <div 
@@ -969,7 +974,7 @@ export function MapInterface() {
 
       {/* Zoom Level Indicator */}
       <div className="absolute bottom-4 left-4 z-[400] bg-card/80 backdrop-blur px-3 py-1 rounded text-xs font-mono text-muted-foreground">
-        Lat: {position[0].toFixed(4)} | Lon: {position[1].toFixed(4)}
+        Lat: {(gpsDeniedNav.estimatedPosition?.lat ?? position[0]).toFixed(4)} | Lon: {(gpsDeniedNav.estimatedPosition?.lng ?? position[1]).toFixed(4)}
       </div>
     </div>
   );

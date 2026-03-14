@@ -5,6 +5,10 @@ import { useEffect, useState, useCallback } from "react";
 import { ZoomIn, ZoomOut, MapPin, Layers, Map as MapIcon, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import { NoFlyZoneOverlay } from "@/components/map/NoFlyZoneOverlay";
+import { NoFlyZoneLegend } from "@/components/map/NoFlyZoneLegend";
+import { RegulatoryGeoJsonOverlay } from "@/components/map/RegulatoryGeoJsonOverlay";
+import { useNoFlyZones } from "@/hooks/useNoFlyZones";
 
 import icon from "leaflet/dist/images/marker-icon.png";
 import iconShadow from "leaflet/dist/images/marker-shadow.png";
@@ -109,6 +113,7 @@ function ZoomControls() {
 export function MissionMap({ waypoints, homePosition, onMapClick, clickEnabled = false, showClickHint = false }: MissionMapProps) {
   const [currentLocation, setCurrentLocation] = useState<[number, number] | null>(null);
   const [mapType, setMapType] = useState<'dark' | 'satellite' | 'street'>('dark');
+  const noFlyZones = useNoFlyZones();
 
   // Get user's actual GPS location on mount
   useEffect(() => {
@@ -172,6 +177,8 @@ export function MissionMap({ waypoints, homePosition, onMapClick, clickEnabled =
         
         <MapClickHandler onClick={handleMapClick} enabled={clickEnabled} />
         <ZoomControls />
+        <NoFlyZoneOverlay zones={noFlyZones} />
+        <RegulatoryGeoJsonOverlay />
 
         {homePosition && (
           <Marker position={homePosition} icon={HomeIcon} />
@@ -236,6 +243,8 @@ export function MissionMap({ waypoints, homePosition, onMapClick, clickEnabled =
           </Button>
         </div>
       </div>
+
+      <NoFlyZoneLegend className="absolute bottom-4 left-4 z-[400]" />
     </div>
   );
 }

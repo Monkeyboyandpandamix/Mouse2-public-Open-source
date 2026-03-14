@@ -15,6 +15,15 @@ import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cabl
 import { operationsLog, LogEntry, LogType } from "@/lib/operationsLog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { usePermissions } from "@/hooks/usePermissions";
+import {
+  getDefaultSerialPort,
+  getDefaultUsbCamera,
+  getRuntimePlatform,
+  getSerialPortOptions,
+  getUsbCameraOptions,
+  getUsbGpsPortOptions,
+  getUsbRadioPortOptions,
+} from "@/lib/platform";
 
 // Google Account Manager Component for standalone deployments
 function GoogleAccountManager() {
@@ -245,6 +254,13 @@ function GoogleAccountManager() {
 export function SettingsPanel() {
   const { hasPermission } = usePermissions();
   const canAccessSettings = hasPermission('system_settings');
+  const runtimePlatform = getRuntimePlatform();
+  const serialPortOptions = getSerialPortOptions(runtimePlatform);
+  const usbCameraOptions = getUsbCameraOptions(runtimePlatform);
+  const usbGpsPortOptions = getUsbGpsPortOptions(runtimePlatform);
+  const usbRadioPortOptions = getUsbRadioPortOptions(runtimePlatform);
+  const defaultSerialPort = getDefaultSerialPort(runtimePlatform);
+  const defaultUsbCamera = getDefaultUsbCamera(runtimePlatform);
   
   const queryClient = useQueryClient();
   const [unsavedChanges, setUnsavedChanges] = useState(false);
@@ -255,7 +271,7 @@ export function SettingsPanel() {
   
   const [connectionSettings, setConnectionSettings] = useState({
     connectionType: "usb",
-    fcPort: "/dev/ttyACM0",
+    fcPort: defaultSerialPort,
     fcBaud: "57600",
     fcAutoConnect: true,
     droneIp: "192.168.1.100",
@@ -296,7 +312,7 @@ export function SettingsPanel() {
     gpioRelay: "24",
     gpioButton: "25",
     // USB Devices
-    usbCamera: "/dev/video0",
+    usbCamera: defaultUsbCamera,
     usbGps: "none",
     usbRadio: "none",
   });
@@ -330,6 +346,15 @@ export function SettingsPanel() {
     hotspotPassword: "",
   });
 
+  const [gpsDeniedConfig, setGpsDeniedConfig] = useState({
+    enabled: true,
+    method: "hybrid" as "visual" | "dead" | "hybrid",
+    useFlightHistory: true,
+    useVisualMatching: true,
+    gpsLostTimeoutSec: 10,
+    minSatellites: 6,
+  });
+
   const [backupStatus, setBackupStatus] = useState<{
     connected: boolean;
     spreadsheetUrl?: string;
@@ -350,6 +375,16 @@ export function SettingsPanel() {
     error?: string;
   }>({ connected: false });
   const [driveFiles, setDriveFiles] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (!operationsActive) {
+      operationsLog.deactivate();
+      return;
+    }
+    operationsLog.activate();
+    const unsubscribe = operationsLog.subscribe(setLogEntries);
+    return () => unsubscribe();
+  }, [operationsActive]);
 
   // Base Location settings
   const [baseLocation, setBaseLocation] = useState<{lat: string, lng: string, name: string}>({
@@ -497,6 +532,26 @@ export function SettingsPanel() {
     }
   }, [savedConnectionSettings]);
 
+  useEffect(() => {
+    const saved = localStorage.getItem("mouse_gps_denied_config");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        setGpsDeniedConfig((prev) => ({
+          ...prev,
+          ...parsed,
+        }));
+      } catch {
+        // ignore parse errors
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("mouse_gps_denied_config", JSON.stringify(gpsDeniedConfig));
+    window.dispatchEvent(new CustomEvent("gps-denied-config-changed"));
+  }, [gpsDeniedConfig]);
+
   const saveSetting = useMutation({
     mutationFn: async ({ key, value, category }: { key: string; value: any; category: string }) => {
       const res = await fetch("/api/settings", {
@@ -538,7 +593,7 @@ export function SettingsPanel() {
   const handleReset = () => {
     setConnectionSettings({
       connectionType: "usb",
-      fcPort: "/dev/ttyACM0",
+      fcPort: defaultSerialPort,
       fcBaud: "57600",
       fcAutoConnect: true,
       droneIp: "192.168.1.100",
@@ -575,7 +630,7 @@ export function SettingsPanel() {
       gpioLed: "23",
       gpioRelay: "24",
       gpioButton: "25",
-      usbCamera: "/dev/video0",
+      usbCamera: defaultUsbCamera,
       usbGps: "none",
       usbRadio: "none",
     });
@@ -605,6 +660,14 @@ export function SettingsPanel() {
       hotspotSsid: "MOUSE-GCS",
       hotspotPassword: "",
     });
+    setGpsDeniedConfig({
+      enabled: true,
+      method: "hybrid",
+      useFlightHistory: true,
+      useVisualMatching: true,
+      gpsLostTimeoutSec: 10,
+      minSatellites: 6,
+    });
     setUnsavedChanges(true);
     toast.info("Settings reset to defaults");
   };
@@ -622,29 +685,48 @@ export function SettingsPanel() {
   }>({ fc: 'idle', gps: 'idle', lidar: 'idle', camera: 'idle' });
 
   const testConnection = async (device: 'fc' | 'gps' | 'lidar' | 'camera') => {
-    setConnectionTesting(prev => ({ ...prev, [device]: 'testing' }));
-    operationsLog.logSystem('Connection', `Testing ${device.toUpperCase()} connection...`);
-    
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    // In simulation mode, connections will fail since no real hardware is connected
-    // The test checks if we're in a development/simulated environment
-    const isSimulated = true; // No real hardware connected in web demo
-    
-    if (isSimulated) {
-      setConnectionTesting(prev => ({ ...prev, [device]: 'failed' }));
-      operationsLog.logError('Connection', `${device.toUpperCase()} connection failed - no hardware connected (simulation mode)`);
-      toast.error(`${device.toUpperCase()} not connected - running in simulation mode`);
-    } else {
-      // Real hardware testing would go here
-      setConnectionTesting(prev => ({ ...prev, [device]: 'success' }));
-      operationsLog.logSystem('Connection', `${device.toUpperCase()} connection successful`);
-      toast.success(`${device.toUpperCase()} connection successful`);
+    setConnectionTesting((prev) => ({ ...prev, [device]: "testing" }));
+    operationsLog.logSystem("Connection", `Testing ${device.toUpperCase()} connection...`);
+
+    try {
+      const res = await fetch("/api/connections/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          device,
+          settings: {
+            ...connectionSettings,
+            gpsEnabled: sensorSettings.gpsEnabled,
+            lidarEnabled: sensorSettings.lidarEnabled,
+            lidarAddress: sensorSettings.lidarAddress,
+          },
+        }),
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        setConnectionTesting((prev) => ({ ...prev, [device]: "success" }));
+        operationsLog.logSystem(
+          "Connection",
+          `${device.toUpperCase()} connection successful${data.simulated ? " (simulated)" : ""}`,
+        );
+        toast.success(
+          `${device.toUpperCase()} connection successful${data.simulated ? " (simulated mode)" : ""}`,
+        );
+      } else {
+        setConnectionTesting((prev) => ({ ...prev, [device]: "failed" }));
+        operationsLog.logError("Connection", `${device.toUpperCase()} failed: ${data.error || "Unknown error"}`);
+        toast.error(`${device.toUpperCase()} failed: ${data.error || "Unknown error"}`);
+      }
+    } catch (error: any) {
+      setConnectionTesting((prev) => ({ ...prev, [device]: "failed" }));
+      operationsLog.logError("Connection", `${device.toUpperCase()} test failed: ${error?.message || error}`);
+      toast.error(`${device.toUpperCase()} test failed`);
     }
-    
+
     setTimeout(() => {
-      setConnectionTesting(prev => ({ ...prev, [device]: 'idle' }));
-    }, 3000);
+      setConnectionTesting((prev) => ({ ...prev, [device]: "idle" }));
+    }, 2500);
   };
 
   const testAllConnections = async () => {
@@ -746,18 +828,14 @@ export function SettingsPanel() {
           )}
         </div>
 
-        <Tabs defaultValue="connections" className="w-full" onValueChange={(value) => {
-          if (value === 'operations') {
-            setOperationsActive(true);
-            operationsLog.activate();
-            const unsubscribe = operationsLog.subscribe(setLogEntries);
-            return () => unsubscribe();
-          } else {
-            setOperationsActive(false);
-            operationsLog.deactivate();
-          }
-        }}>
-          <TabsList className="grid w-full grid-cols-10">
+        <Tabs
+          defaultValue="connections"
+          className="w-full"
+          onValueChange={(value) => {
+            setOperationsActive(value === "operations");
+          }}
+        >
+          <TabsList className="grid w-full grid-cols-11">
             <TabsTrigger value="hardware">Hardware</TabsTrigger>
             <TabsTrigger value="connections">Connections</TabsTrigger>
             <TabsTrigger value="sensors">Sensors</TabsTrigger>
@@ -767,6 +845,7 @@ export function SettingsPanel() {
             <TabsTrigger value="network">Network</TabsTrigger>
             <TabsTrigger value="backup">Backup</TabsTrigger>
             <TabsTrigger value="storage">Storage</TabsTrigger>
+            <TabsTrigger value="firmware">Firmware</TabsTrigger>
             <TabsTrigger value="operations">Console</TabsTrigger>
           </TabsList>
 
@@ -1449,11 +1528,11 @@ export function SettingsPanel() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="/dev/ttyACM0">/dev/ttyACM0</SelectItem>
-                          <SelectItem value="/dev/ttyACM1">/dev/ttyACM1</SelectItem>
-                          <SelectItem value="/dev/ttyUSB0">/dev/ttyUSB0</SelectItem>
-                          <SelectItem value="/dev/ttyUSB1">/dev/ttyUSB1</SelectItem>
-                          <SelectItem value="/dev/serial0">/dev/serial0</SelectItem>
+                          {serialPortOptions.map((port) => (
+                            <SelectItem key={port.value} value={port.value}>
+                              {port.label ?? port.value}
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </div>
@@ -1942,10 +2021,11 @@ export function SettingsPanel() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="none">None</SelectItem>
-                        <SelectItem value="/dev/video0">/dev/video0</SelectItem>
-                        <SelectItem value="/dev/video1">/dev/video1</SelectItem>
-                        <SelectItem value="/dev/video2">/dev/video2</SelectItem>
+                        {usbCameraOptions.map((camera) => (
+                          <SelectItem key={camera.value} value={camera.value}>
+                            {camera.label ?? camera.value}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -1959,10 +2039,11 @@ export function SettingsPanel() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="none">None</SelectItem>
-                        <SelectItem value="/dev/ttyUSB0">/dev/ttyUSB0</SelectItem>
-                        <SelectItem value="/dev/ttyUSB1">/dev/ttyUSB1</SelectItem>
-                        <SelectItem value="/dev/ttyACM0">/dev/ttyACM0</SelectItem>
+                        {usbGpsPortOptions.map((port) => (
+                          <SelectItem key={port.value} value={port.value}>
+                            {port.label ?? port.value}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -1976,9 +2057,11 @@ export function SettingsPanel() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="none">None</SelectItem>
-                        <SelectItem value="/dev/ttyUSB0">/dev/ttyUSB0</SelectItem>
-                        <SelectItem value="/dev/ttyUSB1">/dev/ttyUSB1</SelectItem>
+                        {usbRadioPortOptions.map((port) => (
+                          <SelectItem key={port.value} value={port.value}>
+                            {port.label ?? port.value}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -2459,12 +2542,25 @@ export function SettingsPanel() {
                     <Label>Enable GPS-Denied Mode</Label>
                     <p className="text-xs text-muted-foreground">Activate backup navigation when GPS is lost</p>
                   </div>
-                  <Switch defaultChecked data-testid="switch-gps-denied" />
+                  <Switch
+                    checked={gpsDeniedConfig.enabled}
+                    onCheckedChange={(v) => {
+                      setGpsDeniedConfig(prev => ({ ...prev, enabled: v }));
+                      setUnsavedChanges(true);
+                    }}
+                    data-testid="switch-gps-denied"
+                  />
                 </div>
 
                 <div className="space-y-2">
                   <Label>Primary Backup Method</Label>
-                  <Select defaultValue="visual">
+                  <Select
+                    value={gpsDeniedConfig.method}
+                    onValueChange={(v) => {
+                      setGpsDeniedConfig(prev => ({ ...prev, method: v as "visual" | "dead" | "hybrid" }));
+                      setUnsavedChanges(true);
+                    }}
+                  >
                     <SelectTrigger data-testid="select-backup-nav">
                       <SelectValue />
                     </SelectTrigger>
@@ -2481,7 +2577,13 @@ export function SettingsPanel() {
                     <Label>Use Flight Path History</Label>
                     <p className="text-xs text-muted-foreground">Backtrack using recorded heading/speed data</p>
                   </div>
-                  <Switch defaultChecked />
+                  <Switch
+                    checked={gpsDeniedConfig.useFlightHistory}
+                    onCheckedChange={(v) => {
+                      setGpsDeniedConfig(prev => ({ ...prev, useFlightHistory: v }));
+                      setUnsavedChanges(true);
+                    }}
+                  />
                 </div>
 
                 <div className="flex items-center justify-between">
@@ -2489,17 +2591,44 @@ export function SettingsPanel() {
                     <Label>Use Visual Feature Matching</Label>
                     <p className="text-xs text-muted-foreground">Match camera footage to find return path</p>
                   </div>
-                  <Switch defaultChecked />
+                  <Switch
+                    checked={gpsDeniedConfig.useVisualMatching}
+                    onCheckedChange={(v) => {
+                      setGpsDeniedConfig(prev => ({ ...prev, useVisualMatching: v }));
+                      setUnsavedChanges(true);
+                    }}
+                  />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>GPS Lost Timeout (sec)</Label>
-                    <Input type="number" defaultValue="10" min="5" max="60" data-testid="input-gps-timeout" />
+                    <Input
+                      type="number"
+                      value={gpsDeniedConfig.gpsLostTimeoutSec}
+                      onChange={(e) => {
+                        const value = Math.max(5, Math.min(60, Number(e.target.value) || 10));
+                        setGpsDeniedConfig(prev => ({ ...prev, gpsLostTimeoutSec: value }));
+                        setUnsavedChanges(true);
+                      }}
+                      min="5"
+                      max="60"
+                      data-testid="input-gps-timeout"
+                    />
                   </div>
                   <div className="space-y-2">
                     <Label>Min Satellites for GPS</Label>
-                    <Input type="number" defaultValue="6" min="4" max="12" />
+                    <Input
+                      type="number"
+                      value={gpsDeniedConfig.minSatellites}
+                      onChange={(e) => {
+                        const value = Math.max(4, Math.min(12, Number(e.target.value) || 6));
+                        setGpsDeniedConfig(prev => ({ ...prev, minSatellites: value }));
+                        setUnsavedChanges(true);
+                      }}
+                      min="4"
+                      max="12"
+                    />
                   </div>
                 </div>
               </CardContent>
@@ -3002,6 +3131,9 @@ export function SettingsPanel() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="bg-muted/50 p-4 rounded-lg space-y-2">
+                  <div className="text-xs text-primary font-medium">
+                    Required target firmware: ArduPilot Copter build for <span className="font-mono">CubeOrangePlus</span> board.
+                  </div>
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Current Firmware:</span>
                     <span className="font-mono">ArduCopter v4.4.0</span>

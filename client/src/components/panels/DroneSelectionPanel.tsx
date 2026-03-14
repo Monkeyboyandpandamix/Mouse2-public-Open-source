@@ -30,6 +30,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Drone } from "@shared/schema";
 import { usePermissions } from "@/hooks/usePermissions";
+import { getRuntimePlatform, getSerialPortOptions } from "@/lib/platform";
 
 interface DroneSelectionPanelProps {
   onDroneSelected: (drone: Drone) => void;
@@ -57,6 +58,8 @@ export function DroneSelectionPanel({ onDroneSelected, onSkipPreview }: DroneSel
   const queryClient = useQueryClient();
   const { hasPermission, isAdmin } = usePermissions();
   const canManageDrones = hasPermission('system_settings') || isAdmin();
+  const runtimePlatform = getRuntimePlatform();
+  const serialPortOptions = getSerialPortOptions(runtimePlatform);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [editingDrone, setEditingDrone] = useState<Drone | null>(null);
@@ -118,7 +121,7 @@ export function DroneSelectionPanel({ onDroneSelected, onSkipPreview }: DroneSel
   });
 
   const deleteDroneMutation = useMutation({
-    mutationFn: async (id: number) => {
+    mutationFn: async (id: string) => {
       const res = await fetch(`/api/drones/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to delete drone");
       return res.json();
@@ -133,7 +136,7 @@ export function DroneSelectionPanel({ onDroneSelected, onSkipPreview }: DroneSel
   });
 
   const updateDroneMutation = useMutation({
-    mutationFn: async (drone: Partial<Drone> & { id: number }) => {
+    mutationFn: async (drone: Partial<Drone> & { id: string }) => {
       const res = await fetch(`/api/drones/${drone.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -345,27 +348,27 @@ export function DroneSelectionPanel({ onDroneSelected, onSkipPreview }: DroneSel
                     </div>
                   </div>
                   
-                  {newDrone.connectionType === "mavlink" && (
-                    <div className="space-y-3">
-                      <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+	                  {newDrone.connectionType === "mavlink" && (
+	                    <div className="space-y-3">
+	                      <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
                         <div className="flex items-center justify-between mb-2">
                           <p className="font-semibold text-emerald-400 text-xs">Auto-Detect MAVLink</p>
                           <Button 
                             variant="outline" 
                             size="sm"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              toast.info("Scanning for MAVLink devices...");
-                              setTimeout(() => {
-                                const detectedPorts = [
-                                  { port: "/dev/ttyACM0", name: "Orange Cube+ (USB)" },
-                                  { port: "/dev/ttyUSB0", name: "Telemetry Radio" },
-                                ];
-                                if (detectedPorts.length > 0) {
-                                  setNewDrone({ ...newDrone, connectionString: `serial:${detectedPorts[0].port}:57600` });
-                                  toast.success(`Found: ${detectedPorts[0].name} on ${detectedPorts[0].port}`);
-                                } else {
-                                  toast.error("No MAVLink devices found");
+	                            onClick={(e) => {
+	                              e.preventDefault();
+	                              toast.info("Scanning for MAVLink devices...");
+	                              setTimeout(() => {
+	                                const detectedPorts = serialPortOptions.slice(0, 2).map((option, index) => ({
+	                                  port: option.value,
+	                                  name: index === 0 ? "Flight Controller" : "Telemetry Radio",
+	                                }));
+	                                if (detectedPorts.length > 0) {
+	                                  setNewDrone((prev) => ({ ...prev, connectionString: `serial:${detectedPorts[0].port}:57600` }));
+	                                  toast.success(`Found: ${detectedPorts[0].name} on ${detectedPorts[0].port}`);
+	                                } else {
+	                                  toast.error("No MAVLink devices found");
                                 }
                               }, 1500);
                             }}
@@ -375,18 +378,18 @@ export function DroneSelectionPanel({ onDroneSelected, onSkipPreview }: DroneSel
                             Scan
                           </Button>
                         </div>
-                        <p className="text-muted-foreground text-[10px]">
-                          On Raspberry Pi, the flight controller is typically detected at <span className="font-mono text-emerald-300">/dev/ttyACM0</span> or <span className="font-mono text-emerald-300">/dev/ttyUSB0</span>
-                        </p>
-                      </div>
-                      
-                      <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-xs space-y-2">
-                        <p className="font-semibold text-blue-400">Manual Connection Guide:</p>
-                        <ul className="space-y-1 text-muted-foreground">
-                          <li>• <span className="font-mono text-blue-300">serial:/dev/ttyACM0:57600</span> - USB on Pi (most common)</li>
-                          <li>• <span className="font-mono text-blue-300">udp:IP:14550</span> - Network connection</li>
-                          <li>• <span className="font-mono text-blue-300">tcp:IP:5760</span> - TCP connection</li>
-                        </ul>
+	                        <p className="text-muted-foreground text-[10px]">
+	                          Typical serial ports: <span className="font-mono text-emerald-300">{serialPortOptions[0]?.value}</span>{serialPortOptions[1]?.value ? <> or <span className="font-mono text-emerald-300">{serialPortOptions[1].value}</span></> : null}
+	                        </p>
+	                      </div>
+	                      
+	                      <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg text-xs space-y-2">
+	                        <p className="font-semibold text-blue-400">Manual Connection Guide:</p>
+	                        <ul className="space-y-1 text-muted-foreground">
+	                          <li>• <span className="font-mono text-blue-300">serial:{serialPortOptions[0]?.value || "/dev/ttyACM0"}:57600</span> - USB serial</li>
+	                          <li>• <span className="font-mono text-blue-300">udp:IP:14550</span> - Network connection</li>
+	                          <li>• <span className="font-mono text-blue-300">tcp:IP:5760</span> - TCP connection</li>
+	                        </ul>
                         <p className="text-muted-foreground mt-2">
                           For Pi hotspot: <span className="font-mono text-blue-300">udp:10.42.0.1:14550</span>
                         </p>

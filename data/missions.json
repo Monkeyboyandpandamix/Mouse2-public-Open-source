@@ -1,1 +1,13 @@
-[]
+[
+  {
+    "id": "1772408959081-f7gfr3rrf",
+    "name": "Mission 1",
+    "description": "New mission",
+    "status": "planned",
+    "homeLatitude": 36.07196039722399,
+    "homeLongitude": -79.4731727854915,
+    "homeAltitude": 0,
+    "createdAt": "2026-03-01T23:49:19.081Z",
+    "updatedAt": "2026-03-01T23:49:19.081Z"
+  }
+]
