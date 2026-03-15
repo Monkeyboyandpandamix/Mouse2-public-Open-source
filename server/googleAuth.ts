@@ -13,19 +13,25 @@ const AUTH_FILE = path.join(DATA_DIR, 'google_auth.json');
 // Encryption key derived from environment - REQUIRED for secure operation
 // Falls back to REPL_ID for development in Replit environment
 function getEncryptionKey(): Buffer {
-  const keySource = process.env.GOOGLE_AUTH_ENCRYPTION_KEY || 
-                    process.env.SESSION_SECRET || 
+  const keySource = process.env.GOOGLE_AUTH_ENCRYPTION_KEY ||
+                    process.env.SESSION_SECRET ||
                     process.env.REPL_ID;
-  
+
   if (!keySource) {
-    console.warn('WARNING: No encryption key configured for Google OAuth tokens.');
-    console.warn('Set GOOGLE_AUTH_ENCRYPTION_KEY or SESSION_SECRET for production security.');
-    // Use a machine-derived key for development only
+    // Only warn when Google OAuth is actually used (configured or has existing tokens)
+    const hasOAuth = !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
+    const hasAuthFile = fs.existsSync(AUTH_FILE);
+    if (hasOAuth || hasAuthFile) {
+      const envHint = process.env.NODE_ENV === 'production' ? ' (required in production)' : '';
+      console.warn('WARNING: No encryption key configured for Google OAuth tokens' + envHint + '.');
+      console.warn('Set GOOGLE_AUTH_ENCRYPTION_KEY or SESSION_SECRET for secure token storage.');
+    }
+    // Use a machine-derived key for development only (tokens will not survive restart)
     return crypto.createHash('sha256').update(
       crypto.randomBytes(32).toString('hex') + Date.now().toString()
     ).digest();
   }
-  
+
   return crypto.createHash('sha256').update(keySource).digest();
 }
 

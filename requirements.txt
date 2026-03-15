@@ -1,0 +1,21 @@
+# M.O.U.S.E. Ground Control Station - Python Dependencies
+# Install with: pip install -r requirements.txt
+#
+# Core (required for MAVLink, geotagging) - installed by runtime_bootstrap.py
+pymavlink
+Pillow
+piexif
+#
+# Optional: Raspberry Pi hardware
+# Uncomment for servo/gripper control (GPIO):
+# pigpio
+# RPi.GPIO
+#
+# Optional: BME688 environmental sensor (I2C)
+# Uncomment for environmental monitoring:
+# adafruit-circuitpython-bme680
+# adafruit-blinka
+# numpy
+#
+# Raspberry Pi 5: lgpio required for Blinka/GPIO (board module)
+# pip install lgpio

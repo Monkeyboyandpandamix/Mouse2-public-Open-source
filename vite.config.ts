@@ -39,6 +39,27 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "vendor-tensorflow": ["@tensorflow/tfjs", "@tensorflow-models/coco-ssd"],
+          "vendor-leaflet": ["leaflet", "react-leaflet"],
+          "vendor-recharts": ["recharts"],
+          "vendor-framer": ["framer-motion"],
+          "vendor-radix": [
+            "@radix-ui/react-dialog",
+            "@radix-ui/react-dropdown-menu",
+            "@radix-ui/react-tabs",
+            "@radix-ui/react-select",
+            "@radix-ui/react-tooltip",
+          ],
+        },
+        chunkFileNames: "assets/[name]-[hash].js",
+        entryFileNames: "assets/[name]-[hash].js",
+        assetFileNames: "assets/[name]-[hash][extname]",
+      },
+    },
+    chunkSizeWarningLimit: 600,
   },
   server: {
     host: "0.0.0.0",

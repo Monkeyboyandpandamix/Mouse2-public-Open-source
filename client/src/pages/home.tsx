@@ -1,40 +1,55 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import { TopBar } from "@/components/layout/TopBar";
 import { Sidebar } from "@/components/layout/Sidebar";
-import { TelemetryPanel } from "@/components/telemetry/TelemetryPanel";
-import { MapInterface } from "@/components/map/MapInterface";
-import { ControlDeck } from "@/components/controls/ControlDeck";
 import { AutoStabilizationController } from "@/components/controls/AutoStabilizationController";
 import { EmergencyProtocolController } from "@/components/controls/EmergencyProtocolController";
 import { GpsDeniedNavigationController } from "@/components/navigation/GpsDeniedNavigationController";
-import { VideoFeed } from "@/components/video/VideoFeed";
-import { SettingsPanel } from "@/components/panels/SettingsPanel";
-import { MissionPlanningPanel } from "@/components/panels/MissionPlanningPanel";
-import { TrackingPanel } from "@/components/panels/TrackingPanel";
-import { SpeakerPanel } from "@/components/panels/SpeakerPanel";
-import { FlightLogsPanel } from "@/components/panels/FlightLogsPanel";
-import { FlightLogbookPanel } from "@/components/panels/FlightLogbookPanel";
-import BME688Panel from "@/components/panels/BME688Panel";
-import { AutomationPanel } from "@/components/panels/AutomationPanel";
-import { TerminalCommandsPanel } from "@/components/panels/TerminalCommandsPanel";
-import { UserAccessPanel } from "@/components/panels/UserAccessPanel";
-import { GeofencingPanel } from "@/components/panels/GeofencingPanel";
-import { GUIConfigPanel } from "@/components/panels/GUIConfigPanel";
-import { DroneSelectionPanel } from "@/components/panels/DroneSelectionPanel";
-import { FlightPathOptimizerPanel } from "@/components/panels/FlightPathOptimizerPanel";
-import { FlightControllerParamsPanel } from "@/components/panels/FlightControllerParamsPanel";
-import { CalibrationPanel } from "@/components/panels/CalibrationPanel";
-import { FlightModeMappingPanel } from "@/components/panels/FlightModeMappingPanel";
-import { MavlinkToolsPanel } from "@/components/panels/MavlinkToolsPanel";
-import { RtkNtripPanel } from "@/components/panels/RtkNtripPanel";
-import { VehicleSetupPanel } from "@/components/panels/VehicleSetupPanel";
-import { SwarmOpsPanel } from "@/components/panels/SwarmOpsPanel";
-import { PluginToolchainPanel } from "@/components/panels/PluginToolchainPanel";
-import { MissionPlannerParityPanel } from "@/components/panels/MissionPlannerParityPanel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, X, Eye, ArrowLeft, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import type { Drone } from "@shared/schema";
+
+// Lazy-loaded heavy components for code splitting
+const MapInterface = lazy(() => import("@/components/map/MapInterface").then(m => ({ default: m.MapInterface })));
+const VideoFeed = lazy(() => import("@/components/video/VideoFeed").then(m => ({ default: m.VideoFeed })));
+const ControlDeck = lazy(() => import("@/components/controls/ControlDeck").then(m => ({ default: m.ControlDeck })));
+const TelemetryPanel = lazy(() => import("@/components/telemetry/TelemetryPanel").then(m => ({ default: m.TelemetryPanel })));
+
+const UserAccessPanel = lazy(() => import("@/components/panels/UserAccessPanel").then(m => ({ default: m.UserAccessPanel })));
+const DroneSelectionPanel = lazy(() => import("@/components/panels/DroneSelectionPanel").then(m => ({ default: m.DroneSelectionPanel })));
+const SettingsPanel = lazy(() => import("@/components/panels/SettingsPanel").then(m => ({ default: m.SettingsPanel })));
+const MissionPlanningPanel = lazy(() => import("@/components/panels/MissionPlanningPanel").then(m => ({ default: m.MissionPlanningPanel })));
+const FlightPathOptimizerPanel = lazy(() => import("@/components/panels/FlightPathOptimizerPanel").then(m => ({ default: m.FlightPathOptimizerPanel })));
+const TrackingPanel = lazy(() => import("@/components/panels/TrackingPanel").then(m => ({ default: m.TrackingPanel })));
+const SpeakerPanel = lazy(() => import("@/components/panels/SpeakerPanel").then(m => ({ default: m.SpeakerPanel })));
+const FlightLogsPanel = lazy(() => import("@/components/panels/FlightLogsPanel").then(m => ({ default: m.FlightLogsPanel })));
+const FlightLogbookPanel = lazy(() => import("@/components/panels/FlightLogbookPanel").then(m => ({ default: m.FlightLogbookPanel })));
+const BME688Panel = lazy(() => import("@/components/panels/BME688Panel"));
+const AutomationPanel = lazy(() => import("@/components/panels/AutomationPanel").then(m => ({ default: m.AutomationPanel })));
+const TerminalCommandsPanel = lazy(() => import("@/components/panels/TerminalCommandsPanel").then(m => ({ default: m.TerminalCommandsPanel })));
+const FlightControllerParamsPanel = lazy(() => import("@/components/panels/FlightControllerParamsPanel").then(m => ({ default: m.FlightControllerParamsPanel })));
+const FlightModeMappingPanel = lazy(() => import("@/components/panels/FlightModeMappingPanel").then(m => ({ default: m.FlightModeMappingPanel })));
+const CalibrationPanel = lazy(() => import("@/components/panels/CalibrationPanel").then(m => ({ default: m.CalibrationPanel })));
+const MavlinkToolsPanel = lazy(() => import("@/components/panels/MavlinkToolsPanel").then(m => ({ default: m.MavlinkToolsPanel })));
+const RtkNtripPanel = lazy(() => import("@/components/panels/RtkNtripPanel").then(m => ({ default: m.RtkNtripPanel })));
+const VehicleSetupPanel = lazy(() => import("@/components/panels/VehicleSetupPanel").then(m => ({ default: m.VehicleSetupPanel })));
+const SwarmOpsPanel = lazy(() => import("@/components/panels/SwarmOpsPanel").then(m => ({ default: m.SwarmOpsPanel })));
+const PluginToolchainPanel = lazy(() => import("@/components/panels/PluginToolchainPanel").then(m => ({ default: m.PluginToolchainPanel })));
+const MissionPlannerParityPanel = lazy(() => import("@/components/panels/MissionPlannerParityPanel").then(m => ({ default: m.MissionPlannerParityPanel })));
+const GeofencingPanel = lazy(() => import("@/components/panels/GeofencingPanel").then(m => ({ default: m.GeofencingPanel })));
+const GUIConfigPanel = lazy(() => import("@/components/panels/GUIConfigPanel").then(m => ({ default: m.GUIConfigPanel })));
+
+function PanelFallback() {
+  return (
+    <div className="flex-1 flex items-center justify-center bg-muted/20">
+      <div className="text-center">
+        <Spinner className="h-8 w-8 mx-auto mb-2 text-primary" />
+        <p className="text-sm text-muted-foreground">Loading...</p>
+      </div>
+    </div>
+  );
+}
 
 interface SystemError {
   id: string;
@@ -255,7 +270,18 @@ export default function Home() {
 
   // If not logged in, show UserAccessPanel (which has the login form)
   if (!isLoggedIn) {
-    return <UserAccessPanel />;
+    return (
+      <Suspense fallback={
+        <div className="min-h-screen bg-background flex items-center justify-center">
+          <div className="text-center">
+            <Spinner className="h-10 w-10 mx-auto mb-3 text-primary" />
+            <p className="text-muted-foreground">Loading...</p>
+          </div>
+        </div>
+      }>
+        <UserAccessPanel />
+      </Suspense>
+    );
   }
 
   // Preview drone for preview mode
@@ -307,16 +333,25 @@ export default function Home() {
   // Note: isOnboard mode auto-selects local drone in useEffect, so this should rarely trigger on Pi
   if (!selectedDrone && !previewMode && !isOnboard) {
     return (
-      <DroneSelectionPanel 
-        onDroneSelected={(drone) => setSelectedDrone(drone)} 
-        onSkipPreview={() => {
-          setPreviewMode(true);
-          // Set preview drone as the selected drone so all components work
-          setSelectedDrone(previewDrone);
-          localStorage.setItem("mouse_selected_drone", JSON.stringify(previewDrone));
-          window.dispatchEvent(new CustomEvent("drone-selected", { detail: previewDrone }));
-        }}
-      />
+      <Suspense fallback={
+        <div className="min-h-screen bg-background flex items-center justify-center">
+          <div className="text-center">
+            <Spinner className="h-10 w-10 mx-auto mb-3 text-primary" />
+            <p className="text-muted-foreground">Loading drone selection...</p>
+          </div>
+        </div>
+      }>
+        <DroneSelectionPanel 
+          onDroneSelected={(drone) => setSelectedDrone(drone)} 
+          onSkipPreview={() => {
+            setPreviewMode(true);
+            // Set preview drone as the selected drone so all components work
+            setSelectedDrone(previewDrone);
+            localStorage.setItem("mouse_selected_drone", JSON.stringify(previewDrone));
+            window.dispatchEvent(new CustomEvent("drone-selected", { detail: previewDrone }));
+          }}
+        />
+      </Suspense>
     );
   }
 
@@ -634,14 +669,24 @@ export default function Home() {
         <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
         
         <main className="flex-1 relative flex flex-col overflow-hidden">
-          {renderMainContent()}
+          <Suspense fallback={<PanelFallback />}>
+            {renderMainContent()}
+          </Suspense>
           
           {/* Only show control deck on map view */}
-          {activeTab === "map" && <ControlDeck activeTab={activeTab} />}
+          {activeTab === "map" && (
+            <Suspense fallback={null}>
+              <ControlDeck activeTab={activeTab} />
+            </Suspense>
+          )}
         </main>
 
         {/* Right Side Telemetry Panel - show on map and tracking views */}
-        {(activeTab === "map" || activeTab === "tracking") && <TelemetryPanel />}
+        {(activeTab === "map" || activeTab === "tracking") && (
+          <Suspense fallback={<div className="w-64 animate-pulse bg-muted/30 rounded" />}>
+            <TelemetryPanel />
+          </Suspense>
+        )}
       </div>
     </div>
   );
