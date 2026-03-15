@@ -278,15 +278,27 @@ export function RegulatoryGeoJsonOverlay({
         if (!fc?.features?.length) return null;
         return (
           <GeoJSON
-            key={layer.id}
+            key={`${layer.id}-${fc.features.length}-${displayRangeMiles}`}
             data={fc as any}
             style={() => ({
               color: layer.color,
               weight: 2,
               opacity: 0.9,
               fillColor: layer.color,
-              fillOpacity: 0.15,
+              fillOpacity: 0.2,
             })}
+            onEachFeature={(feature, leafletLayer) => {
+              const props = feature.properties || {};
+              const name = props.Facility || props.Base || props.Airspace || props.Reason || props.name || layer.label;
+              const details = [
+                props.State && `State: ${props.State}`,
+                props.Proponent && `Proponent: ${props.Proponent}`,
+                props.Branch && `Branch: ${props.Branch}`,
+                props.Reason && `Reason: ${props.Reason}`,
+                props.Airspace && `Airspace: ${props.Airspace}`,
+              ].filter(Boolean).join('<br/>');
+              leafletLayer.bindPopup(`<strong>${name}</strong>${details ? '<br/>' + details : ''}`);
+            }}
           />
         );
       })}

@@ -1378,6 +1378,39 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/mavlink/command", async (req, res) => {
+    try {
+      const { command, params } = req.body;
+      if (!command) return res.status(400).json({ success: false, error: "command is required" });
+
+      if (command === "gimbal_control") {
+        const pitch = Math.max(-90, Math.min(30, Number(params?.pitch ?? -45)));
+        const yaw = Math.max(-180, Math.min(180, Number(params?.yaw ?? 0)));
+        const connectionString = String(req.query.connectionString || process.env.MAVLINK_CONNECTION || "").trim();
+
+        if (connectionString) {
+          const py = spawn(PYTHON_EXEC, [
+            path.join(SCRIPTS_DIR, "mavlink_vehicle_control.py"),
+            "--connection", connectionString,
+            "--gimbal-pitch", String(pitch),
+            "--gimbal-yaw", String(yaw),
+          ]);
+          let stdout = "", stderr = "";
+          py.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
+          py.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
+          await new Promise<void>((resolve) => py.on("close", () => resolve()));
+          return res.json({ success: true, command, pitch, yaw, output: stdout.trim(), hardware: true });
+        }
+
+        return res.json({ success: true, command, pitch, yaw, hardware: false, message: "Gimbal command queued (no MAVLink connection)" });
+      }
+
+      return res.status(400).json({ success: false, error: `Unknown command: ${command}` });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // MAVLink Parameter Manager API (ArduPilot/Cube+)
   app.get("/api/mavlink/params", async (req, res) => {
     try {

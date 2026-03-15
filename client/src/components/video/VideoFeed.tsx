@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, type MouseEvent } from "react";
 import { cn } from "@/lib/utils";
-import { Maximize2, Minimize2, Eye, EyeOff, Flame, ZoomIn, ZoomOut, RotateCcw, Camera, Video, Laptop, Settings2, Crosshair, Move, Upload, Check, Loader2 } from "lucide-react";
+import { Maximize2, Minimize2, Eye, EyeOff, Flame, ZoomIn, ZoomOut, RotateCcw, Camera, Video, Laptop, Settings2, Crosshair, Move, Upload, Check, Loader2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Target } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
@@ -11,6 +11,38 @@ import * as tf from "@tensorflow/tfjs";
 import * as cocoSsd from "@tensorflow-models/coco-ssd";
 import aerialImg from "@assets/generated_images/aerial_drone_view_of_a_suburban_street_with_overlaid_bounding_boxes.png";
 import fpvImg from "@assets/generated_images/fpv_drone_view_forward_facing_with_horizon.png";
+
+const COCO_TO_TYPE: Record<string, "person" | "vehicle" | "animal" | "aircraft" | "unknown"> = {
+  person: "person",
+  car: "vehicle", truck: "vehicle", bus: "vehicle", motorcycle: "vehicle", bicycle: "vehicle",
+  train: "vehicle", boat: "vehicle",
+  airplane: "aircraft", kite: "aircraft",
+  bird: "animal", cat: "animal", dog: "animal", horse: "animal", sheep: "animal",
+  cow: "animal", elephant: "animal", bear: "animal", zebra: "animal", giraffe: "animal",
+  backpack: "unknown", umbrella: "unknown", handbag: "unknown", suitcase: "unknown",
+  frisbee: "unknown", skis: "unknown", snowboard: "unknown", sports_ball: "unknown",
+  baseball_bat: "unknown", baseball_glove: "unknown", skateboard: "unknown", surfboard: "unknown",
+  tennis_racket: "unknown", bottle: "unknown", wine_glass: "unknown", cup: "unknown",
+  fork: "unknown", knife: "unknown", spoon: "unknown", bowl: "unknown",
+  banana: "unknown", apple: "unknown", sandwich: "unknown", orange: "unknown",
+  broccoli: "unknown", carrot: "unknown", hot_dog: "unknown", pizza: "unknown",
+  donut: "unknown", cake: "unknown", chair: "unknown", couch: "unknown",
+  potted_plant: "unknown", bed: "unknown", dining_table: "unknown", toilet: "unknown",
+  tv: "unknown", laptop: "unknown", mouse: "unknown", remote: "unknown",
+  keyboard: "unknown", cell_phone: "unknown", microwave: "unknown", oven: "unknown",
+  toaster: "unknown", sink: "unknown", refrigerator: "unknown", book: "unknown",
+  clock: "unknown", vase: "unknown", scissors: "unknown", teddy_bear: "unknown",
+  hair_drier: "unknown", toothbrush: "unknown",
+  "fire hydrant": "unknown", "stop sign": "unknown", "parking meter": "unknown",
+  bench: "unknown", "traffic light": "unknown",
+};
+
+const AERIAL_CONFIDENCE_BOOST: Record<string, number> = {
+  person: 12, car: 15, truck: 15, bus: 15, motorcycle: 10,
+  bicycle: 8, boat: 12, airplane: 18, bird: 5,
+  backpack: 5, suitcase: 5, umbrella: 5,
+  "fire hydrant": 3, bench: 3, "stop sign": 3, "traffic light": 3,
+};
 
 interface CameraConfig {
   model: string;
@@ -88,6 +120,10 @@ export function VideoFeed() {
   });
   const [showConfigDialog, setShowConfigDialog] = useState(false);
   const [streamUrl, setStreamUrl] = useState(cameraConfig.streamUrl);
+  const [gimbalPitch, setGimbalPitch] = useState(-45);
+  const [gimbalYaw, setGimbalYaw] = useState(0);
+  const [gimbalAutoFollow, setGimbalAutoFollow] = useState(false);
+  const gimbalIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   
   // Draggable position state - bottom-left corner by default
   const [position, setPosition] = useState(() => {
@@ -119,13 +155,6 @@ export function VideoFeed() {
   const mlModelRef = useRef<cocoSsd.ObjectDetection | null>(null);
   const [mlModelLoaded, setMlModelLoaded] = useState(false);
   const [mlModelLoading, setMlModelLoading] = useState(false);
-
-  const COCO_TO_TYPE: Record<string, DetectedObject["type"]> = {
-    person: "person", car: "vehicle", truck: "vehicle", bus: "vehicle", motorcycle: "vehicle",
-    bicycle: "vehicle", airplane: "aircraft", bird: "animal", cat: "animal", dog: "animal",
-    horse: "animal", sheep: "animal", cow: "animal", elephant: "animal", bear: "animal",
-    zebra: "animal", giraffe: "animal",
-  };
 
   const loadMlModel = useCallback(async () => {
     if (mlModelRef.current || mlModelLoading) return;
@@ -229,6 +258,12 @@ export function VideoFeed() {
           const cx = bx + bw / 2;
           const cy = by + bh / 2;
 
+          const rawConf = Math.round(pred.score * 100);
+          const aerialBoost = AERIAL_CONFIDENCE_BOOST[pred.class] || 0;
+          const boostedConf = Math.min(99, rawConf + aerialBoost);
+
+          const typeColor = detType === "person" ? "#22c55e" : detType === "vehicle" ? "#3b82f6" : detType === "animal" ? "#eab308" : detType === "aircraft" ? "#a855f7" : "#ef4444";
+
           let bestMatchRef: { obj: TrackedObject | null; dist: number } = { obj: null, dist: 120 };
           tracked.forEach((t) => {
             const tcx = t.x + t.width / 2;
@@ -246,11 +281,12 @@ export function VideoFeed() {
             bestMatch.lastSeen = now;
             bestMatch.framesSeen++;
             bestMatch.type = detType;
-            bestMatch.confidence = Math.round(pred.score * 100);
+            const frameBoost = Math.min(15, bestMatch.framesSeen * 3);
+            bestMatch.confidence = Math.min(99, boostedConf + frameBoost);
             newDetections.push({
               id: bestMatch.id, type: detType, confidence: bestMatch.confidence,
               x: bx, y: by, width: bw, height: bh,
-              color: detType === "person" ? "#22c55e" : detType === "vehicle" ? "#3b82f6" : detType === "animal" ? "#eab308" : "#ef4444",
+              color: bestMatch.isLocked ? "#ef4444" : typeColor,
               isLocked: bestMatch.isLocked, isMoving: Math.hypot(bestMatch.vx, bestMatch.vy) > 3,
               velocity: { vx: bestMatch.vx, vy: bestMatch.vy },
               colorSignature: bestMatch.colorSignature, framesSeen: bestMatch.framesSeen,
@@ -262,13 +298,13 @@ export function VideoFeed() {
               id: newId, x: bx, y: by, width: bw, height: bh,
               vx: 0, vy: 0, lastSeen: now, framesSeen: 1,
               colorSignature: [0, 0, 0], isLocked: false, isMoving: false,
-              type: detType, confidence: Math.round(pred.score * 100),
+              type: detType, confidence: boostedConf,
             };
             tracked.set(newId, newObj);
             newDetections.push({
               id: newId, type: detType, confidence: newObj.confidence,
               x: bx, y: by, width: bw, height: bh,
-              color: detType === "person" ? "#22c55e" : detType === "vehicle" ? "#3b82f6" : detType === "animal" ? "#eab308" : "#ef4444",
+              color: typeColor,
               isLocked: false, isMoving: false,
               velocity: { vx: 0, vy: 0 }, colorSignature: [0, 0, 0],
               framesSeen: 1, lastPredictedPos: { x: bx, y: by },
@@ -317,7 +353,7 @@ export function VideoFeed() {
     }
 
     detectObjects();
-  }, [isDetecting, COCO_TO_TYPE]);
+  }, [isDetecting]);
 
   // Advanced object detection for webcam
   useEffect(() => {
@@ -1064,6 +1100,98 @@ export function VideoFeed() {
     setPanY(0);
   };
 
+  const sendGimbalCommand = useCallback(async (pitch: number, yaw: number) => {
+    try {
+      await fetch('/api/mavlink/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          command: 'gimbal_control',
+          params: { pitch: Math.max(-90, Math.min(30, pitch)), yaw: Math.max(-180, Math.min(180, yaw)) }
+        }),
+      });
+      window.dispatchEvent(new CustomEvent('gimbal-update', {
+        detail: { pitch, yaw, timestamp: Date.now() }
+      }));
+    } catch {}
+  }, []);
+
+  const handleGimbalUp = useCallback(() => {
+    const newPitch = Math.min(30, gimbalPitch + 10);
+    setGimbalPitch(newPitch);
+    sendGimbalCommand(newPitch, gimbalYaw);
+  }, [gimbalPitch, gimbalYaw, sendGimbalCommand]);
+
+  const handleGimbalDown = useCallback(() => {
+    const newPitch = Math.max(-90, gimbalPitch - 10);
+    setGimbalPitch(newPitch);
+    sendGimbalCommand(newPitch, gimbalYaw);
+  }, [gimbalPitch, gimbalYaw, sendGimbalCommand]);
+
+  const handleGimbalLeft = useCallback(() => {
+    const newYaw = Math.max(-180, gimbalYaw - 15);
+    setGimbalYaw(newYaw);
+    sendGimbalCommand(gimbalPitch, newYaw);
+  }, [gimbalPitch, gimbalYaw, sendGimbalCommand]);
+
+  const handleGimbalRight = useCallback(() => {
+    const newYaw = Math.min(180, gimbalYaw + 15);
+    setGimbalYaw(newYaw);
+    sendGimbalCommand(gimbalPitch, newYaw);
+  }, [gimbalPitch, gimbalYaw, sendGimbalCommand]);
+
+  const handleGimbalCenter = useCallback(() => {
+    setGimbalPitch(-45);
+    setGimbalYaw(0);
+    sendGimbalCommand(-45, 0);
+    toast.info("Gimbal centered (-45° pitch)");
+  }, [sendGimbalCommand]);
+
+  const toggleAutoFollow = useCallback(() => {
+    setGimbalAutoFollow(prev => !prev);
+    if (!gimbalAutoFollow) {
+      toast.success("Auto-follow enabled — gimbal tracks locked target");
+    } else {
+      toast.info("Auto-follow disabled");
+    }
+  }, [gimbalAutoFollow]);
+
+  useEffect(() => {
+    if (!gimbalAutoFollow) {
+      if (gimbalIntervalRef.current) clearInterval(gimbalIntervalRef.current);
+      return;
+    }
+    gimbalIntervalRef.current = setInterval(() => {
+      const locked = detectedObjects.find(o => o.isLocked);
+      if (!locked) return;
+      const frameCenterX = videoDimensions.width / 2;
+      const frameCenterY = videoDimensions.height / 2;
+      const objCenterX = locked.x + locked.width / 2;
+      const objCenterY = locked.y + locked.height / 2;
+      const offsetX = (objCenterX - frameCenterX) / frameCenterX;
+      const offsetY = (objCenterY - frameCenterY) / frameCenterY;
+      const newYaw = Math.max(-180, Math.min(180, gimbalYaw + offsetX * 8));
+      const newPitch = Math.max(-90, Math.min(30, gimbalPitch - offsetY * 5));
+      setGimbalYaw(newYaw);
+      setGimbalPitch(newPitch);
+      sendGimbalCommand(newPitch, newYaw);
+      window.dispatchEvent(new CustomEvent('tracking-update', {
+        detail: {
+          trackingActive: true,
+          lockedCount: 1,
+          targetOffsetX: offsetX,
+          targetOffsetY: offsetY,
+          targetSizeRatio: (locked.width * locked.height) / (videoDimensions.width * videoDimensions.height),
+          followDistance: 15,
+          autoFollow: true,
+        }
+      }));
+    }, 150);
+    return () => {
+      if (gimbalIntervalRef.current) clearInterval(gimbalIntervalRef.current);
+    };
+  }, [gimbalAutoFollow, detectedObjects, videoDimensions, gimbalYaw, gimbalPitch, sendGimbalCommand]);
+
   const handleMouseDown = (e: MouseEvent<HTMLDivElement>) => {
     if (zoom[0] > 1) {
       setIsDragging(true);
@@ -1754,6 +1882,79 @@ export function VideoFeed() {
                 <div>LENS: {cameraConfig.lens}</div>
               </div>
             )}
+          </div>
+        </div>
+
+        {/* Gimbal D-Pad Controls - Left Side */}
+        <div className={cn(
+          "absolute left-2 top-1/2 -translate-y-1/2 flex flex-col items-center gap-0.5 transition-opacity z-20",
+          showControls || isMain ? "opacity-100" : "opacity-0"
+        )}>
+          <div className="text-[8px] text-white/60 font-mono mb-1 uppercase tracking-wider">Gimbal</div>
+          <Button
+            variant="secondary"
+            size="icon"
+            className="h-7 w-7 bg-black/60 hover:bg-black/80 border border-white/20"
+            onClick={handleGimbalUp}
+            title="Gimbal Tilt Up"
+            data-testid="button-gimbal-up"
+          >
+            <ChevronUp className="h-4 w-4" />
+          </Button>
+          <div className="flex gap-0.5">
+            <Button
+              variant="secondary"
+              size="icon"
+              className="h-7 w-7 bg-black/60 hover:bg-black/80 border border-white/20"
+              onClick={handleGimbalLeft}
+              title="Gimbal Pan Left"
+              data-testid="button-gimbal-left"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="secondary"
+              size="icon"
+              className="h-7 w-7 bg-black/60 hover:bg-black/80 border border-white/20"
+              onClick={handleGimbalCenter}
+              title="Center Gimbal"
+              data-testid="button-gimbal-center"
+            >
+              <Crosshair className="h-3 w-3" />
+            </Button>
+            <Button
+              variant="secondary"
+              size="icon"
+              className="h-7 w-7 bg-black/60 hover:bg-black/80 border border-white/20"
+              onClick={handleGimbalRight}
+              title="Gimbal Pan Right"
+              data-testid="button-gimbal-right"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+          <Button
+            variant="secondary"
+            size="icon"
+            className="h-7 w-7 bg-black/60 hover:bg-black/80 border border-white/20"
+            onClick={handleGimbalDown}
+            title="Gimbal Tilt Down"
+            data-testid="button-gimbal-down"
+          >
+            <ChevronDown className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="secondary"
+            size="icon"
+            className={cn("h-7 w-7 border border-white/20 mt-1", gimbalAutoFollow ? "bg-primary/80 hover:bg-primary text-white" : "bg-black/60 hover:bg-black/80")}
+            onClick={toggleAutoFollow}
+            title={gimbalAutoFollow ? "Disable Auto-Follow" : "Enable Auto-Follow (tracks locked target)"}
+            data-testid="button-gimbal-autofollow"
+          >
+            <Target className="h-3 w-3" />
+          </Button>
+          <div className="text-[7px] text-white/50 font-mono mt-0.5">
+            P:{gimbalPitch}° Y:{gimbalYaw}°
           </div>
         </div>
 

@@ -69,7 +69,7 @@ The application can be run as a native desktop app using Electron:
 - Real-time telemetry panel showing altitude, speed, attitude, and motor data
 - Interactive map with all connected drones visible, waypoints, flight path visualization from operator location, address search, hover tooltips showing drone status/battery/GPS/mission, and map controls for centering on drone or operator
 - Mission planning with waypoint management and actions (hover, photo, drop/pickup payload, open gripper, RTL)
-- Advanced AI-powered object tracking using TensorFlow.js COCO-SSD model for detecting stationary and moving objects (people, cars, trucks, motorcycles, bicycles), with multi-object tracking via IoU-based Hungarian assignment, velocity prediction for temporary occlusions, temporal confidence smoothing (0.7 EMA), and fallback motion detection for offline/degraded scenarios
+- Advanced AI-powered object tracking using TensorFlow.js COCO-SSD model for detecting stationary and moving objects (people, vehicles, animals, aircraft, packages/bags, and 80+ COCO object types), with multi-object tracking via IoU-based Hungarian assignment, velocity prediction for temporary occlusions, temporal confidence smoothing (0.7 EMA), aerial perspective confidence boosting, frame-persistence confidence bonuses, and fallback motion detection for offline/degraded scenarios
 - Audio broadcast system with Pi GPIO speaker, USB speaker, and Orange Cube+ buzzer support
 - Flight controls including arm/disarm, takeoff, land, RTL, and emergency stop
 - **Automatic Flight Recording**: Flight sessions auto-start on takeoff and auto-end on landing. Captures enhanced telemetry including motor RPM/current, vibration XYZ, battery temp, GPS HDOP, air speed, wind speed/direction, and distance from home. Calculates total flight time, max altitude, and distance traveled. Sessions sync to Google Sheets on completion
@@ -153,12 +153,20 @@ The application can be run as a native desktop app using Electron:
 ### FAA Regulatory Overlays
 - GeoJSON files in `client/public/airspace/` for restricted areas, national security zones, part-time/pending zones
 - FAA Facility Map (480MB) kept defaultOff due to size; National Security layer uses 200MB maxBytes
+- GeoJSON `key` prop includes feature count + display range to force react-leaflet re-renders on data changes
+- Clickable features show popup with facility name, state, proponent, and airspace details
+- Live TFR endpoint at `/api/airspace/tfr` pulls from tfr.faa.gov (free, no API key)
+- Airspace sources endpoint at `/api/airspace/sources` lists all configured data sources
 - Control panel is collapsible (dropdown toggle) and fully draggable with position persistence in localStorage
 
 ### Camera & Detection
 - Tesseract.js v5 loaded via CDN (`client/index.html`) for license plate OCR in TrackingPanel
 - VideoFeed.tsx supports gimbal, thermal, FPV, webcam (getUserMedia), and RTSP stream modes
-- Object detection uses TensorFlow.js COCO-SSD with fallback motion/edge detection
+- Object detection uses TensorFlow.js COCO-SSD (lite_mobilenet_v2) with all 80 COCO classes mapped, aerial perspective confidence boosting, and fallback motion/edge detection
+- COCO_TO_TYPE and AERIAL_CONFIDENCE_BOOST are module-level constants (not inside component) to prevent React re-render loops
+- Gimbal D-pad controls: Up/Down (pitch ±10°), Left/Right (yaw ±15°), Center (-45° pitch), Auto-Follow toggle
+- Gimbal auto-follow: When enabled + object locked, gimbal automatically tracks target and dispatches tracking-update events for AutoStabilizationController
+- Server endpoint: POST `/api/mavlink/command` with `command: "gimbal_control"` for hardware gimbal control via MAVLink
 - 3D mapping frame capture posts to `/api/mapping/3d/frame` for reconstruction
 
 ### Python Dependencies

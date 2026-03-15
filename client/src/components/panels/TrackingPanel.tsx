@@ -54,9 +54,19 @@ interface PlateRecord {
   timestamp: number;
 }
 
-const VEHICLE_CLASSES = ['car', 'truck', 'bus', 'motorcycle', 'bicycle'];
+const VEHICLE_CLASSES = ['car', 'truck', 'bus', 'motorcycle', 'bicycle', 'train', 'boat'];
 const PERSON_CLASSES = ['person'];
-const ALL_TRACKABLE_CLASSES = [...PERSON_CLASSES, ...VEHICLE_CLASSES];
+const ANIMAL_CLASSES = ['bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe'];
+const AIRCRAFT_CLASSES = ['airplane', 'kite'];
+const PACKAGE_CLASSES = ['backpack', 'handbag', 'suitcase', 'umbrella'];
+const ALL_TRACKABLE_CLASSES = [...PERSON_CLASSES, ...VEHICLE_CLASSES, ...ANIMAL_CLASSES, ...AIRCRAFT_CLASSES, ...PACKAGE_CLASSES];
+
+const AERIAL_CONFIDENCE_BOOST: Record<string, number> = {
+  person: 12, car: 15, truck: 15, bus: 15, motorcycle: 10,
+  bicycle: 8, boat: 12, airplane: 18, bird: 5,
+  backpack: 5, suitcase: 5, umbrella: 5,
+  dog: 5, cat: 3, horse: 8, cow: 8,
+};
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
 export function TrackingPanel() {
@@ -167,7 +177,10 @@ export function TrackingPanel() {
     const classMatch =
       track.label === det.label ||
       (PERSON_CLASSES.includes(track.label) && PERSON_CLASSES.includes(det.label)) ||
-      (VEHICLE_CLASSES.includes(track.label) && VEHICLE_CLASSES.includes(det.label));
+      (VEHICLE_CLASSES.includes(track.label) && VEHICLE_CLASSES.includes(det.label)) ||
+      (ANIMAL_CLASSES.includes(track.label) && ANIMAL_CLASSES.includes(det.label)) ||
+      (AIRCRAFT_CLASSES.includes(track.label) && AIRCRAFT_CLASSES.includes(det.label)) ||
+      (PACKAGE_CLASSES.includes(track.label) && PACKAGE_CLASSES.includes(det.label));
 
     const classScore = classMatch ? 1 : 0.5;
     return (iou * 0.45 + centerScore * 0.3 + sizeScore * 0.2 + classScore * 0.05);
@@ -216,13 +229,17 @@ export function TrackingPanel() {
       const dx = det.bbox[0] - track.x;
       const dy = det.bbox[1] - track.y;
       
-      // Smooth confidence with temporal averaging
+      const aerialBoost = AERIAL_CONFIDENCE_BOOST[det.label] || 0;
+      const boostedRawConf = Math.min(99, det.confidence * 100 + aerialBoost);
       const smoothedConf = CONFIDENCE_SMOOTHING * track.smoothedConfidence + 
-                          (1 - CONFIDENCE_SMOOTHING) * (det.confidence * 100);
+                          (1 - CONFIDENCE_SMOOTHING) * boostedRawConf;
+      const frameBonus = Math.min(10, track.framesSeen * 1.5);
       
-      // Update track
       const type = PERSON_CLASSES.includes(det.label) ? "person" : 
-                   VEHICLE_CLASSES.includes(det.label) ? "vehicle" : "unknown";
+                   VEHICLE_CLASSES.includes(det.label) ? "vehicle" :
+                   ANIMAL_CLASSES.includes(det.label) ? "animal" :
+                   AIRCRAFT_CLASSES.includes(det.label) ? "aircraft" :
+                   PACKAGE_CLASSES.includes(det.label) ? "package" : "unknown";
       const areaRatio = (det.bbox[2] * det.bbox[3]) / frameArea;
       
       const updatedTrack: TrackedObject = {
@@ -231,8 +248,8 @@ export function TrackingPanel() {
         y: det.bbox[1],
         width: det.bbox[2],
         height: det.bbox[3],
-        confidence: det.confidence * 100,
-        smoothedConfidence: smoothedConf,
+        confidence: Math.min(99, boostedRawConf + frameBonus),
+        smoothedConfidence: Math.min(99, smoothedConf + frameBonus),
         velocity: { dx, dy },
         framesSeen: track.framesSeen + 1,
         lastSeen: now,
@@ -263,16 +280,22 @@ export function TrackingPanel() {
     // Create new tracks for unmatched detections
     detections.forEach((det, idx) => {
       if (usedDetections.has(idx)) return;
-      if (!ALL_TRACKABLE_CLASSES.includes(det.label) && det.confidence < 0.62) return;
+      if (!ALL_TRACKABLE_CLASSES.includes(det.label) && det.confidence < 0.45) return;
       
       objectIdCounterRef.current++;
       const newId = `track_${objectIdCounterRef.current}`;
       
       const type = PERSON_CLASSES.includes(det.label) ? "person" : 
-                   VEHICLE_CLASSES.includes(det.label) ? "vehicle" : "unknown";
+                   VEHICLE_CLASSES.includes(det.label) ? "vehicle" :
+                   ANIMAL_CLASSES.includes(det.label) ? "animal" :
+                   AIRCRAFT_CLASSES.includes(det.label) ? "aircraft" :
+                   PACKAGE_CLASSES.includes(det.label) ? "package" : "unknown";
       
       const color = type === "person" ? "#22c55e" : 
-                    type === "vehicle" ? "#f59e0b" : "#6b7280";
+                    type === "vehicle" ? "#f59e0b" :
+                    type === "animal" ? "#eab308" :
+                    type === "aircraft" ? "#a855f7" :
+                    type === "package" ? "#06b6d4" : "#6b7280";
       
       const newTrack: TrackedObject = {
         id: newId,
@@ -282,8 +305,8 @@ export function TrackingPanel() {
         y: det.bbox[1],
         width: det.bbox[2],
         height: det.bbox[3],
-        confidence: det.confidence * 100,
-        smoothedConfidence: det.confidence * 100,
+        confidence: Math.min(99, det.confidence * 100 + (AERIAL_CONFIDENCE_BOOST[det.label] || 0)),
+        smoothedConfidence: Math.min(99, det.confidence * 100 + (AERIAL_CONFIDENCE_BOOST[det.label] || 0)),
         velocity: { dx: 0, dy: 0 },
         framesSeen: 1,
         lastSeen: now,
