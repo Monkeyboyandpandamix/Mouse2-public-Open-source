@@ -148,3 +148,24 @@ The application can be run as a native desktop app using Electron:
 
 ### Real-time Communication
 - WebSocket (ws) for live telemetry streaming between drone and ground station
+
+### FAA Regulatory Overlays
+- GeoJSON files in `client/public/airspace/` for restricted areas, national security zones, part-time/pending zones
+- FAA Facility Map (480MB) kept defaultOff due to size; National Security layer uses 200MB maxBytes
+- Control panel is collapsible (dropdown toggle) and fully draggable with position persistence in localStorage
+
+### Camera & Detection
+- Tesseract.js v5 loaded via CDN (`client/index.html`) for license plate OCR in TrackingPanel
+- VideoFeed.tsx supports gimbal, thermal, FPV, webcam (getUserMedia), and RTSP stream modes
+- Object detection uses TensorFlow.js COCO-SSD with fallback motion/edge detection
+- 3D mapping frame capture posts to `/api/mapping/3d/frame` for reconstruction
+
+### Python Dependencies
+- Python 3.11 at `/home/runner/workspace/.pythonlibs/bin/python3` (server uses `python3` via PATH)
+- pymavlink, Pillow, piexif installed for MAVLink communication and image processing
+
+### Known Replit Limitations
+- Vite HMR WebSocket errors in browser console are expected (Replit iframe proxy issue) — non-blocking
+- Camera access requires HTTPS or localhost — getUserMedia works in Replit preview with permissions
+- OPENAIP_API_KEY not configured (airspace restricted zones API returns 503)
+- WebSocket DM auth failures expected when not logged in

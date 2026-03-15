@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { GeoJSON } from "react-leaflet";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { ChevronDown, ChevronUp, GripVertical } from "lucide-react";
 
 const DEFAULT_RADIUS_MILES = 30;
 
@@ -25,8 +26,8 @@ const LAYERS: LayerConfig[] = [
     label: "FAA UAS Facility Map",
     file: "/airspace/FAA_UAS_FacilityMap_Data.geojson",
     color: "#22c55e",
-    defaultOn: true,
-    maxBytes: 50 * 1024 * 1024,
+    defaultOn: false,
+    maxBytes: 500 * 1024 * 1024,
   },
   {
     id: "national-security",
@@ -34,6 +35,7 @@ const LAYERS: LayerConfig[] = [
     file: "/airspace/National_Security_UAS_Flight_Restrictions.geojson",
     color: "#ef4444",
     defaultOn: true,
+    maxBytes: 200 * 1024 * 1024,
   },
   {
     id: "part-time-security",
@@ -130,7 +132,45 @@ export function RegulatoryGeoJsonOverlay({
   const [data, setData] = useState<Record<string, FeatureCollection | null>>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [collapsed, setCollapsed] = useState(false);
+  const [panelPos, setPanelPos] = useState(() => {
+    try {
+      const saved = localStorage.getItem("mouse_faa_panel_pos");
+      return saved ? JSON.parse(saved) : { x: 16, y: 16 };
+    } catch { return { x: 16, y: 16 }; }
+  });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useRef({ x: 0, y: 0 });
+  const panelRef = useRef<HTMLDivElement>(null);
   const radiusMeters = displayRangeMiles * 1609.344;
+
+  useEffect(() => {
+    localStorage.setItem("mouse_faa_panel_pos", JSON.stringify(panelPos));
+  }, [panelPos]);
+
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+    dragStartRef.current = { x: e.clientX - panelPos.x, y: e.clientY - panelPos.y };
+  }, [panelPos]);
+
+  useEffect(() => {
+    if (!isDragging) return;
+    const onMove = (e: MouseEvent) => {
+      setPanelPos({
+        x: Math.max(0, Math.min(window.innerWidth - 100, e.clientX - dragStartRef.current.x)),
+        y: Math.max(0, Math.min(window.innerHeight - 50, e.clientY - dragStartRef.current.y)),
+      });
+    };
+    const onUp = () => setIsDragging(false);
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, [isDragging]);
 
   useEffect(() => {
     const onSession = (e: CustomEvent<{ isLoggedIn?: boolean }>) => {
@@ -245,30 +285,52 @@ export function RegulatoryGeoJsonOverlay({
 
       {showControl && (
         <div
-          className={`absolute top-4 left-4 z-[450] w-72 bg-card/90 backdrop-blur-md rounded-lg border border-border shadow-lg p-3 space-y-2 ${controlClassName}`.trim()}
+          ref={panelRef}
+          className={`fixed z-[450] bg-card/90 backdrop-blur-md rounded-lg border border-border shadow-lg ${controlClassName}`.trim()}
+          style={{ left: panelPos.x, top: panelPos.y, width: collapsed ? "auto" : 288 }}
+          data-testid="faa-overlay-panel"
         >
-          <div className="text-xs font-semibold">FAA Regulatory Overlays</div>
-          {LAYERS.map((layer) => (
-            <div key={layer.id} className="space-y-1">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="inline-block h-2.5 w-4 rounded-sm" style={{ backgroundColor: layer.color }} />
-                  <Label className="text-[11px] truncate">{layer.label}</Label>
+          <div className="flex items-center justify-between p-2 gap-1">
+            <button
+              className="cursor-grab active:cursor-grabbing p-0.5 text-muted-foreground hover:text-foreground"
+              onMouseDown={handleDragStart}
+              data-testid="faa-panel-drag"
+            >
+              <GripVertical className="h-3.5 w-3.5" />
+            </button>
+            <span className="text-xs font-semibold flex-1">FAA Overlays</span>
+            <span className="text-[10px] text-muted-foreground mr-1">{totalVisibleFeatures}</span>
+            <button
+              className="p-0.5 text-muted-foreground hover:text-foreground"
+              onClick={() => setCollapsed((c) => !c)}
+              data-testid="faa-panel-toggle"
+            >
+              {collapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}
+            </button>
+          </div>
+          {!collapsed && (
+            <div className="px-3 pb-3 space-y-2">
+              {LAYERS.map((layer) => (
+                <div key={layer.id} className="space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="inline-block h-2.5 w-4 rounded-sm" style={{ backgroundColor: layer.color }} />
+                      <Label className="text-[11px] truncate">{layer.label}</Label>
+                    </div>
+                    <Switch
+                      checked={Boolean(enabled[layer.id])}
+                      onCheckedChange={(checked) => setEnabled((prev) => ({ ...prev, [layer.id]: checked }))}
+                    />
+                  </div>
+                  {loading[layer.id] && <p className="text-[10px] text-blue-400 animate-pulse">Loading...</p>}
+                  {errors[layer.id] && <p className="text-[10px] text-amber-500">{errors[layer.id]}</p>}
                 </div>
-                <Switch
-                  checked={Boolean(enabled[layer.id])}
-                  onCheckedChange={(checked) => setEnabled((prev) => ({ ...prev, [layer.id]: checked }))}
-                />
-              </div>
-              {errors[layer.id] && <p className="text-[10px] text-amber-500">{errors[layer.id]}</p>}
+              ))}
+              <p className="text-[10px] text-muted-foreground">
+                Visible within {displayRangeMiles}mi: {totalVisibleFeatures} feature(s).
+              </p>
             </div>
-          ))}
-          <p className="text-[10px] text-muted-foreground">
-            Visible within {displayRangeMiles}mi of drone/operator: {totalVisibleFeatures} feature(s).
-          </p>
-          <p className="text-[10px] text-muted-foreground">
-            FAA Facility Map is very large and may stay disabled if the file is too heavy for real-time client rendering.
-          </p>
+          )}
         </div>
       )}
     </>

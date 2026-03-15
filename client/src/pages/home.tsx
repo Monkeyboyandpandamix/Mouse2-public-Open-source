@@ -1,11 +1,11 @@
-import { useState, useEffect, lazy, Suspense, type ComponentType } from "react";
+import { useState, useEffect, useRef, lazy, Suspense, type ComponentType } from "react";
 import { TopBar } from "@/components/layout/TopBar";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { AutoStabilizationController } from "@/components/controls/AutoStabilizationController";
 import { EmergencyProtocolController } from "@/components/controls/EmergencyProtocolController";
 import { GpsDeniedNavigationController } from "@/components/navigation/GpsDeniedNavigationController";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertTriangle, X, Eye, ArrowLeft, Cpu } from "lucide-react";
+import { AlertTriangle, X, Eye, ArrowLeft, Cpu, Camera, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Card, CardContent } from "@/components/ui/card";
@@ -75,6 +75,80 @@ interface SystemError {
   title: string;
   message: string;
   timestamp: Date;
+}
+
+function CameraFeedView({ label, sublabel }: { label: string; sublabel: string; borderColor?: string }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [active, setActive] = useState(false);
+
+  const startFeed = async () => {
+    try {
+      setError(null);
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setError("Camera access requires HTTPS or localhost.");
+        return;
+      }
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "environment" },
+      });
+      setStream(mediaStream);
+      setActive(true);
+    } catch (err: any) {
+      setError(err.message || "Failed to access camera");
+    }
+  };
+
+  const stopFeed = () => {
+    if (stream) {
+      stream.getTracks().forEach((t) => t.stop());
+      setStream(null);
+    }
+    setActive(false);
+  };
+
+  useEffect(() => {
+    if (videoRef.current && stream) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
+  useEffect(() => {
+    return () => {
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+  if (active && stream) {
+    return (
+      <div className="absolute inset-0 flex flex-col">
+        <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+        <div className="absolute top-1 left-2 text-[10px] font-mono text-green-400 bg-black/60 px-1.5 py-0.5 rounded">
+          {label} - LIVE
+        </div>
+        <button
+          onClick={stopFeed}
+          className="absolute bottom-2 right-2 bg-red-600 text-white text-[10px] px-2 py-1 rounded hover:bg-red-700"
+          data-testid={`button-stop-feed-${label.toLowerCase().replace(/\s/g, "-")}`}
+        >
+          Stop
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="text-center text-muted-foreground">
+      <p className="text-base sm:text-lg font-mono">{label}</p>
+      <p className="text-[10px] sm:text-xs">{sublabel}</p>
+      {error && <p className="text-[10px] text-red-400 mt-1">{error}</p>}
+      <Button size="sm" variant="outline" className="mt-2" onClick={startFeed} data-testid={`button-start-feed-${label.toLowerCase().replace(/\s/g, "-")}`}>
+        <Camera className="h-3 w-3 mr-1" />
+        Connect Camera
+      </Button>
+    </div>
+  );
 }
 
 interface Mapping3DStatus {
@@ -443,17 +517,11 @@ export default function Home() {
           <div className="flex-1 relative bg-background p-3 sm:p-6 overflow-auto">
             <h2 className="text-xl sm:text-2xl font-bold mb-3 sm:mb-4">Camera Feeds & 3D Mapping</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-              <div className="bg-black rounded-lg border-2 border-primary/50 aspect-video flex items-center justify-center">
-                <div className="text-center text-muted-foreground">
-                  <p className="text-base sm:text-lg font-mono">GIMBAL CAM</p>
-                  <p className="text-[10px] sm:text-xs">2K HD (2560x1440)</p>
-                </div>
+              <div className="bg-black rounded-lg border-2 border-primary/50 aspect-video flex items-center justify-center relative overflow-hidden">
+                <CameraFeedView label="GIMBAL CAM" sublabel="2K HD (2560x1440)" borderColor="border-primary/50" />
               </div>
-              <div className="bg-black rounded-lg border-2 border-amber-500/50 aspect-video flex items-center justify-center">
-                <div className="text-center text-muted-foreground">
-                  <p className="text-base sm:text-lg font-mono">THERMAL</p>
-                  <p className="text-[10px] sm:text-xs">384x288 IR</p>
-                </div>
+              <div className="bg-black rounded-lg border-2 border-amber-500/50 aspect-video flex items-center justify-center relative overflow-hidden">
+                <CameraFeedView label="THERMAL" sublabel="384x288 IR" borderColor="border-amber-500/50" />
               </div>
             </div>
             

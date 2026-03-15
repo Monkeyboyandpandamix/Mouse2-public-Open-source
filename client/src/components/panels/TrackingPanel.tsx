@@ -6,12 +6,10 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Target, Users, Car, Box, AlertCircle, MapPin, Search, Lock, Unlock, Camera, Play, Square, Loader2, Laptop, Video, Zap, ScanText, Trash2, Save } from "lucide-react";
+import { Target, Users, Car, Box, AlertCircle, Lock, Unlock, Camera, Play, Square, Loader2, Laptop, Video, Zap, ScanText, Trash2, Save } from "lucide-react";
 import { useState, useCallback, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
-import { MissionMap } from "@/components/map/MissionMap";
 import * as tf from "@tensorflow/tfjs";
 import * as cocoSsd from "@tensorflow-models/coco-ssd";
 
@@ -67,14 +65,10 @@ export function TrackingPanel() {
   const [trackingActive, setTrackingActive] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [targetType, setTargetType] = useState("all");
-  const [targetMethod, setTargetMethod] = useState<"camera" | "map" | "address">("camera");
-  const [targetAddress, setTargetAddress] = useState("");
-  const [addressResults, setAddressResults] = useState<any[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
+  const [targetMethod] = useState<"camera">("camera");
   const [confidenceThreshold, setConfidenceThreshold] = useState([40]);
   const [followDistance, setFollowDistance] = useState([10]);
   const [lockedTargets, setLockedTargets] = useState<Set<string>>(new Set());
-  const [targetCoords, setTargetCoords] = useState<{lat: number, lng: number} | null>(null);
   
   // ML Model state
   const [modelLoading, setModelLoading] = useState(false);
@@ -843,49 +837,9 @@ export function TrackingPanel() {
     toast.info("All targets unlocked");
   };
 
-  const handleAddressSearch = async () => {
-    if (!targetAddress.trim()) {
-      toast.error("Please enter an address");
-      return;
-    }
-    
-    setIsSearching(true);
-    try {
-      const response = await fetch(
-        `/api/geocode?q=${encodeURIComponent(targetAddress)}`
-      );
-      const results = await response.json();
-      
-      if (results.length > 0) {
-        setAddressResults(results);
-        toast.success(`Found ${results.length} location(s)`);
-      } else {
-        toast.error("No locations found");
-        setAddressResults([]);
-      }
-    } catch (error) {
-      toast.error("Failed to search address");
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  const selectAddressResult = (result: any) => {
-    const lat = parseFloat(result.lat);
-    const lng = parseFloat(result.lon);
-    setTargetCoords({ lat, lng });
-    setTargetAddress(result.display_name);
-    setAddressResults([]);
-    toast.success(`Target set to ${lat.toFixed(4)}, ${lng.toFixed(4)}`);
-  };
-
-  const handleMapClick = useCallback((lat: number, lng: number) => {
-    setTargetCoords({ lat, lng });
-    toast.success(`Target location set: ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
-  }, []);
 
   const handleStartTracking = async () => {
-    if (targetMethod === "camera" && lockedTargets.size === 0) {
+    if (lockedTargets.size === 0) {
       if (!webcamStream) {
         toast.error("Please start the camera first");
         return;
@@ -895,11 +849,6 @@ export function TrackingPanel() {
         return;
       }
       toast.error("Please click on detected objects to lock them as targets");
-      return;
-    }
-    
-    if ((targetMethod === "map" || targetMethod === "address") && !targetCoords) {
-      toast.error("Please set a target location first");
       return;
     }
 
@@ -1003,7 +952,7 @@ export function TrackingPanel() {
               )}
             </div>
             
-            {(lockedTargets.size > 0 || targetCoords) && (
+            {lockedTargets.size > 0 && (
               <div className="mt-2 p-2 bg-muted/50 rounded text-xs space-y-1">
                 {lockedTargets.size > 0 && (
                   <div className="flex items-center justify-between">
@@ -1016,12 +965,6 @@ export function TrackingPanel() {
                     </Button>
                   </div>
                 )}
-                {targetCoords && (
-                  <div className="flex items-center gap-2">
-                    <MapPin className="h-3 w-3 text-primary" />
-                    <span>Location: {targetCoords.lat.toFixed(4)}, {targetCoords.lng.toFixed(4)}</span>
-                  </div>
-                )}
               </div>
             )}
           </CardContent>
@@ -1029,66 +972,15 @@ export function TrackingPanel() {
 
         <Card>
           <CardHeader className="p-3">
-            <CardTitle className="text-sm">Target Selection Method</CardTitle>
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Camera className="h-4 w-4" />
+              Target Selection
+            </CardTitle>
           </CardHeader>
           <CardContent className="p-3 pt-0">
-            <Tabs value={targetMethod} onValueChange={(v) => setTargetMethod(v as any)}>
-              <TabsList className="grid w-full grid-cols-3 h-8">
-                <TabsTrigger value="camera" className="text-xs">
-                  <Camera className="h-3 w-3 mr-1" />
-                  Camera
-                </TabsTrigger>
-                <TabsTrigger value="map" className="text-xs">
-                  <MapPin className="h-3 w-3 mr-1" />
-                  Map
-                </TabsTrigger>
-                <TabsTrigger value="address" className="text-xs">
-                  <Search className="h-3 w-3 mr-1" />
-                  Address
-                </TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="camera" className="mt-2">
-                <p className="text-xs text-muted-foreground">
-                  Lock a target from detected objects below
-                </p>
-              </TabsContent>
-
-              <TabsContent value="map" className="mt-2">
-                <p className="text-xs text-muted-foreground">
-                  Click on the map to set tracking destination
-                </p>
-              </TabsContent>
-
-              <TabsContent value="address" className="mt-2 space-y-2">
-                <div className="flex gap-1">
-                  <Input
-                    placeholder="Enter address..."
-                    value={targetAddress}
-                    onChange={(e) => setTargetAddress(e.target.value)}
-                    className="flex-1 h-8 text-xs"
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddressSearch()}
-                  />
-                  <Button size="sm" className="h-8" onClick={handleAddressSearch} disabled={isSearching}>
-                    {isSearching ? <Loader2 className="h-3 w-3 animate-spin" /> : <Search className="h-3 w-3" />}
-                  </Button>
-                </div>
-                
-                {addressResults.length > 0 && (
-                  <div className="bg-muted rounded border border-border max-h-24 overflow-y-auto">
-                    {addressResults.map((result, idx) => (
-                      <div
-                        key={idx}
-                        className="p-2 hover:bg-primary/10 cursor-pointer text-xs border-b border-border last:border-0"
-                        onClick={() => selectAddressResult(result)}
-                      >
-                        <div className="truncate">{result.display_name}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </TabsContent>
-            </Tabs>
+            <p className="text-xs text-muted-foreground">
+              Lock a target from detected objects below. Start the camera and enable detection to identify and track objects in real-time.
+            </p>
           </CardContent>
         </Card>
 
@@ -1199,8 +1091,7 @@ export function TrackingPanel() {
           </CardContent>
         </Card>
 
-        {targetMethod === "camera" && (
-          <Card>
+        <Card>
             <CardHeader className="p-3">
               <CardTitle className="text-sm">Detected Objects ({filteredObjects.length})</CardTitle>
             </CardHeader>
@@ -1241,19 +1132,10 @@ export function TrackingPanel() {
               )}
             </CardContent>
           </Card>
-        )}
       </div>
 
-      {/* Right Panel - Map or Camera View */}
+      {/* Right Panel - Camera View */}
       <div className="flex-1 relative">
-        {targetMethod === "map" ? (
-          <MissionMap
-            waypoints={targetCoords ? [{ order: 1, latitude: targetCoords.lat, longitude: targetCoords.lng, altitude: 50 }] : []}
-            onMapClick={handleMapClick}
-            clickEnabled={true}
-            showClickHint={!targetCoords}
-          />
-        ) : (
           <div className="w-full h-full bg-slate-900 relative overflow-hidden">
             {/* Hidden canvas for frame analysis */}
             <canvas ref={canvasRef} className="hidden" />
@@ -1382,7 +1264,6 @@ export function TrackingPanel() {
               </div>
             )}
           </div>
-        )}
       </div>
     </div>
   );
