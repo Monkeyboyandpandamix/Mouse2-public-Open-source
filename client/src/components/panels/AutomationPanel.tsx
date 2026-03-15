@@ -83,7 +83,6 @@ if (!gps.hasSignal) {
 export function AutomationPanel() {
   const { hasPermission } = usePermissions();
   const canAutomate = hasPermission('automation_scripts');
-  const automationExecutionEnabled = false;
   
   const [scripts, setScripts] = useState<AutomationScript[]>(() => {
     const saved = localStorage.getItem("mouse_automation_scripts");
@@ -105,24 +104,60 @@ export function AutomationPanel() {
     localStorage.setItem("mouse_automation_scripts", JSON.stringify(scripts));
   }, [scripts]);
 
-  const executeScriptNow = (script: AutomationScript, reason: string) => {
-    if (!automationExecutionEnabled) {
-      toast.error(`"${script.name}" is disabled until a backend automation runner is configured`);
-      return;
+  const executeScriptNow = async (script: AutomationScript, reason: string) => {
+    const selectedDroneRaw = localStorage.getItem("mouse_selected_drone");
+    let connectionString = "";
+    if (selectedDroneRaw) {
+      try {
+        connectionString = String(JSON.parse(selectedDroneRaw)?.connectionString || "").trim();
+      } catch {
+        connectionString = "";
+      }
     }
-    toast.info(`Running "${script.name}" (${reason})...`);
-    setTimeout(() => {
-      const nowIso = new Date().toISOString();
-      setScripts((prev) =>
-        prev.map((s) => (s.id === script.id ? { ...s, lastRun: nowIso } : s)),
-      );
-      window.dispatchEvent(
-        new CustomEvent("automation-script-run", {
-          detail: { id: script.id, name: script.name, trigger: script.trigger, reason, code: script.code },
+
+    try {
+      toast.info(`Running "${script.name}" (${reason})...`);
+      const response = await fetch("/api/automation/scripts/execute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scriptId: script.id,
+          scriptName: script.name,
+          trigger: script.trigger,
+          reason,
+          code: script.code,
+          connectionString,
         }),
-      );
-      toast.success(`"${script.name}" completed`);
-    }, 500);
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.run) {
+        throw new Error(data?.error || data?.run?.error || "Automation execution failed");
+      }
+
+      const nowIso = new Date().toISOString();
+      if (data.success) {
+        setScripts((prev) =>
+          prev.map((s) => (s.id === script.id ? { ...s, lastRun: nowIso } : s)),
+        );
+        window.dispatchEvent(
+          new CustomEvent("automation-script-run", {
+            detail: {
+              id: script.id,
+              name: script.name,
+              trigger: script.trigger,
+              reason,
+              runId: data.run.id,
+              commandId: data.run.commandId,
+            },
+          }),
+        );
+        toast.success(`"${script.name}" completed`);
+      } else {
+        throw new Error(data?.run?.error || "Automation execution failed");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Automation execution failed");
+    }
   };
 
   useEffect(() => {
@@ -139,7 +174,7 @@ export function AutomationPanel() {
         .filter((s) => s.enabled && s.trigger === trigger)
         .forEach((script) => {
           if (shouldThrottle(script.id, throttleMs)) return;
-          executeScriptNow(script, reason);
+          void executeScriptNow(script, reason);
         });
     };
 
@@ -264,7 +299,7 @@ async function run() {
   };
 
   const handleRunScript = (script: AutomationScript) => {
-    executeScriptNow(script, "Manual run");
+    void executeScriptNow(script, "Manual run");
   };
 
   const getTriggerBadge = (trigger: string) => {

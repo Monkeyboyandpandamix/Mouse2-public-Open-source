@@ -138,6 +138,25 @@ interface MissionRunRecord {
   commandIds: string[];
 }
 const missionRuns = new Map<string, MissionRunRecord>();
+interface AutomationRunRecord {
+  id: string;
+  scriptId: string;
+  scriptName: string;
+  trigger: string;
+  reason: string;
+  status: "queued" | "running" | "completed" | "failed";
+  error: string | null;
+  result: unknown;
+  createdAt: string;
+  updatedAt: string;
+  commandId: string | null;
+  requestedBy: {
+    userId: string;
+    role: string;
+    name: string;
+  };
+}
+const automationRuns = new Map<string, AutomationRunRecord>();
 const airspaceCache = new Map<string, { expiresAt: number; payload: any }>();
 const staticAirspaceCache = new Map<string, any>();
 let serialPassthroughProcess: any = null;
@@ -790,6 +809,13 @@ export async function registerRoutes(
     const authHeader = String(req.headers.authorization || "");
     return Boolean(adminKey && authHeader === `Bearer ${adminKey}`);
   };
+
+  const commandPermissionForType = (type: string): PermissionId => {
+    const normalized = String(type || "").trim().toLowerCase();
+    if (normalized === "arm" || normalized === "disarm") return "arm_disarm";
+    if (normalized === "terminal" || normalized === "terminal_command" || normalized === "run_terminal") return "run_terminal";
+    return "flight_control";
+  };
   
   wss.on("connection", (ws) => {
     // Initially, user is not authenticated
@@ -1117,6 +1143,7 @@ export async function registerRoutes(
     if (type === "mission_start") return { type: "set_mode", payload: { mode: "AUTO" } };
     if (type === "mission_stop") return { type: "set_mode", payload: { mode: "LAND" } };
     if (type === "abort") return { type: "disarm", payload: {} };
+    if (type === "backtrace") return { type: "set_mode", payload: { mode: "RTL" } };
     if (type === "takeoff") {
       const altitude = Number(payload.altitude ?? payload.targetAltitude ?? 20);
       return { type: "takeoff", payload: { altitude: Number.isFinite(altitude) ? altitude : 20 } };
@@ -1450,6 +1477,7 @@ export async function registerRoutes(
   app.use("/api/debug", requirePermission("system_settings"));
   app.use("/api/messages", requireAuth);
   app.use("/api/chat-users", requireAuth);
+  app.use("/api/automation", requirePermission("automation_scripts"));
   app.use("/api/settings", requirePermission("system_settings"));
   app.use("/api/missions", requirePermission("mission_planning"));
   app.use("/api/waypoints", requirePermission("mission_planning"));
@@ -1479,7 +1507,7 @@ export async function registerRoutes(
   app.use("/api/cloud/sync-all", requirePermission("system_settings"));
   app.use("/api/cloud/admin-dashboard", requirePermission("system_settings"));
   app.use("/api/backlog", requirePermission("view_telemetry"));
-  app.use("/api/commands", requirePermission("flight_control"));
+  app.use("/api/commands", requireAuth);
   app.use("/api/servo", requirePermission("flight_control"));
   app.use("/api/stabilization", requirePermission("flight_control"));
   app.use("/api/camera-settings", requirePermission("camera_control"));
@@ -3030,6 +3058,11 @@ export async function registerRoutes(
         });
       }
 
+      const requiredPermission = commandPermissionForType(rawType || resolved.type);
+      if (!hasServerPermission(session, requiredPermission)) {
+        return res.status(403).json({ success: false, error: "Insufficient permissions for this command" });
+      }
+
       const connectionString = String(req.body?.connectionString || payload.connectionString || "").trim();
 
       const record = await commandService.dispatchAndWait(
@@ -3068,11 +3101,25 @@ export async function registerRoutes(
   });
 
   app.get("/api/commands", async (req, res) => {
+    const session = (req as any).serverSession as ServerSession | undefined;
+    if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+    const canRead =
+      hasServerPermission(session, "flight_control") ||
+      hasServerPermission(session, "run_terminal") ||
+      hasServerPermission(session, "arm_disarm");
+    if (!canRead) return res.status(403).json({ success: false, error: "Insufficient permissions" });
     const limit = Math.max(1, Math.min(500, Number(req.query.limit || 100)));
     return res.json({ success: true, commands: commandService.list(limit) });
   });
 
   app.get("/api/commands/:id", async (req, res) => {
+    const session = (req as any).serverSession as ServerSession | undefined;
+    if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+    const canRead =
+      hasServerPermission(session, "flight_control") ||
+      hasServerPermission(session, "run_terminal") ||
+      hasServerPermission(session, "arm_disarm");
+    if (!canRead) return res.status(403).json({ success: false, error: "Insufficient permissions" });
     const command = commandService.get(String(req.params.id || "").trim());
     if (!command) return res.status(404).json({ success: false, error: "Command not found" });
     return res.json({ success: true, command });
@@ -3236,6 +3283,167 @@ export async function registerRoutes(
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || "Mission stop failed" });
     }
+  });
+
+  const resolveAutomationCommand = (
+    trigger: string,
+    code: string,
+  ): { type: string; payload: Record<string, unknown>; reason: string } | null => {
+    const normalizedCode = String(code || "");
+    const triggerValue = String(trigger || "").trim().toLowerCase();
+
+    const takeoffMatch = normalizedCode.match(/takeoff\s*\(\s*([0-9]+(?:\.[0-9]+)?)/i);
+    if (takeoffMatch) {
+      const altitude = Number(takeoffMatch[1]);
+      return {
+        type: "takeoff",
+        payload: { altitude: Number.isFinite(altitude) ? altitude : 20 },
+        reason: "Detected takeoff command in script",
+      };
+    }
+    if (/returnToBase|return to base|\brtl\b/i.test(normalizedCode)) {
+      return { type: "rtl", payload: {}, reason: "Detected return-to-launch command in script" };
+    }
+    if (/\bland\b/i.test(normalizedCode)) {
+      return { type: "land", payload: {}, reason: "Detected land command in script" };
+    }
+    if (/\bdisarm\b/i.test(normalizedCode)) {
+      return { type: "disarm", payload: {}, reason: "Detected disarm command in script" };
+    }
+    if (/\barm\b/i.test(normalizedCode)) {
+      return { type: "arm", payload: {}, reason: "Detected arm command in script" };
+    }
+
+    if (triggerValue === "battery_low" || triggerValue === "gps_lost" || triggerValue === "disconnect") {
+      return { type: "rtl", payload: {}, reason: `Mapped ${triggerValue} trigger to RTL failsafe` };
+    }
+    if (triggerValue === "landing") {
+      return { type: "land", payload: {}, reason: "Mapped landing trigger to LAND command" };
+    }
+    if (triggerValue === "takeoff") {
+      return { type: "takeoff", payload: { altitude: 20 }, reason: "Mapped takeoff trigger to TAKEOFF command" };
+    }
+
+    return null;
+  };
+
+  app.post("/api/automation/scripts/execute", async (req: any, res) => {
+    try {
+      const session = req.serverSession as ServerSession | undefined;
+      if (!session) {
+        return res.status(401).json({ success: false, error: "Authentication required" });
+      }
+
+      const scriptId = String(req.body?.scriptId || "").trim();
+      const scriptName = String(req.body?.scriptName || req.body?.name || "").trim();
+      const trigger = String(req.body?.trigger || "manual").trim().toLowerCase();
+      const reason = String(req.body?.reason || "Manual run").trim();
+      const code = String(req.body?.code || "").trim();
+      const connectionString = String(req.body?.connectionString || "").trim();
+
+      if (!scriptId) return res.status(400).json({ success: false, error: "scriptId is required" });
+      if (!scriptName) return res.status(400).json({ success: false, error: "scriptName is required" });
+
+      const now = new Date().toISOString();
+      const runId = `${Date.now()}-${randomBytes(4).toString("hex")}`;
+      const run: AutomationRunRecord = {
+        id: runId,
+        scriptId,
+        scriptName,
+        trigger,
+        reason,
+        status: "queued",
+        error: null,
+        result: null,
+        createdAt: now,
+        updatedAt: now,
+        commandId: null,
+        requestedBy: {
+          userId: session.userId,
+          role: session.role,
+          name: session.name,
+        },
+      };
+      automationRuns.set(runId, run);
+      if (automationRuns.size > 1000) {
+        const oldest = automationRuns.keys().next().value;
+        if (oldest) automationRuns.delete(oldest);
+      }
+
+      const planned = resolveAutomationCommand(trigger, code);
+      if (!planned) {
+        run.status = "failed";
+        run.error = "Script has no safe executable backend command mapping";
+        run.updatedAt = new Date().toISOString();
+        automationRuns.set(runId, run);
+        broadcast("automation_run_update", run);
+        return res.status(400).json({ success: false, run, error: run.error });
+      }
+
+      const requiredPermission = commandPermissionForType(planned.type);
+      if (!hasServerPermission(session, requiredPermission)) {
+        run.status = "failed";
+        run.error = `Insufficient permissions: ${requiredPermission} required`;
+        run.updatedAt = new Date().toISOString();
+        automationRuns.set(runId, run);
+        broadcast("automation_run_update", run);
+        return res.status(403).json({ success: false, run, error: run.error });
+      }
+
+      run.status = "running";
+      run.updatedAt = new Date().toISOString();
+      automationRuns.set(runId, run);
+      broadcast("automation_run_update", run);
+
+      const commandRecord = await commandService.dispatchAndWait(
+        {
+          type: planned.type,
+          payload: { ...planned.payload, connectionString },
+          requestedBy: { userId: session.userId, role: session.role, name: session.name },
+          timeoutMs: 15000,
+        },
+        async () =>
+          executeUnifiedCommand({
+            type: planned.type,
+            payload: planned.payload,
+            connectionString,
+          }),
+      );
+
+      run.commandId = commandRecord.id;
+      run.result = {
+        commandType: planned.type,
+        commandStatus: commandRecord.status,
+        dispatchReason: planned.reason,
+      };
+      if (commandRecord.status === "acked") {
+        run.status = "completed";
+        run.error = null;
+      } else {
+        run.status = "failed";
+        run.error = commandRecord.error || "Automation command failed";
+      }
+      run.updatedAt = new Date().toISOString();
+      automationRuns.set(runId, run);
+      broadcast("automation_run_update", run);
+      void appendCloudDocument("automation_runs", run, { session }).catch(() => {});
+
+      return res.json({
+        success: run.status === "completed",
+        run,
+        command: commandRecord,
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || "Automation execution failed" });
+    }
+  });
+
+  app.get("/api/automation/runs", async (req, res) => {
+    const scriptId = String(req.query.scriptId || "").trim();
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit || 100)));
+    const all = Array.from(automationRuns.values()).reverse();
+    const filtered = scriptId ? all.filter((run) => run.scriptId === scriptId) : all;
+    return res.json({ success: true, runs: filtered.slice(0, limit) });
   });
 
   app.post("/api/mavlink/swarm/action", async (req, res) => {

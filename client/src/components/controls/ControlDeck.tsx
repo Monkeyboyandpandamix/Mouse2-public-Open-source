@@ -533,8 +533,8 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
                 return;
               }
               try {
-                await dispatchCommand("rtl");
-                toast.info("Backtrace requested (mapped to RTL)");
+                await dispatchCommand("backtrace");
+                toast.info("Backtrace acknowledged");
               } catch (error) {
                 toast.error(error instanceof Error ? error.message : "Backtrace command failed");
               }
