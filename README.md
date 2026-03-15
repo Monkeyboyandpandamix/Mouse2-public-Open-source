@@ -25,6 +25,9 @@ A comprehensive ground control station for autonomous drone control with Orange 
 15. [Project Structure](#project-structure)
 16. [Troubleshooting & Common Errors](#troubleshooting--common-errors)
 17. [Dependency Issues](#dependency-issues)
+18. [Firebase Cloud Sync](#firebase-cloud-sync)
+19. [Web Deployment (Firebase Hosting)](#web-deployment-firebase-hosting)
+20. [New Cloud/Audio APIs](#new-cloudaudio-apis)
 
 ---
 
@@ -322,6 +325,25 @@ cp .env.example .env
 | `NO_BROWSER` | Set to `1` to disable auto-open browser | Headless mode |
 | `SESSION_SECRET` | Session encryption key (32+ chars) | Security |
 | `GOOGLE_AUTH_ENCRYPTION_KEY` | Token encryption key (32+ chars) | Security |
+
+### Firebase Cloud Variables
+
+| Variable | Description |
+|----------|-------------|
+| `VITE_FIREBASE_API_KEY` | Firebase web API key (client) |
+| `VITE_FIREBASE_AUTH_DOMAIN` | Firebase auth domain |
+| `VITE_FIREBASE_DATABASE_URL` | Realtime Database URL |
+| `VITE_FIREBASE_PROJECT_ID` | Firebase project ID |
+| `VITE_FIREBASE_STORAGE_BUCKET` | Firebase Storage bucket |
+| `VITE_FIREBASE_MESSAGING_SENDER_ID` | Cloud Messaging sender ID |
+| `VITE_FIREBASE_APP_ID` | Firebase web app ID |
+| `VITE_FIREBASE_MEASUREMENT_ID` | Analytics ID (optional) |
+| `FIREBASE_PROJECT_ID` | Project ID for Admin SDK |
+| `FIREBASE_DATABASE_URL` | RTDB URL for Admin SDK |
+| `FIREBASE_STORAGE_BUCKET` | Storage bucket for Admin SDK |
+| `FIREBASE_SERVICE_ACCOUNT_PATH` | Absolute path to service account JSON (recommended for local dev) |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Full service account JSON string (alternative) |
+| `FIREBASE_SERVICE_ACCOUNT_BASE64` | Base64 service account JSON (alternative) |
 
 ### Google Integration Variables
 
@@ -927,6 +949,96 @@ Client-side storage (browser localStorage):
 
 ---
 
+## Firebase Cloud Sync
+
+The app now supports centralized Firebase synchronization for cross-operator visibility.
+
+### Synced Operational Data
+- missions and waypoints
+- drone state and live locations
+- telemetry, flight logs, motor telemetry, sensor data
+- media metadata (photo/video/3D capture records)
+- flight sessions
+- team messages (with DM visibility rules)
+- operator actions (admin-focused audit stream)
+
+### Media Upload and Offline Failover
+- Media upload first attempts Firebase Storage.
+- If cloud is unavailable, media is staged locally in `data/media_staging`.
+- Metadata is marked `syncStatus: pending` and queued in `offline_backlog`.
+- Automatic retry runs in the backend every 60 seconds.
+- Manual retry endpoint: `POST /api/cloud/media/sync-pending`
+
+### Access Rules in App Behavior
+- Awareness data requires authentication via `x-session-token`.
+- Admin dashboard data requires admin role.
+- Direct messages are filtered by sender/recipient for non-admin users.
+
+---
+
+## Web Deployment (Firebase Hosting)
+
+### Prerequisites
+1. Firebase project configured (this project uses `mouse-ee60c`).
+2. Firebase CLI login:
+   ```bash
+   npm install -g firebase-tools
+   firebase login
+   firebase use --add
+   ```
+3. Backend deployed as Cloud Run service named `mouse-api` (used by Hosting rewrite for `/api/**`).
+
+### Deploy Web App
+```bash
+npm run deploy:web
+```
+
+This command:
+1. builds the frontend (`npm run build`)
+2. deploys `dist/public` to Firebase Hosting
+
+### Hosting Routing
+- `/api/**` -> Cloud Run service `mouse-api` (`us-central1`)
+- `/**` -> `index.html` (SPA fallback)
+
+### Required Backend Env on Cloud Run
+- `FIREBASE_PROJECT_ID`
+- `FIREBASE_DATABASE_URL`
+- `FIREBASE_STORAGE_BUCKET`
+- one service account method:
+  - `FIREBASE_SERVICE_ACCOUNT_PATH` or
+  - `FIREBASE_SERVICE_ACCOUNT_JSON` or
+  - `FIREBASE_SERVICE_ACCOUNT_BASE64`
+
+For full setup details, also see:
+- `FIREBASE_SETUP.md`
+- `WEB_DEPLOY.md`
+
+---
+
+## New Cloud/Audio APIs
+
+### Cloud Status and Awareness
+- `GET /api/cloud/status`
+- `GET /api/cloud/awareness` (authenticated)
+- `GET /api/cloud/admin-dashboard` (admin)
+
+### Cloud Media
+- `POST /api/cloud/media/upload`
+- `POST /api/cloud/media/sync-pending`
+
+### Web Operator Audio Sessions
+- `GET /api/audio/session`
+- `POST /api/audio/session/join`
+- `POST /api/audio/session/leave`
+
+These work with existing audio endpoints:
+- `/api/audio/live/start`, `/api/audio/live/stop`
+- `/api/audio/drone-mic`
+- `/api/audio/tts`
+
+---
+
 ## Version History
 
 - **v1.0** - Initial release with core GCS functionality
@@ -936,6 +1048,7 @@ Client-side storage (browser localStorage):
 - **v1.4** - Mission execution and comprehensive terminal commands
 - **v1.5** - Team communication with direct messaging
 - **v1.6** - Standalone deployment support and custom roles
+- **v1.7** - Firebase cloud sync, offline media failover, web deployment to Firebase Hosting, operator audio bridge session APIs
 
 ---
 

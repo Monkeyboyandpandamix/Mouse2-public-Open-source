@@ -12,7 +12,8 @@
     "start:macos": "bash ./start-macos.sh",
     "start:pi": "bash ./start-pi-onboard.sh",
     "start:windows": "start-windows.bat",
-    "check": "tsc"
+    "check": "tsc",
+    "deploy:web": "npm run build && npx firebase-tools deploy --only hosting"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
@@ -57,6 +58,8 @@
     "embla-carousel-react": "^8.6.0",
     "express": "^4.21.2",
     "express-session": "^1.18.1",
+    "firebase": "^12.10.0",
+    "firebase-admin": "^13.7.0",
     "framer-motion": "^12.23.24",
     "googleapis": "^148.0.0",
     "input-otp": "^1.4.2",

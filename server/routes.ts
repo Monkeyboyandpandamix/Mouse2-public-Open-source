@@ -33,6 +33,15 @@ import { ZodError } from "zod";
 import { fromError } from "zod-validation-error";
 import { syncDataToSheets, getOrCreateBackupSpreadsheet, getSpreadsheetUrl } from "./googleSheets";
 import { uploadFileToDrive, listDriveFiles, checkDriveConnection, deleteFileFromDrive } from "./googleDrive";
+import {
+  appendCloudDocument,
+  cloudSyncEnabled,
+  deleteCloudDocument,
+  getRecentCloudDocs,
+  publishCloudRealtime,
+  syncCloudDocument,
+  uploadCloudStorageObject,
+} from "./cloudSync";
 import { 
   getAuthUrl, 
   handleOAuthCallback, 
@@ -106,6 +115,7 @@ const RTK_PROFILE_FILE = path.join(DATA_DIR, "rtk_profiles.json");
 const PLUGINS_DIR = path.resolve(process.cwd(), "plugins");
 const PLUGIN_STATE_FILE = path.join(DATA_DIR, "plugin_state.json");
 const FIRMWARE_CATALOG_FILE = path.join(DATA_DIR, "firmware_catalog.json");
+const MEDIA_STAGING_DIR = path.join(DATA_DIR, "media_staging");
 const OPTIONAL_HARDWARE_PROFILES: Record<string, Array<{ name: string; value: number }>> = {
   dronecan_core: [
     { name: "CAN_P1_DRIVER", value: 1 },
@@ -237,6 +247,11 @@ function validateSession(token: string | undefined): ServerSession | null {
     return null;
   }
   return session;
+}
+
+function requestSession(req: any): ServerSession | null {
+  const token = req.headers["x-session-token"] as string | undefined;
+  return validateSession(token);
 }
 
 interface AirspaceZone {
@@ -470,6 +485,7 @@ export async function registerRoutes(
         clientInfo.ws.send(message);
       }
     });
+    void publishCloudRealtime(type, data).catch(() => {});
   };
 
   // Send to specific users only (for DMs)
@@ -496,6 +512,163 @@ export async function registerRoutes(
       broadcast(type, data);
     }
   };
+
+  const storeMediaLocally = async (fileName: string, bytes: Buffer) => {
+    mkdirSync(MEDIA_STAGING_DIR, { recursive: true });
+    const safeName = `${Date.now()}-${fileName.replace(/[^\w.\-]+/g, "_")}`;
+    const localPath = path.join(MEDIA_STAGING_DIR, safeName);
+    await writeFile(localPath, bytes);
+    return localPath;
+  };
+
+  const ingestMediaToCloudOrBacklog = async (opts: {
+    fileName: string;
+    mimeType: string;
+    bytes: Buffer;
+    sessionId?: string | null;
+    droneId?: string | null;
+    session: ServerSession | null;
+    createAsset?: boolean;
+  }) => {
+    const { fileName, mimeType, bytes, sessionId, droneId, session, createAsset = true } = opts;
+    const objectPath = `media/${new Date().toISOString().slice(0, 10)}/${Date.now()}-${fileName.replace(/[^\w.\-]+/g, "_")}`;
+    const uploaded = await uploadCloudStorageObject(objectPath, bytes, mimeType);
+    const capturedAt = new Date().toISOString();
+
+    if (uploaded.ok) {
+      if (!createAsset) {
+        return { uploaded: true, pending: false, cloudPath: uploaded.gsUri || uploaded.objectPath };
+      }
+      const asset = await storage.createMediaAsset({
+        droneId: droneId || null,
+        sessionId: sessionId || null,
+        type: mimeType.startsWith("video/") ? "video" : mimeType.startsWith("image/") ? "photo" : "binary",
+        filename: fileName,
+        storagePath: uploaded.gsUri || uploaded.objectPath,
+        driveFileId: null,
+        driveLink: uploaded.gsUri || null,
+        mimeType,
+        fileSize: bytes.byteLength,
+        duration: null,
+        latitude: null,
+        longitude: null,
+        altitude: null,
+        heading: null,
+        cameraMode: null,
+        zoomLevel: null,
+        syncStatus: "synced",
+        syncError: null,
+        capturedAt,
+      });
+      void syncCloudDocument("media_assets", asset.id, asset, { session }).catch(() => {});
+      return { uploaded: true, pending: false, asset, cloudPath: uploaded.gsUri || uploaded.objectPath };
+    }
+
+    const localFilePath = await storeMediaLocally(fileName, bytes);
+    if (!createAsset) {
+      return { uploaded: false, pending: true, localFilePath, error: uploaded.error || "Cloud unavailable" };
+    }
+    const asset = await storage.createMediaAsset({
+      droneId: droneId || null,
+      sessionId: sessionId || null,
+      type: mimeType.startsWith("video/") ? "video" : mimeType.startsWith("image/") ? "photo" : "binary",
+      filename: fileName,
+      storagePath: localFilePath,
+      driveFileId: null,
+      driveLink: null,
+      mimeType,
+      fileSize: bytes.byteLength,
+      duration: null,
+      latitude: null,
+      longitude: null,
+      altitude: null,
+      heading: null,
+      cameraMode: null,
+      zoomLevel: null,
+      syncStatus: "pending",
+      syncError: uploaded.error || "Cloud unavailable",
+      capturedAt,
+    });
+
+    await storage.createBacklogItem({
+      droneId: droneId || null,
+      dataType: "media",
+      data: {
+        mediaAssetId: asset.id,
+        fileName,
+        mimeType,
+      },
+      priority: 2,
+      localFilePath,
+      fileChecksum: null,
+      syncStatus: "pending",
+      syncAttempts: 0,
+      lastSyncAttempt: null,
+      syncError: uploaded.error || "Cloud unavailable",
+      recordedAt: capturedAt,
+    });
+    void syncCloudDocument("media_assets", asset.id, asset, { session }).catch(() => {});
+    return { uploaded: false, pending: true, asset, localFilePath };
+  };
+
+  const syncPendingMediaBacklog = async (session: ServerSession | null = null) => {
+    const pending = await storage.getPendingBacklog();
+    const mediaItems = pending.filter((item) => item.dataType === "media" && item.localFilePath);
+    const results: Array<{ id: string; synced: boolean; error?: string }> = [];
+    for (const item of mediaItems) {
+      try {
+        const meta = item.data || {};
+        const localFilePath = String(item.localFilePath || "");
+        if (!existsSync(localFilePath)) {
+          await storage.updateBacklogItem(item.id, { syncStatus: "failed", syncError: "Local file missing" });
+          results.push({ id: item.id, synced: false, error: "Local file missing" });
+          continue;
+        }
+        const bytes = await readFile(localFilePath);
+        const fileName = String(meta.fileName || path.basename(localFilePath));
+        const mimeType = String(meta.mimeType || "application/octet-stream");
+        const objectPath = `media/${new Date().toISOString().slice(0, 10)}/${Date.now()}-${fileName.replace(/[^\w.\-]+/g, "_")}`;
+        const uploaded = await uploadCloudStorageObject(objectPath, bytes, mimeType);
+        if (!uploaded.ok) {
+          await storage.updateBacklogItem(item.id, {
+            syncStatus: "pending",
+            syncAttempts: (item.syncAttempts || 0) + 1,
+            syncError: uploaded.error || "Cloud unavailable",
+          });
+          results.push({ id: item.id, synced: false, error: uploaded.error || "Cloud unavailable" });
+          continue;
+        }
+
+        const mediaAssetId = String(meta.mediaAssetId || "");
+        if (mediaAssetId) {
+          const updated = await storage.updateMediaAsset(mediaAssetId, {
+            storagePath: uploaded.gsUri || uploaded.objectPath,
+            driveLink: uploaded.gsUri || null,
+            syncStatus: "synced",
+            syncError: null,
+          });
+          if (updated) {
+            void syncCloudDocument("media_assets", updated.id, updated, { session }).catch(() => {});
+          }
+        }
+        await storage.markBacklogSynced(item.id);
+        results.push({ id: item.id, synced: true });
+      } catch (error: any) {
+        await storage.updateBacklogItem(item.id, {
+          syncStatus: "pending",
+          syncAttempts: (item.syncAttempts || 0) + 1,
+          syncError: error?.message || String(error),
+        });
+        results.push({ id: item.id, synced: false, error: error?.message || String(error) });
+      }
+    }
+    return results;
+  };
+
+  // Background retry for cloud media sync when connectivity returns.
+  setInterval(() => {
+    void syncPendingMediaBacklog(null).catch(() => {});
+  }, 60_000);
 
   const runMavlinkParamBridge = async (args: string[]) => {
     return await new Promise<any>((resolve) => {
@@ -584,6 +757,19 @@ export async function registerRoutes(
     lastModelGeneratedAt: string | null;
   }
 
+  type AudioSessionMode = "listen" | "talk" | "duplex";
+  interface AudioBridgeSession {
+    sessionId: string;
+    userId: string;
+    userRole: string;
+    userName: string;
+    droneId: string;
+    mode: AudioSessionMode;
+    connectedAt: string;
+    updatedAt: string;
+    active: boolean;
+  }
+
   const audioState: AudioSystemState = {
     deviceType: "gpio",
     deviceId: "gpio-default",
@@ -608,6 +794,7 @@ export async function registerRoutes(
     lastModelPath: null,
     lastModelGeneratedAt: null,
   };
+  const audioBridgeSessions = new Map<string, AudioBridgeSession>();
 
   const resolveAudioDevices = async (): Promise<string[]> => {
     const platform = os.platform();
@@ -700,7 +887,73 @@ export async function registerRoutes(
       success: true,
       platform: os.platform(),
       state: audioState,
+      bridgeSessions: Array.from(audioBridgeSessions.values()),
     });
+  });
+
+  app.get("/api/audio/session", async (req, res) => {
+    const session = requestSession(req);
+    if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+    const items = Array.from(audioBridgeSessions.values()).filter((s) =>
+      session.role === "admin" ? true : s.userId === session.userId,
+    );
+    res.json({ success: true, sessions: items });
+  });
+
+  app.post("/api/audio/session/join", async (req, res) => {
+    const session = requestSession(req);
+    if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+    const droneId = String(req.body?.droneId || "").trim();
+    const mode = String(req.body?.mode || "duplex").trim() as AudioSessionMode;
+    if (!droneId) return res.status(400).json({ success: false, error: "droneId is required" });
+    if (!["listen", "talk", "duplex"].includes(mode)) {
+      return res.status(400).json({ success: false, error: "Invalid mode" });
+    }
+
+    const id = `${session.userId}:${droneId}`;
+    const now = new Date().toISOString();
+    const updated: AudioBridgeSession = {
+      sessionId: id,
+      userId: session.userId,
+      userRole: session.role || "viewer",
+      userName: session.name || session.userId,
+      droneId,
+      mode,
+      connectedAt: audioBridgeSessions.get(id)?.connectedAt || now,
+      updatedAt: now,
+      active: true,
+    };
+    audioBridgeSessions.set(id, updated);
+    broadcast("audio_bridge_session", { action: "join", session: updated });
+    void syncCloudDocument("audio_bridge_sessions", updated.sessionId, updated, { session }).catch(() => {});
+    void appendCloudDocument("operator_actions", {
+      action: "audio_session_join",
+      mode,
+      droneId,
+      at: now,
+    }, { session, visibility: "admin" }).catch(() => {});
+
+    res.json({ success: true, session: updated });
+  });
+
+  app.post("/api/audio/session/leave", async (req, res) => {
+    const session = requestSession(req);
+    if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+    const droneId = String(req.body?.droneId || "").trim();
+    if (!droneId) return res.status(400).json({ success: false, error: "droneId is required" });
+    const id = `${session.userId}:${droneId}`;
+    const existing = audioBridgeSessions.get(id);
+    if (existing) {
+      audioBridgeSessions.delete(id);
+      broadcast("audio_bridge_session", { action: "leave", session: existing });
+      void deleteCloudDocument("audio_bridge_sessions", id).catch(() => {});
+      void appendCloudDocument("operator_actions", {
+        action: "audio_session_leave",
+        droneId,
+        at: new Date().toISOString(),
+      }, { session, visibility: "admin" }).catch(() => {});
+    }
+    res.json({ success: true });
   });
 
   app.get("/api/audio/output/devices", async (_req, res) => {
@@ -788,6 +1041,7 @@ export async function registerRoutes(
       startedAt: new Date().toISOString(),
     };
     broadcast("audio_live", { ...audioState.live });
+    void syncCloudDocument("audio_state", "live", audioState.live, { session: requestSession(req), visibility: "admin" }).catch(() => {});
     res.json({ success: true, live: audioState.live });
   });
 
@@ -798,6 +1052,7 @@ export async function registerRoutes(
       startedAt: null,
     };
     broadcast("audio_live", { ...audioState.live });
+    void syncCloudDocument("audio_state", "live", audioState.live, { session: null, visibility: "admin" }).catch(() => {});
     res.json({ success: true, live: audioState.live });
   });
 
@@ -820,6 +1075,7 @@ export async function registerRoutes(
     };
 
     broadcast("audio_drone_mic", { ...audioState.droneMic });
+    void syncCloudDocument("audio_state", "drone_mic", audioState.droneMic, { session: requestSession(req), visibility: "admin" }).catch(() => {});
     res.json({ success: true, droneMic: audioState.droneMic });
   });
 
@@ -3611,6 +3867,16 @@ export async function registerRoutes(
         name: name || username || 'Unknown',
         createdAt: Date.now()
       });
+      void appendCloudDocument("operator_actions", {
+        action: "login",
+        userId,
+        username: username || null,
+        role: role || "viewer",
+        at: new Date().toISOString(),
+      }, {
+        session: { userId, role: role || "viewer", name: name || username || "Unknown" },
+        visibility: "admin",
+      }).catch(() => {});
       
       console.log(`User ${name} (${userId}) logged in with role: ${role}`);
       
@@ -3628,8 +3894,20 @@ export async function registerRoutes(
   app.post("/api/auth/logout", async (req, res) => {
     try {
       const sessionToken = req.headers['x-session-token'] as string;
+      const session = validateSession(sessionToken);
       if (sessionToken) {
         activeSessions.delete(sessionToken);
+      }
+      if (session) {
+        void appendCloudDocument("operator_actions", {
+          action: "logout",
+          userId: session.userId,
+          role: session.role || "viewer",
+          at: new Date().toISOString(),
+        }, {
+          session,
+          visibility: "admin",
+        }).catch(() => {});
       }
       res.json({ success: true });
     } catch (error) {
@@ -3651,6 +3929,7 @@ export async function registerRoutes(
     try {
       const validated = insertSettingsSchema.parse(req.body);
       const setting = await storage.upsertSetting(validated);
+      void syncCloudDocument("settings", `${setting.category}:${setting.key}`, setting, { session: requestSession(req) }).catch(() => {});
       res.json(setting);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -3687,6 +3966,7 @@ export async function registerRoutes(
     try {
       const validated = insertMissionSchema.parse(req.body);
       const mission = await storage.createMission(validated);
+      void syncCloudDocument("missions", mission.id, mission, { session: requestSession(req) }).catch(() => {});
       res.json(mission);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -3703,6 +3983,7 @@ export async function registerRoutes(
       if (!mission) {
         return res.status(404).json({ error: "Mission not found" });
       }
+      void syncCloudDocument("missions", mission.id, mission, { session: requestSession(req) }).catch(() => {});
       res.json(mission);
     } catch (error) {
       res.status(500).json({ error: "Failed to update mission" });
@@ -3712,6 +3993,7 @@ export async function registerRoutes(
   app.delete("/api/missions/:id", async (req, res) => {
     try {
       await storage.deleteMission(req.params.id);
+      void deleteCloudDocument("missions", req.params.id).catch(() => {});
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete mission" });
@@ -3732,6 +4014,7 @@ export async function registerRoutes(
     try {
       const validated = insertWaypointSchema.parse(req.body);
       const waypoint = await storage.createWaypoint(validated);
+      void syncCloudDocument("waypoints", waypoint.id, waypoint, { session: requestSession(req) }).catch(() => {});
       res.json(waypoint);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -3748,6 +4031,7 @@ export async function registerRoutes(
       if (!waypoint) {
         return res.status(404).json({ error: "Waypoint not found" });
       }
+      void syncCloudDocument("waypoints", waypoint.id, waypoint, { session: requestSession(req) }).catch(() => {});
       res.json(waypoint);
     } catch (error) {
       res.status(500).json({ error: "Failed to update waypoint" });
@@ -3757,6 +4041,7 @@ export async function registerRoutes(
   app.delete("/api/waypoints/:id", async (req, res) => {
     try {
       await storage.deleteWaypoint(req.params.id);
+      void deleteCloudDocument("waypoints", req.params.id).catch(() => {});
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete waypoint" });
@@ -3769,6 +4054,7 @@ export async function registerRoutes(
       const validated = insertFlightLogSchema.parse(req.body);
       const log = await storage.createFlightLog(validated);
       broadcast("telemetry", log);
+      void appendCloudDocument("flight_logs", log, { session: requestSession(req) }).catch(() => {});
       res.json(log);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -3804,6 +4090,7 @@ export async function registerRoutes(
       const validated = insertMotorTelemetrySchema.parse(req.body);
       const telemetry = await storage.createMotorTelemetry(validated);
       broadcast("motor_telemetry", telemetry);
+      void appendCloudDocument("motor_telemetry", telemetry, { session: requestSession(req) }).catch(() => {});
       res.json(telemetry);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -3830,6 +4117,7 @@ export async function registerRoutes(
       const validated = insertSensorDataSchema.parse(req.body);
       const data = await storage.createSensorData(validated);
       broadcast("sensor_data", data);
+      void appendCloudDocument("sensor_data", data, { session: requestSession(req) }).catch(() => {});
       res.json(data);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -3864,6 +4152,7 @@ export async function registerRoutes(
     try {
       const settings = await storage.updateCameraSettings(req.body);
       broadcast("camera_settings", settings);
+      void syncCloudDocument("camera_settings", "active", settings, { session: requestSession(req) }).catch(() => {});
       res.json(settings);
     } catch (error) {
       res.status(500).json({ error: "Failed to update camera settings" });
@@ -4188,18 +4477,87 @@ export async function registerRoutes(
       if (!fileName || !data) {
         return res.status(400).json({ success: false, error: "Missing fileName or data" });
       }
-
+      const session = requestSession(req);
       const buffer = Buffer.from(data, 'base64');
-      const result = await uploadFileToDrive(
-        buffer,
+      const cloudResult = await ingestMediaToCloudOrBacklog({
         fileName,
-        mimeType || 'application/octet-stream',
-        sessionId,
-        sessionName
-      );
-      res.json(result);
+        mimeType: mimeType || "application/octet-stream",
+        bytes: buffer,
+        sessionId: sessionId || null,
+        session,
+        createAsset: false,
+      });
+
+      if (cloudResult.uploaded) {
+        return res.json({
+          success: true,
+          provider: "firebase-storage",
+          fileId: null,
+          webViewLink: cloudResult.cloudPath,
+          pending: false,
+          storagePath: cloudResult.cloudPath,
+        });
+      }
+
+      // Compatibility fallback: still attempt Google Drive if configured.
+      try {
+        const result = await uploadFileToDrive(
+          buffer,
+          fileName,
+          mimeType || 'application/octet-stream',
+          sessionId,
+          sessionName
+        );
+        return res.json({
+          ...result,
+          provider: "google-drive",
+          pending: false,
+        });
+      } catch {
+        return res.json({
+          success: true,
+          provider: "local-backlog",
+          pending: true,
+          localPath: cloudResult.localFilePath,
+          storagePath: cloudResult.localFilePath,
+          webViewLink: null,
+        });
+      }
     } catch (error: any) {
       res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post("/api/cloud/media/upload", async (req, res) => {
+    try {
+      const { fileName, mimeType, data, droneId, sessionId } = req.body ?? {};
+      if (!fileName || !data) {
+        return res.status(400).json({ success: false, error: "Missing fileName or data" });
+      }
+      const session = requestSession(req);
+      const bytes = Buffer.from(String(data), "base64");
+      const result = await ingestMediaToCloudOrBacklog({
+        fileName: String(fileName),
+        mimeType: String(mimeType || "application/octet-stream"),
+        bytes,
+        droneId: droneId ? String(droneId) : null,
+        sessionId: sessionId ? String(sessionId) : null,
+        session,
+      });
+      res.json({ success: true, ...result });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || String(error) });
+    }
+  });
+
+  app.post("/api/cloud/media/sync-pending", async (req, res) => {
+    try {
+      const session = requestSession(req);
+      const results = await syncPendingMediaBacklog(session);
+      const synced = results.filter((r) => r.synced).length;
+      res.json({ success: true, synced, attempted: results.length, results });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || String(error) });
     }
   });
 
@@ -4305,6 +4663,7 @@ export async function registerRoutes(
       const validated = insertDroneSchema.parse(req.body);
       const drone = await storage.createDrone(validated);
       broadcast("drone_added", drone);
+      void syncCloudDocument("drones", drone.id, drone, { session: requestSession(req) }).catch(() => {});
       res.json(drone);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -4322,6 +4681,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Drone not found" });
       }
       broadcast("drone_updated", drone);
+      void syncCloudDocument("drones", drone.id, drone, { session: requestSession(req) }).catch(() => {});
       res.json(drone);
     } catch (error) {
       res.status(500).json({ error: "Failed to update drone" });
@@ -4342,6 +4702,15 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Drone not found" });
       }
       broadcast("drone_location", { id: drone.id, latitude, longitude, altitude, heading });
+      void syncCloudDocument("drones", drone.id, drone, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("drone_locations", drone.id, {
+        id: drone.id,
+        latitude,
+        longitude,
+        altitude,
+        heading,
+        updatedAt: new Date().toISOString(),
+      }, { session: requestSession(req) }).catch(() => {});
       res.json(drone);
     } catch (error) {
       res.status(500).json({ error: "Failed to update drone location" });
@@ -4352,6 +4721,8 @@ export async function registerRoutes(
     try {
       await storage.deleteDrone(req.params.id);
       broadcast("drone_removed", { id: req.params.id });
+      void deleteCloudDocument("drones", req.params.id).catch(() => {});
+      void deleteCloudDocument("drone_locations", req.params.id).catch(() => {});
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete drone" });
@@ -4397,6 +4768,26 @@ export async function registerRoutes(
       const validated = insertMediaAssetSchema.parse(req.body);
       const asset = await storage.createMediaAsset(validated);
       broadcast("media_captured", asset);
+      if (asset.syncStatus === "pending" && asset.storagePath) {
+        await storage.createBacklogItem({
+          droneId: asset.droneId || null,
+          dataType: "media",
+          data: {
+            mediaAssetId: asset.id,
+            fileName: asset.filename,
+            mimeType: asset.mimeType,
+          },
+          priority: 2,
+          localFilePath: asset.storagePath,
+          fileChecksum: null,
+          syncStatus: "pending",
+          syncAttempts: 0,
+          lastSyncAttempt: null,
+          syncError: asset.syncError || "Cloud unavailable",
+          recordedAt: asset.capturedAt,
+        });
+      }
+      void syncCloudDocument("media_assets", asset.id, asset, { session: requestSession(req) }).catch(() => {});
       res.json(asset);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -4413,6 +4804,7 @@ export async function registerRoutes(
       if (!asset) {
         return res.status(404).json({ error: "Media asset not found" });
       }
+      void syncCloudDocument("media_assets", asset.id, asset, { session: requestSession(req) }).catch(() => {});
       res.json(asset);
     } catch (error) {
       res.status(500).json({ error: "Failed to update media asset" });
@@ -4422,6 +4814,7 @@ export async function registerRoutes(
   app.delete("/api/media/:id", async (req, res) => {
     try {
       await storage.deleteMediaAsset(req.params.id);
+      void deleteCloudDocument("media_assets", req.params.id).catch(() => {});
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete media asset" });
@@ -4443,6 +4836,7 @@ export async function registerRoutes(
     try {
       const validated = insertOfflineBacklogSchema.parse(req.body);
       const item = await storage.createBacklogItem(validated);
+      void syncCloudDocument("offline_backlog", item.id, item, { session: requestSession(req) }).catch(() => {});
       res.json(item);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -4466,14 +4860,18 @@ export async function registerRoutes(
         try {
           if (item.dataType === "telemetry") {
             await storage.createFlightLog(item.data);
+            void appendCloudDocument("flight_logs", item.data, { session: requestSession(req) }).catch(() => {});
           } else if (item.dataType === "sensor") {
             await storage.createSensorData(item.data);
+            void appendCloudDocument("sensor_data", item.data, { session: requestSession(req) }).catch(() => {});
           } else if (item.dataType === "media") {
             await storage.createMediaAsset(item.data);
+            void appendCloudDocument("media_assets", item.data, { session: requestSession(req) }).catch(() => {});
           }
           
           if (item.id) {
             await storage.markBacklogSynced(item.id);
+            void deleteCloudDocument("offline_backlog", item.id).catch(() => {});
           }
           results.push({ id: item.id, status: "synced" });
         } catch (err: any) {
@@ -4491,6 +4889,7 @@ export async function registerRoutes(
   app.patch("/api/backlog/:id/synced", async (req, res) => {
     try {
       await storage.markBacklogSynced(req.params.id);
+      void deleteCloudDocument("offline_backlog", req.params.id).catch(() => {});
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to mark as synced" });
@@ -4500,6 +4899,7 @@ export async function registerRoutes(
   app.delete("/api/backlog/:id", async (req, res) => {
     try {
       await storage.deleteBacklogItem(req.params.id);
+      void deleteCloudDocument("offline_backlog", req.params.id).catch(() => {});
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete backlog item" });
@@ -4584,6 +4984,12 @@ export async function registerRoutes(
         recipientName: recipientName || null
       });
       smartBroadcast("new_message", message);
+      void syncCloudDocument("messages", message.id, message, {
+        session: requestSession(req),
+        visibility: message.recipientId ? "dm" : "shared",
+        recipientId: message.recipientId || null,
+        recipientName: message.recipientName || null,
+      }).catch(() => {});
       res.json(message);
       
       // Sync messages to Google Sheets in background (non-blocking)
@@ -4612,6 +5018,12 @@ export async function registerRoutes(
       }
       // Use smartBroadcast for DM privacy
       smartBroadcast("message_updated", message);
+      void syncCloudDocument("messages", message.id, message, {
+        session: requestSession(req),
+        visibility: message.recipientId ? "dm" : "shared",
+        recipientId: message.recipientId || null,
+        recipientName: message.recipientName || null,
+      }).catch(() => {});
       res.json(message);
       
       // Sync messages to Google Sheets in background (non-blocking)
@@ -4642,6 +5054,7 @@ export async function registerRoutes(
       } else {
         broadcast("message_deleted", { id: req.params.id });
       }
+      void deleteCloudDocument("messages", req.params.id).catch(() => {});
       res.json({ success: true });
       
       // Sync messages to Google Sheets in background (non-blocking)
@@ -4668,6 +5081,93 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to sync messages" });
+    }
+  });
+
+  app.get("/api/cloud/status", (_req, res) => {
+    res.json({
+      enabled: cloudSyncEnabled(),
+      projectId: process.env.FIREBASE_PROJECT_ID || null,
+      databaseUrl: process.env.FIREBASE_DATABASE_URL || null,
+      storageBucket: process.env.FIREBASE_STORAGE_BUCKET || null,
+    });
+  });
+
+  app.get("/api/cloud/awareness", async (req, res) => {
+    try {
+      const session = requestSession(req);
+      if (!session) {
+        return res.status(401).json({ error: "Authentication required" });
+      }
+
+      const [drones, locations, activeSessions, telemetry, sensorData, media, missions, messages] = await Promise.all([
+        getRecentCloudDocs("drones", 200),
+        getRecentCloudDocs("drone_locations", 500),
+        getRecentCloudDocs("flight_sessions", 200),
+        getRecentCloudDocs("flight_logs", 1000),
+        getRecentCloudDocs("sensor_data", 500),
+        getRecentCloudDocs("media_assets", 500),
+        getRecentCloudDocs("missions", 200),
+        getRecentCloudDocs("messages", 400),
+      ]);
+
+      const isAdmin = session.role === "admin";
+      const filteredMessages = messages.filter((m: any) => {
+        const visibility = m?.__meta?.visibility || "shared";
+        if (isAdmin) return true;
+        if (visibility === "shared") return true;
+        if (visibility === "admin") return false;
+        if (visibility === "dm") {
+          return m.senderId === session.userId || m.recipientId === session.userId;
+        }
+        return true;
+      });
+
+      res.json({
+        drones,
+        droneLocations: locations,
+        flightSessions: activeSessions,
+        telemetry,
+        sensorData,
+        mediaAssets: media,
+        missions,
+        messages: filteredMessages,
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch cloud awareness data" });
+    }
+  });
+
+  app.get("/api/cloud/admin-dashboard", async (req, res) => {
+    try {
+      const session = requestSession(req);
+      if (!session || session.role !== "admin") {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+
+      const [operatorActions, messages, flightSessions, flightLogs, drones, diagnostics, mediaAssets, missions] = await Promise.all([
+        getRecentCloudDocs("operator_actions", 1000),
+        getRecentCloudDocs("messages", 1000),
+        getRecentCloudDocs("flight_sessions", 500),
+        getRecentCloudDocs("flight_logs", 2000),
+        getRecentCloudDocs("drones", 500),
+        getRecentCloudDocs("motor_telemetry", 1000),
+        getRecentCloudDocs("media_assets", 1000),
+        getRecentCloudDocs("missions", 500),
+      ]);
+
+      res.json({
+        operatorActions,
+        messages,
+        flightSessions,
+        flightLogs,
+        drones,
+        diagnostics,
+        mediaAssets,
+        missions,
+      });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch admin cloud dashboard data" });
     }
   });
 
@@ -4784,6 +5284,7 @@ export async function registerRoutes(
       });
 
       broadcast("telemetry_recorded", flightLog);
+      void appendCloudDocument("flight_logs", flightLog, { session: requestSession(req) }).catch(() => {});
       res.json({ success: true, flightLog });
     } catch (error) {
       res.status(500).json({ error: "Failed to record telemetry" });
@@ -4815,6 +5316,7 @@ export async function registerRoutes(
       });
 
       broadcast("flight_session_started", session);
+      void syncCloudDocument("flight_sessions", session.id, session, { session: requestSession(req) }).catch(() => {});
       console.log(`[FLIGHT] Session ${session.id} started for drone ${droneId}`);
       res.json({ success: true, session });
     } catch (error) {
@@ -4855,6 +5357,7 @@ export async function registerRoutes(
       }
 
       broadcast("flight_session_ended", session);
+      void syncCloudDocument("flight_sessions", session.id, session, { session: requestSession(req) }).catch(() => {});
       console.log(`[FLIGHT] Session ${session.id} ended`);
       res.json({ success: true, session });
     } catch (error) {
@@ -4902,6 +5405,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Session not found" });
       }
       broadcast("flight_session_updated", session);
+      void syncCloudDocument("flight_sessions", session.id, session, { session: requestSession(req) }).catch(() => {});
       res.json(session);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -4923,6 +5427,7 @@ export async function registerRoutes(
   app.delete("/api/flight-sessions/:id", async (req, res) => {
     try {
       await storage.deleteFlightSession(req.params.id);
+      void deleteCloudDocument("flight_sessions", req.params.id).catch(() => {});
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete session" });

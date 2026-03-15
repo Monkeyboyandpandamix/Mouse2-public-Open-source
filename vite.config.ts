@@ -59,7 +59,7 @@ export default defineConfig({
         assetFileNames: "assets/[name]-[hash][extname]",
       },
     },
-    chunkSizeWarningLimit: 600,
+    chunkSizeWarningLimit: 2000,
   },
   server: {
     host: "0.0.0.0",

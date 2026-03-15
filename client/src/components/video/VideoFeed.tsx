@@ -1012,6 +1012,8 @@ export function VideoFeed() {
         // Save to database first
         let driveFileId: string | undefined;
         let driveLink: string | undefined;
+        let storagePath: string | undefined;
+        let pendingSync = false;
         
         try {
           // Upload to Google Drive
@@ -1029,9 +1031,12 @@ export function VideoFeed() {
             const driveResult = await driveResponse.json();
             driveFileId = driveResult.fileId;
             driveLink = driveResult.webViewLink;
+            storagePath = driveResult.storagePath || driveResult.localPath || driveResult.webViewLink;
+            pendingSync = Boolean(driveResult.pending);
           }
         } catch {
           // Drive upload failed, continue with database save
+          pendingSync = true;
         }
         
         // Save metadata to database
@@ -1044,6 +1049,7 @@ export function VideoFeed() {
               filename,
               mimeType: 'image/png',
               fileSize: Math.ceil(base64Data.length * 0.75),
+              storagePath: storagePath || null,
               driveFileId,
               driveLink,
               latitude: currentTelemetry.latitude || null,
@@ -1052,7 +1058,8 @@ export function VideoFeed() {
               heading: currentTelemetry.heading || null,
               cameraMode: activeCam,
               zoomLevel: zoom[0],
-              syncStatus: driveFileId ? 'synced' : 'pending',
+              syncStatus: pendingSync ? 'pending' : (storagePath || driveFileId ? 'synced' : 'pending'),
+              syncError: pendingSync ? 'Cloud unavailable, queued for retry' : null,
               capturedAt: new Date().toISOString(),
             })
           });
@@ -1122,6 +1129,8 @@ export function VideoFeed() {
                 const base64Data = (reader.result as string).split(',')[1];
                 let driveFileId: string | undefined;
                 let driveLink: string | undefined;
+                let storagePath: string | undefined;
+                let pendingSync = false;
                 
                 try {
                   const response = await fetch('/api/drive/upload', {
@@ -1138,9 +1147,12 @@ export function VideoFeed() {
                     const result = await response.json();
                     driveFileId = result.fileId;
                     driveLink = result.webViewLink;
+                    storagePath = result.storagePath || result.localPath || result.webViewLink;
+                    pendingSync = Boolean(result.pending);
                   }
                 } catch {
                   // Drive upload failed, continue with database save
+                  pendingSync = true;
                 }
                 
                 // Save metadata to database
@@ -1154,6 +1166,7 @@ export function VideoFeed() {
                       mimeType: 'video/webm',
                       fileSize: blob.size,
                       duration,
+                      storagePath: storagePath || null,
                       driveFileId,
                       driveLink,
                       latitude: currentTelemetry.latitude || null,
@@ -1162,7 +1175,8 @@ export function VideoFeed() {
                       heading: currentTelemetry.heading || null,
                       cameraMode: activeCam,
                       zoomLevel: zoom[0],
-                      syncStatus: driveFileId ? 'synced' : 'pending',
+                      syncStatus: pendingSync ? 'pending' : (storagePath || driveFileId ? 'synced' : 'pending'),
+                      syncError: pendingSync ? 'Cloud unavailable, queued for retry' : null,
                       capturedAt: new Date().toISOString(),
                     })
                   });

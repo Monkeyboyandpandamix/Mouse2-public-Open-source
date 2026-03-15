@@ -100,6 +100,17 @@ export function SpeakerPanel() {
     return response.json();
   };
 
+  const getSelectedDroneId = (): string | null => {
+    try {
+      const raw = localStorage.getItem("mouse_selected_drone");
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return typeof parsed?.id === "string" ? parsed.id : null;
+    } catch {
+      return null;
+    }
+  };
+
   const loadAudioStatus = async () => {
     const status = await apiJson("/api/audio/status") as AudioStatusResponse;
     applyAudioState(status.state);
@@ -374,6 +385,14 @@ export function SpeakerPanel() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source: "operator-mic", deviceType: audioDevice }),
       });
+      const selectedDroneId = getSelectedDroneId();
+      if (selectedDroneId) {
+        await apiJson("/api/audio/session/join", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ droneId: selectedDroneId, mode: "talk" }),
+        }).catch(() => {});
+      }
       if (result?.live?.active === true) {
         setIsRecording(true);
       } else {
@@ -395,6 +414,14 @@ export function SpeakerPanel() {
       micStreamRef.current = null;
     }
     await apiJson("/api/audio/live/stop", { method: "POST" }).catch(() => {});
+    const selectedDroneId = getSelectedDroneId();
+    if (selectedDroneId) {
+      await apiJson("/api/audio/session/leave", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ droneId: selectedDroneId }),
+      }).catch(() => {});
+    }
     setIsRecording(false);
     toast.info("Live broadcast stopped");
     loadAudioStatus().catch(() => {});
@@ -457,6 +484,22 @@ export function SpeakerPanel() {
           volume: droneMicVolume[0],
         }),
       });
+      const selectedDroneId = getSelectedDroneId();
+      if (selectedDroneId) {
+        if (nextListeningState) {
+          await apiJson("/api/audio/session/join", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ droneId: selectedDroneId, mode: "listen" }),
+          }).catch(() => {});
+        } else {
+          await apiJson("/api/audio/session/leave", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ droneId: selectedDroneId }),
+          }).catch(() => {});
+        }
+      }
       setIsListeningFromDrone(nextListeningState);
     } catch (error: any) {
       toast.error(error.message || "Failed to change drone listen state");
