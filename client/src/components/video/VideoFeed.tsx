@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import * as tf from "@tensorflow/tfjs";
 import * as cocoSsd from "@tensorflow-models/coco-ssd";
+import { ARHudOverlay } from "./ARHudOverlay";
 import aerialImg from "@assets/generated_images/aerial_drone_view_of_a_suburban_street_with_overlaid_bounding_boxes.png";
 import fpvImg from "@assets/generated_images/fpv_drone_view_forward_facing_with_horizon.png";
 
@@ -123,6 +124,10 @@ export function VideoFeed() {
   const [gimbalPitch, setGimbalPitch] = useState(-45);
   const [gimbalYaw, setGimbalYaw] = useState(0);
   const [gimbalAutoFollow, setGimbalAutoFollow] = useState(false);
+  const [arHudEnabled, setArHudEnabled] = useState(() => {
+    const saved = localStorage.getItem('mouse_ar_hud_enabled');
+    return saved === 'true';
+  });
   const gimbalIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   
   // Draggable position state - bottom-left corner by default
@@ -1592,6 +1597,18 @@ export function VideoFeed() {
           >
             <Flame className="h-3 w-3" />
           </button>
+          <button
+            onClick={() => {
+              const next = !arHudEnabled;
+              setArHudEnabled(next);
+              localStorage.setItem('mouse_ar_hud_enabled', String(next));
+            }}
+            className={cn("p-1 hover:text-white text-muted-foreground text-[10px] font-mono uppercase border rounded px-1.5", arHudEnabled ? "text-emerald-400 border-emerald-400/50" : "border-white/20")}
+            title={arHudEnabled ? "Disable AR HUD" : "Enable AR HUD Overlay"}
+            data-testid="button-ar-hud"
+          >
+            AR
+          </button>
           <Dialog open={showConfigDialog} onOpenChange={setShowConfigDialog}>
             <DialogTrigger asChild>
               <button 
@@ -1840,8 +1857,8 @@ export function VideoFeed() {
           )}
         </div>
          
-        {/* HUD Overlay */}
-        <div className="absolute inset-0 pointer-events-none p-4 opacity-70">
+        {/* HUD Overlay (hidden when AR HUD is active) */}
+        <div className={cn("absolute inset-0 pointer-events-none p-4 opacity-70", arHudEnabled && "hidden")}>
           <div className="w-full h-full border border-white/20 relative">
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 border-2 border-primary rounded-full flex items-center justify-center">
               <div className="w-1 h-1 bg-primary rounded-full" />
@@ -1884,6 +1901,16 @@ export function VideoFeed() {
             )}
           </div>
         </div>
+
+        {/* AR HUD Overlay */}
+        <ARHudOverlay
+          visible={arHudEnabled}
+          gimbalPitch={gimbalPitch}
+          gimbalYaw={gimbalYaw}
+          detectedObjectCount={detectedObjects.length}
+          isRecording={isRecording}
+          cameraMode={activeCam}
+        />
 
         {/* Gimbal D-Pad Controls - Left Side */}
         <div className={cn(

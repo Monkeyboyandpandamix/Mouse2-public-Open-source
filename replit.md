@@ -164,6 +164,16 @@ The application can be run as a native desktop app using Electron:
 - VideoFeed.tsx supports gimbal, thermal, FPV, webcam (getUserMedia), and RTSP stream modes
 - Object detection uses TensorFlow.js COCO-SSD (lite_mobilenet_v2) with all 80 COCO classes mapped, aerial perspective confidence boosting, and fallback motion/edge detection
 - COCO_TO_TYPE and AERIAL_CONFIDENCE_BOOST are module-level constants (not inside component) to prevent React re-render loops
+- **AR HUD Overlay** (`ARHudOverlay.tsx`): Toggle via "AR" button in camera header. Shows fighter-jet style heads-up display over the camera feed with:
+  - Artificial horizon with pitch ladder and roll indicator (SVG-based, rotates with attitude)
+  - Compass heading tape at top with cardinal/intercardinal labels
+  - Speed tape (left) and altitude tape (right) with scrolling tick marks and current value boxes
+  - Vertical speed indicator with directional arrows
+  - Flight mode, GPS status (3D/2D/NO + satellite count), battery percent + voltage
+  - Lat/long coordinates, distance from home, gimbal pitch/yaw, camera mode
+  - Detected object count, recording indicator
+  - All elements use green HUD color (#00ff88) with glow filter; state persists in localStorage
+  - Listens to `telemetry-update` and `flight-command` window events for real-time data
 - Gimbal D-pad controls: Up/Down (pitch ±10°), Left/Right (yaw ±15°), Center (-45° pitch), Auto-Follow toggle
 - Gimbal auto-follow: When enabled + object locked, gimbal automatically tracks target and dispatches tracking-update events for AutoStabilizationController
 - Server endpoint: POST `/api/mavlink/command` with `command: "gimbal_control"` for hardware gimbal control via MAVLink
