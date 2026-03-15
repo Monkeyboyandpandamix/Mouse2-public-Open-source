@@ -93,9 +93,22 @@ const allPermissions: Permission[] = [
 
 const defaultRolePermissions: RolePermissions = {
   admin: allPermissions.map(p => p.id),
-  operator: ["arm_disarm", "flight_control", "mission_planning", "camera_control", "view_telemetry", "view_map", "view_camera", "automation_scripts", "object_tracking", "broadcast_audio", "manage_geofences", "access_flight_recorder"],
+  operator: [
+    "arm_disarm", "flight_control", "mission_planning", "camera_control",
+    "view_telemetry", "view_map", "view_camera", "automation_scripts",
+    "object_tracking", "broadcast_audio", "manage_geofences", "access_flight_recorder",
+    "system_settings", "run_terminal", "configure_gui_advanced"
+  ],
   viewer: ["view_telemetry", "view_map", "view_camera"]
 };
+
+function mergeRolePermissions(saved: RolePermissions): RolePermissions {
+  const merged: RolePermissions = { ...saved };
+  for (const role of Object.keys(defaultRolePermissions)) {
+    merged[role] = Array.from(new Set([...(saved[role] || []), ...defaultRolePermissions[role]]));
+  }
+  return merged;
+}
 
 const defaultUsers: User[] = [
   {
@@ -138,7 +151,15 @@ export function UserAccessPanel() {
   
   const [rolePermissions, setRolePermissions] = useState<RolePermissions>(() => {
     const saved = localStorage.getItem('mouse_gcs_role_permissions');
-    return saved ? JSON.parse(saved) : defaultRolePermissions;
+    if (!saved) return defaultRolePermissions;
+    try {
+      const parsed = JSON.parse(saved);
+      const merged = mergeRolePermissions(parsed);
+      localStorage.setItem('mouse_gcs_role_permissions', JSON.stringify(merged));
+      return merged;
+    } catch {
+      return defaultRolePermissions;
+    }
   });
 
   const [session, setSession] = useState<CurrentSession>(() => {

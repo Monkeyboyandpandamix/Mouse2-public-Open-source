@@ -178,5 +178,20 @@
       "terrainFollow": false
     },
     "address": null
+  },
+  {
+    "id": "1773556829529-9ndonvx1q",
+    "missionId": "1773541817054-et608dzti",
+    "order": 10,
+    "latitude": 36.08165593345262,
+    "longitude": -79.48986053466798,
+    "altitude": 50,
+    "speed": 5,
+    "action": "flythrough",
+    "actionParams": {
+      "altitudeFrame": "relative",
+      "terrainFollow": false
+    },
+    "address": null
   }
 ]

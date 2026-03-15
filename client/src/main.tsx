@@ -71,8 +71,49 @@ window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
   });
 };
 
+function ensureWebSessionBootstrap() {
+  const existingSession = localStorage.getItem("mouse_gcs_session");
+  if (existingSession) return;
+
+  const bootstrapSession = {
+    user: {
+      id: "operator1",
+      username: "operator1",
+      fullName: "Operator 1",
+      role: "operator",
+      enabled: true,
+    },
+    isLoggedIn: true,
+  };
+
+  localStorage.setItem("mouse_gcs_session", JSON.stringify(bootstrapSession));
+  window.dispatchEvent(new CustomEvent("session-change", { detail: bootstrapSession }));
+  window.dispatchEvent(new CustomEvent("session-updated", { detail: bootstrapSession }));
+
+  // Best-effort server session token for protected endpoints.
+  void originalFetch("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      userId: bootstrapSession.user.id,
+      username: bootstrapSession.user.username,
+      role: bootstrapSession.user.role,
+      name: bootstrapSession.user.fullName,
+    }),
+  })
+    .then(async (res) => {
+      if (!res.ok) return;
+      const data = await res.json().catch(() => null);
+      if (data?.sessionToken) {
+        localStorage.setItem("mouse_gcs_session_token", data.sessionToken);
+      }
+    })
+    .catch(() => {});
+}
+
 // Initialize Firebase early so real-time sync features can attach listeners when enabled.
 getFirebaseApp();
 void getFirebaseAnalyticsSafe();
+ensureWebSessionBootstrap();
 
 createRoot(document.getElementById("root")!).render(<App />);
