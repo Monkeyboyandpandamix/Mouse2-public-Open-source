@@ -1868,17 +1868,64 @@ export function VideoFeed() {
             <div className="absolute top-1/2 left-4 w-12 h-px bg-white/50" />
             <div className="absolute top-1/2 right-4 w-12 h-px bg-white/50" />
              
-            {/* Object Detection Box - only show in demo mode */}
+            {/* Object Detection Boxes - demo mode (clickable for target locking) */}
             {activeCam !== 'fpv' && activeCam !== 'webcam' && activeCam !== 'stream' && !thermalMode && !showPlaceholder && (
-              <div className="absolute top-1/3 left-1/4 w-24 h-24 border-2 border-amber-500 rounded-sm">
-                <div className="absolute -top-4 left-0 bg-amber-500 text-black text-[10px] px-1 font-bold">DEMO OBJ</div>
-              </div>
+              <>
+                <div 
+                  className={cn("absolute top-[28%] left-[22%] w-24 h-24 border-2 rounded-sm cursor-pointer pointer-events-auto transition-all", lockedObjectIdRef.current === 'demo-vehicle' ? "border-4 border-red-500 animate-pulse" : "border-amber-500")}
+                  onClick={() => lockOnObject('demo-vehicle')}
+                  title={lockedObjectIdRef.current === 'demo-vehicle' ? "Click to unlock" : "Click to lock onto this object"}
+                  data-testid="object-bbox-demo-vehicle"
+                >
+                  <div className={cn("absolute -top-4 left-0 text-black text-[10px] px-1 font-bold flex items-center gap-1", lockedObjectIdRef.current === 'demo-vehicle' ? "bg-red-500" : "bg-amber-500")}>
+                    {lockedObjectIdRef.current === 'demo-vehicle' && <Crosshair className="h-2 w-2" />}
+                    VEHICLE 87%
+                  </div>
+                  {lockedObjectIdRef.current === 'demo-vehicle' && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="w-3 h-3 border-2 border-red-500 rounded-full animate-ping" />
+                      <Crosshair className="absolute h-4 w-4 text-red-500" />
+                    </div>
+                  )}
+                </div>
+                <div 
+                  className={cn("absolute top-[45%] right-[30%] w-14 h-20 border-2 rounded-sm cursor-pointer pointer-events-auto transition-all", lockedObjectIdRef.current === 'demo-person' ? "border-4 border-red-500 animate-pulse" : "border-emerald-500")}
+                  onClick={() => lockOnObject('demo-person')}
+                  title={lockedObjectIdRef.current === 'demo-person' ? "Click to unlock" : "Click to lock onto this object"}
+                  data-testid="object-bbox-demo-person"
+                >
+                  <div className={cn("absolute -top-4 left-0 text-black text-[10px] px-1 font-bold flex items-center gap-1", lockedObjectIdRef.current === 'demo-person' ? "bg-red-500" : "bg-emerald-500")}>
+                    {lockedObjectIdRef.current === 'demo-person' && <Crosshair className="h-2 w-2" />}
+                    PERSON 92%
+                  </div>
+                  {lockedObjectIdRef.current === 'demo-person' && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <div className="w-3 h-3 border-2 border-red-500 rounded-full animate-ping" />
+                      <Crosshair className="absolute h-4 w-4 text-red-500" />
+                    </div>
+                  )}
+                </div>
+              </>
             )}
              
             {/* Thermal Heat Signature */}
             {thermalMode && (
-              <div className="absolute top-1/4 right-1/4 w-16 h-20 border-2 border-amber-500 rounded-sm animate-pulse">
-                <div className="absolute -top-4 left-0 bg-amber-500 text-black text-[10px] px-1 font-bold">HEAT: 36.5°C</div>
+              <div 
+                className={cn("absolute top-1/4 right-1/4 w-16 h-20 border-2 rounded-sm cursor-pointer pointer-events-auto transition-all", lockedObjectIdRef.current === 'demo-thermal' ? "border-4 border-red-500 animate-pulse" : "border-amber-500 animate-pulse")}
+                onClick={() => lockOnObject('demo-thermal')}
+                title={lockedObjectIdRef.current === 'demo-thermal' ? "Click to unlock" : "Click to lock onto this object"}
+                data-testid="object-bbox-demo-thermal"
+              >
+                <div className={cn("absolute -top-4 left-0 text-black text-[10px] px-1 font-bold flex items-center gap-1", lockedObjectIdRef.current === 'demo-thermal' ? "bg-red-500" : "bg-amber-500")}>
+                  {lockedObjectIdRef.current === 'demo-thermal' && <Crosshair className="h-2 w-2" />}
+                  HEAT: 36.5°C
+                </div>
+                {lockedObjectIdRef.current === 'demo-thermal' && (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="w-3 h-3 border-2 border-red-500 rounded-full animate-ping" />
+                    <Crosshair className="absolute h-4 w-4 text-red-500" />
+                  </div>
+                )}
               </div>
             )}
             
