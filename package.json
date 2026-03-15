@@ -13,8 +13,9 @@
     "start:pi": "bash ./start-pi-onboard.sh",
     "start:windows": "start-windows.bat",
     "check": "tsc",
-    "deploy:web": "npm run build && npx firebase-tools deploy --only apphosting",
-    "deploy:apphosting": "npm run build && npx firebase-tools deploy --only apphosting"
+    "deploy:web": "npm run build && npx firebase-tools deploy --only apphosting:web-mouse",
+    "deploy:apphosting": "npm run build && npx firebase-tools deploy --only apphosting:web-mouse",
+    "deploy:apphosting:custom": "npm run build && npx firebase-tools deploy --only apphosting:$FIREBASE_APPHOSTING_BACKEND"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

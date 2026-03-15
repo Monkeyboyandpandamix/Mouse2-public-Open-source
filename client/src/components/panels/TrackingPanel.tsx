@@ -95,6 +95,7 @@ export function TrackingPanel() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const detectionIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const objectIdCounterRef = useRef(0);
+  const webcamStreamRef = useRef<MediaStream | null>(null);
   
   // Multi-object tracking state
   const trackedObjectsRef = useRef<Map<string, TrackedObject>>(new Map());
@@ -110,10 +111,15 @@ export function TrackingPanel() {
   });
   const [manualPlateText, setManualPlateText] = useState("");
   const lastPlateScanAtRef = useRef(0);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
     localStorage.setItem("mouse_plate_records", JSON.stringify(plateRecords.slice(0, 200)));
   }, [plateRecords]);
+
+  useEffect(() => {
+    webcamStreamRef.current = webcamStream;
+  }, [webcamStream]);
   
   // Load TensorFlow.js and COCO-SSD model
   const loadModel = useCallback(async () => {
@@ -424,12 +430,19 @@ export function TrackingPanel() {
   };
 
   const stopWebcam = () => {
+    setIsDetecting(false);
     if (webcamStream) {
       webcamStream.getTracks().forEach(track => track.stop());
       setWebcamStream(null);
     }
+    if (videoRef.current) {
+      videoRef.current.onloadedmetadata = null;
+      videoRef.current.onresize = null;
+      videoRef.current.srcObject = null;
+    }
     if (detectionIntervalRef.current) {
       clearInterval(detectionIntervalRef.current);
+      detectionIntervalRef.current = null;
     }
     setDetectedObjects([]);
     trackedObjectsRef.current.clear();
@@ -541,6 +554,7 @@ export function TrackingPanel() {
       trackedObjectsRef.current
     );
     
+    if (!mountedRef.current) return;
     setDetectedObjects(trackedResults);
   }, [isDetecting, assignDetectionsToTracks, runMotionDetection]);
 
@@ -603,7 +617,21 @@ export function TrackingPanel() {
 
   // Cleanup on unmount
   useEffect(() => {
-    return () => stopWebcam();
+    return () => {
+      mountedRef.current = false;
+      if (detectionIntervalRef.current) {
+        clearInterval(detectionIntervalRef.current);
+        detectionIntervalRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.onloadedmetadata = null;
+        videoRef.current.onresize = null;
+        videoRef.current.srcObject = null;
+      }
+      if (webcamStreamRef.current) {
+        webcamStreamRef.current.getTracks().forEach((track) => track.stop());
+      }
+    };
   }, []);
 
   const filteredObjects = detectedObjects

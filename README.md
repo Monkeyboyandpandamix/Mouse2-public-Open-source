@@ -1350,7 +1350,17 @@ Equivalent command:
 npm run deploy:web
 ```
 
-Both commands build first and then deploy App Hosting using the current Firebase project configuration.
+Both commands build first and deploy backend `web-mouse` using:
+
+```bash
+npx firebase-tools deploy --only apphosting:web-mouse
+```
+
+If your backend ID is different:
+
+```bash
+FIREBASE_APPHOSTING_BACKEND=<your-backend-id> npm run deploy:apphosting:custom
+```
 
 ---
 
