@@ -51,6 +51,11 @@ export function cloudSyncEnabled(): boolean {
   return Boolean(getFirebaseAdminDb());
 }
 
+/** Logs cloud sync errors instead of swallowing them. Use in .catch(logCloudErr). */
+export function logCloudErr(err: unknown): void {
+  console.error("[cloud sync]", err);
+}
+
 export async function syncCloudDocument(
   collection: string,
   docId: string,

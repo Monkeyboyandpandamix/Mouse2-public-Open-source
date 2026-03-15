@@ -6,13 +6,13 @@
     "role": "admin",
     "enabled": true,
     "createdAt": "2026-03-15T14:03:42.351Z",
-    "lastLogin": "2026-03-15T19:46:48.134Z",
+    "lastLogin": "2026-03-15T20:50:00.578Z",
     "passwordHash": "4ec23fb7edd12154df8734621a353ec38896ef2f4be177c1c6ae3da6f411a88bdecd3f72caa18ea8cfdc25f06804322ff4a335fdee68f1e58bf0eab2954ebde5",
     "passwordSalt": "74960e923374babf389ee3165bf83f99"
   },
   {
     "id": "2",
-    "username": "operator1",
+    "username": "operator",
     "fullName": "Flight Operator",
     "role": "operator",
     "enabled": true,
@@ -23,7 +23,7 @@
   },
   {
     "id": "3",
-    "username": "viewer1",
+    "username": "viewer",
     "fullName": "Mission Observer",
     "role": "viewer",
     "enabled": true,

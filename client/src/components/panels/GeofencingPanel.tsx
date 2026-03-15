@@ -359,6 +359,13 @@ export function GeofencingPanel() {
   const previewRadius = parseFloat(newZone.radius) || 500;
 
   const uploadFenceToFc = async () => {
+    const enabledZones = zones.filter((z) => z.enabled !== false);
+    if (enabledZones.length > 1) {
+      toast.warning(
+        "FC supports a single polygon fence. Only the first enabled zone will be uploaded; others are for planning reference.",
+        { duration: 5000 }
+      );
+    }
     setFcSyncBusy(true);
     try {
       const res = await fetch("/api/mavlink/fence/upload", {
@@ -618,6 +625,9 @@ export function GeofencingPanel() {
       {/* Right - Controls */}
       <div className="w-96 border-l border-border bg-card/50 flex flex-col overflow-hidden">
         <div className="p-4 border-b border-border shrink-0">
+          <div className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 mb-3 text-xs text-amber-700 dark:text-amber-300">
+            <strong>Two sources:</strong> Zones are stored locally; FC has its own fence. Use &quot;Download FC Fence&quot; to sync from FC, or &quot;Upload to FC&quot; to apply your zones.
+          </div>
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-bold flex items-center gap-2">

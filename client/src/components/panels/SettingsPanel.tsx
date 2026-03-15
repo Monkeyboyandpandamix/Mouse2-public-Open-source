@@ -732,7 +732,7 @@ function FullDebugManager() {
   }, []);
 
   useEffect(() => {
-    void fetchEvents().catch(() => {});
+    void fetchEvents().catch((err) => console.warn("[SettingsPanel] fetchEvents failed:", err));
   }, [sourceFilter]);
 
   useEffect(() => {

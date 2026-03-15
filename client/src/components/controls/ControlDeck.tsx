@@ -55,6 +55,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
   const lastPositionRef = useRef<{lat: number, lng: number} | null>(null);
   const gamepadArmLatchRef = useRef(false);
   const gamepadBusyRef = useRef(false);
+  const lastManualControlErrorRef = useRef(0);
 
   // Get current drone ID from localStorage
   const getCurrentDroneId = () => {
@@ -91,6 +92,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
       }
     } catch (error) {
       console.error("Failed to start flight session:", error);
+      toast.error("Failed to start flight recording");
     }
   };
 
@@ -121,6 +123,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
       }
     } catch (error) {
       console.error("Failed to end flight session:", error);
+      toast.error("Failed to save flight recording");
     }
   };
 
@@ -159,6 +162,16 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
     const a = Math.sin(dp/2) * Math.sin(dp/2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl/2) * Math.sin(dl/2);
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
   };
+
+  // Warn on page close when flight session is active
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [activeSessionId]);
 
   // Check for active session on mount
   useEffect(() => {
@@ -254,7 +267,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
         }
       }
       if (!connectionString) return;
-      void fetch("/api/mavlink/manual-control", {
+      fetch("/api/mavlink/manual-control", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -266,6 +279,11 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
           buttons: 0,
           durationMs: 200,
         }),
+      }).catch(() => {
+        const now = Date.now();
+        if (now - lastManualControlErrorRef.current < 10000) return;
+        lastManualControlErrorRef.current = now;
+        toast.error("Manual control connection failed");
       });
     }, 140);
     return () => window.clearInterval(timer);
@@ -318,6 +336,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
   }, []);
 
   const executeWidgetCommand = (widget: CustomWidget) => {
+    if (widget.type === "display") return;
     if (widget.command) {
       void dispatchCommand("terminal", { command: widget.command })
         .then(() => {
@@ -331,6 +350,8 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
 
   // Filter widgets for current page
   const pageWidgets = customWidgets.filter(w => w.targetPage === activeTab);
+  const displayWidgets = pageWidgets.filter(w => w.type === "display");
+  const actionWidgets = pageWidgets.filter(w => w.type !== "display");
 
   const handleReturnToBase = async () => {
     if (!canFlightControl) {
@@ -594,7 +615,17 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
         <div className="flex flex-col gap-1 sm:gap-2 min-w-0 shrink-0">
           <span className="text-[8px] sm:text-[10px] font-mono text-muted-foreground uppercase tracking-widest">Custom</span>
           <div className="flex gap-2 h-full">
-            {pageWidgets.map(widget => (
+            {displayWidgets.map(widget => (
+              <div
+                key={widget.id}
+                className="h-full flex flex-col gap-1 px-3 py-2 rounded-md border-2 border-muted bg-muted/30 min-w-[80px] justify-center"
+                data-testid={`widget-display-${widget.id}`}
+              >
+                <span className="text-[10px] font-mono truncate max-w-[60px] text-muted-foreground">{widget.name}</span>
+                <span className="text-xs font-semibold truncate">{widget.displayValue ?? "—"}</span>
+              </div>
+            ))}
+            {actionWidgets.map(widget => (
               <Button
                 key={widget.id}
                 variant="outline"

@@ -112,7 +112,7 @@ export function useDeviceContext(): DeviceContextState & {
           setPeripherals(DEFAULT_GROUND_PERIPHERALS);
         }
       })
-      .catch(() => {})
+      .catch((err) => console.warn("[useDeviceContext] runtime-config fetch failed:", err))
       .finally(() => {
         setRuntimeConfigLoaded(true);
       });

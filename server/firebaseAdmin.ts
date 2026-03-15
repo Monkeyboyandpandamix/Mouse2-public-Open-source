@@ -120,6 +120,6 @@ export function getFirebaseAdminStorage() {
 
 export async function resetFirebaseAdminApp() {
   const apps = [...admin.apps].filter((a): a is admin.app.App => Boolean(a));
-  await Promise.all(apps.map((a) => a.delete().catch(() => {})));
+  await Promise.all(apps.map((a) => a.delete().catch((err) => console.warn("[firebase-admin] app delete failed:", err))));
   warnedMissingConfig = false;
 }

@@ -121,23 +121,11 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           setMessages(data);
         }
       })
-      .catch(() => {}); // Fail silently, use localStorage
+      .catch((err) => console.warn("[TopBar] messages fetch failed:", err));
   }, [session.user?.id]);
 
   // Load users and groups for @ mention autocomplete
   useEffect(() => {
-    const loadGroupsFromStorage = (): UserGroup[] => {
-      const savedGroups = localStorage.getItem('mouse_gcs_groups');
-      if (savedGroups) {
-        try {
-          return JSON.parse(savedGroups);
-        } catch (e) {
-          console.error('Failed to parse groups:', e);
-        }
-      }
-      return [];
-    };
-    
     const loadData = async () => {
       try {
         const usersRes = await fetch('/api/admin/users');
@@ -170,8 +158,18 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
       } catch {
         setChatUsers([]);
       }
-      const storageGroups = loadGroupsFromStorage();
-      setUserGroups(storageGroups);
+
+      try {
+        const groupsRes = await fetch('/api/groups');
+        const groupsPayload = await groupsRes.json().catch(() => ({}));
+        if (groupsRes.ok && Array.isArray(groupsPayload?.groups)) {
+          setUserGroups(groupsPayload.groups as UserGroup[]);
+        } else {
+          setUserGroups([]);
+        }
+      } catch {
+        setUserGroups([]);
+      }
     };
     
     const onStorage = () => {
@@ -554,6 +552,7 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     localStorage.removeItem('mouse_gcs_session');
     localStorage.removeItem('mouse_gcs_session_token');
     localStorage.removeItem('mouse_selected_drone');
+    localStorage.removeItem('mouse_gcs_messages');
     setSession({ user: null, isLoggedIn: false });
     setSelectedDrone(null);
     window.dispatchEvent(new CustomEvent('session-change', { detail: { user: null, isLoggedIn: false } }));

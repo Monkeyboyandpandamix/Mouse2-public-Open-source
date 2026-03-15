@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { spawn } from "child_process";
 import { existsSync, mkdirSync } from "fs";
 import { randomBytes } from "crypto";
-import { readFile, writeFile, readdir, chmod } from "fs/promises";
+import { readFile, writeFile, appendFile, mkdir, readdir, chmod } from "fs/promises";
 import path from "path";
 import os from "os";
 import net from "net";
@@ -27,8 +27,42 @@ import { normalizeClientRequestId, OfflineSyncIdempotencyStore } from "./offline
 // On Raspberry Pi, venv may not have the hardware libraries but system Python does
 const PYTHON_EXEC = process.env.PYTHON_PATH ?? "/usr/bin/python3";
 
+/** Strict allowlists for shell-interpolated params to prevent command injection */
+const SAFE_PORT_DEVICE = /^[a-zA-Z0-9/_.\-]+$/;
+const SAFE_AT_CMD = /^[A-Za-z0-9&=\?*\#\-]+$/;
+const SAFE_HOST = /^[a-zA-Z0-9.\-]+$/;
+const SAFE_MOUNT = /^[a-zA-Z0-9_\-]+$/;
+const SAFE_USER = /^[a-zA-Z0-9_\-]+$/;
+const SAFE_CREDENTIAL = /^[a-zA-Z0-9_\-.\~]+$/;
+const SAFE_CONN = /^[a-zA-Z0-9/_.\-:]+$/;
+
+function validateShellArg(value: string, pattern: RegExp, name: string, maxLen = 256): string {
+  const v = String(value ?? "").trim();
+  if (v.length > maxLen) throw new Error(`Invalid ${name}: too long`);
+  if (!pattern.test(v)) throw new Error(`Invalid ${name}: disallowed characters`);
+  return v;
+}
+
 // Get absolute path to scripts directory (works regardless of cwd)
 const SCRIPTS_DIR = path.resolve(process.cwd(), "scripts");
+
+/** Strict allowlist for values substituted into shell commands. Rejects shell metacharacters. */
+function allowlistShellArg(value: string, kind: "port" | "cmd" | "host" | "mount" | "user" | "pass" | "conn"): string {
+  const s = String(value || "").trim();
+  const patterns: Record<string, RegExp> = {
+    port: /^[a-zA-Z0-9\/_\-\.]+$/,
+    cmd: /^[A-Za-z0-9\&\=\?\*\#\-]+$/,
+    host: /^[a-zA-Z0-9\.\-]+$/,
+    mount: /^[a-zA-Z0-9_\-]+$/,
+    user: /^[a-zA-Z0-9_\-]+$/,
+    pass: /^[^\s\;\,\|\&\$\`\'\"\\<>]*$/,
+    conn: /^[a-zA-Z0-9\/_\-\.\:\,]+$/,
+  };
+  if (!patterns[kind].test(s) || s.length > 512) {
+    throw new Error(`Invalid ${kind} parameter: disallowed characters or length`);
+  }
+  return s;
+}
 import {
   insertSettingsSchema,
   insertMissionSchema,
@@ -52,11 +86,23 @@ import {
   cloudSyncEnabled,
   deleteCloudDocument,
   getRecentCloudDocs,
+  logCloudErr,
   publishCloudRealtime,
   syncCloudDocument,
   uploadCloudStorageObject,
 } from "./cloudSync";
 import { getFirebaseAdminDb, getFirebaseAdminRtdb, getFirebaseAdminStorage, resetFirebaseAdminApp } from "./firebaseAdmin";
+import {
+  getSession,
+  setSession,
+  deleteSession,
+  getSessionMap,
+  revokeUserSessions as revokeUserSessionsStore,
+  refreshUserSessions as refreshUserSessionsStore,
+  loadSessionsAtStartup,
+  type ServerSession,
+} from "./sessionStore";
+import { rateLimitMiddleware } from "./rateLimit";
 import { HARDCODED_FIREBASE_PROJECT } from "@shared/hardcodedFirebaseConfig";
 import { 
   getAuthUrl, 
@@ -67,15 +113,6 @@ import {
   removeAccount,
   isOAuthConfigured 
 } from "./googleAuth";
-
-// Server-side session store for authenticated users
-// Key: session token, Value: { userId, role, name, createdAt }
-interface ServerSession {
-  userId: string;
-  role: string;
-  name: string;
-  createdAt: number;
-}
 type PermissionId =
   | "arm_disarm"
   | "flight_control"
@@ -92,7 +129,10 @@ type PermissionId =
   | "object_tracking"
   | "broadcast_audio"
   | "manage_geofences"
-  | "access_flight_recorder";
+  | "access_flight_recorder"
+  | "delete_flight_data"
+  | "delete_records"
+  | "configure_gui_advanced";
 
 const serverRolePermissions: Record<string, PermissionId[]> = {
   admin: [
@@ -112,6 +152,7 @@ const serverRolePermissions: Record<string, PermissionId[]> = {
     "broadcast_audio",
     "manage_geofences",
     "access_flight_recorder",
+    "delete_flight_data",
   ],
   operator: [
     "arm_disarm",
@@ -124,15 +165,16 @@ const serverRolePermissions: Record<string, PermissionId[]> = {
     "system_settings",
     "automation_scripts",
     "run_terminal",
+    "emergency_override",
     "object_tracking",
     "broadcast_audio",
     "manage_geofences",
     "access_flight_recorder",
+    "delete_flight_data",
   ],
   viewer: ["view_telemetry", "view_map", "view_camera"],
 };
 
-const activeSessions = new Map<string, ServerSession>();
 const commandService = new CommandService();
 const offlineSyncIdempotency = new OfflineSyncIdempotencyStore();
 interface MissionRunRecord {
@@ -346,7 +388,6 @@ async function writeFirmwareCatalog(entries: any[]) {
 interface PersistedRuntimeState {
   version: number;
   savedAt: string;
-  activeSessions: Record<string, ServerSession>;
   missionRuns: MissionRunRecord[];
 }
 
@@ -358,7 +399,6 @@ const persistRuntimeState = async () => {
     const payload: PersistedRuntimeState = {
       version: 1,
       savedAt: new Date().toISOString(),
-      activeSessions: Object.fromEntries(activeSessions.entries()),
       missionRuns: Array.from(missionRuns.values()),
     };
     await writeFile(RUNTIME_STATE_FILE, JSON.stringify(payload, null, 2), "utf-8");
@@ -375,42 +415,6 @@ const scheduleRuntimeStatePersist = () => {
     runtimeStateFlushTimer = null;
     void persistRuntimeState();
   }, 250);
-};
-
-const setActiveSession = (token: string, session: ServerSession) => {
-  activeSessions.set(token, session);
-  scheduleRuntimeStatePersist();
-};
-
-const deleteActiveSession = (token: string) => {
-  const removed = activeSessions.delete(token);
-  if (removed) {
-    scheduleRuntimeStatePersist();
-  }
-  return removed;
-};
-
-const revokeUserSessions = (userId: string) => {
-  const normalized = String(userId || "").trim();
-  if (!normalized) return;
-  Array.from(activeSessions.entries()).forEach(([token, session]) => {
-    if (String(session.userId || "").trim() === normalized) {
-      deleteActiveSession(token);
-    }
-  });
-};
-
-const refreshUserSessions = (userId: string, updates: Partial<Pick<ServerSession, "role" | "name">>) => {
-  const normalized = String(userId || "").trim();
-  if (!normalized) return;
-  Array.from(activeSessions.entries()).forEach(([token, session]) => {
-    if (String(session.userId || "").trim() !== normalized) return;
-    setActiveSession(token, {
-      ...session,
-      role: updates.role != null ? String(updates.role) : session.role,
-      name: updates.name != null ? String(updates.name) : session.name,
-    });
-  });
 };
 
 const setMissionRunRecord = (runId: string, run: MissionRunRecord) => {
@@ -435,24 +439,12 @@ const stopAllMissionRunProgressMonitors = () => {
 
 const loadRuntimeState = async () => {
   try {
+    await loadSessionsAtStartup();
+
     if (!existsSync(RUNTIME_STATE_FILE)) return;
     const raw = await readFile(RUNTIME_STATE_FILE, "utf-8");
     const parsed = JSON.parse(raw) as Partial<PersistedRuntimeState>;
-    const sessions = parsed?.activeSessions && typeof parsed.activeSessions === "object" ? parsed.activeSessions : {};
     const runs = Array.isArray(parsed?.missionRuns) ? parsed.missionRuns : [];
-
-    const now = Date.now();
-    for (const [token, session] of Object.entries(sessions)) {
-      const createdAt = Number((session as any)?.createdAt || 0);
-      if (!token || !session || !createdAt) continue;
-      if (now - createdAt > 24 * 60 * 60 * 1000) continue;
-      activeSessions.set(token, {
-        userId: String((session as any).userId || ""),
-        role: String((session as any).role || "viewer"),
-        name: String((session as any).name || "User"),
-        createdAt,
-      });
-    }
 
     const restartedAt = new Date().toISOString();
     for (const run of runs) {
@@ -494,14 +486,13 @@ function generateSessionToken(): string {
   return randomBytes(32).toString('hex'); // 64 hex chars, 256 bits of entropy
 }
 
-// Validate session token and return session info
+// Validate session token (sync; reads from memory cache; Firestore used for persistence)
 function validateSession(token: string | undefined): ServerSession | null {
   if (!token) return null;
-  const session = activeSessions.get(token);
+  const session = getSessionMap().get(token);
   if (!session) return null;
-  // Session expires after 24 hours
   if (Date.now() - session.createdAt > 24 * 60 * 60 * 1000) {
-    deleteActiveSession(token);
+    void deleteSession(token);
     return null;
   }
   return session;
@@ -1234,7 +1225,7 @@ export async function registerRoutes(
         clientInfo.ws.send(message);
       }
     });
-    void publishCloudRealtime(type, data).catch(() => {});
+    void publishCloudRealtime(type, data).catch(logCloudErr);
   };
 
   // Send to specific users only (for DMs)
@@ -1317,7 +1308,7 @@ export async function registerRoutes(
         syncError: null,
         capturedAt,
       });
-      void syncCloudDocument("media_assets", asset.id, asset, { session }).catch(() => {});
+      void syncCloudDocument("media_assets", asset.id, asset, { session }).catch(logCloudErr);
       return { uploaded: true, pending: false, asset, cloudPath: uploaded.gsUri || uploaded.objectPath };
     }
 
@@ -1364,7 +1355,7 @@ export async function registerRoutes(
       syncError: uploaded.error || "Cloud unavailable",
       recordedAt: capturedAt,
     });
-    void syncCloudDocument("media_assets", asset.id, asset, { session }).catch(() => {});
+    void syncCloudDocument("media_assets", asset.id, asset, { session }).catch(logCloudErr);
     return { uploaded: false, pending: true, asset, localFilePath };
   };
 
@@ -1405,7 +1396,7 @@ export async function registerRoutes(
             syncError: null,
           });
           if (updated) {
-            void syncCloudDocument("media_assets", updated.id, updated, { session }).catch(() => {});
+            void syncCloudDocument("media_assets", updated.id, updated, { session }).catch(logCloudErr);
           }
         }
         await storage.markBacklogSynced(item.id);
@@ -1424,7 +1415,7 @@ export async function registerRoutes(
 
   // Background retry for cloud media sync when connectivity returns.
   setInterval(() => {
-    void syncPendingMediaBacklog(null).catch(() => {});
+    void syncPendingMediaBacklog(null).catch(logCloudErr);
   }, 60_000);
 
   const runMavlinkParamBridge = async (args: string[]) => {
@@ -1493,9 +1484,17 @@ export async function registerRoutes(
     process.env.DEVICE_ROLE === "ONBOARD" || existsSync("/sys/firmware/devicetree/base/model");
 
   const parseTerminalCommand = (raw: string): { type: string; payload?: Record<string, unknown> } | null => {
-    const command = String(raw || "").trim();
+    let command = String(raw || "").trim();
     if (!command) return null;
-    if (command.includes("&&") || command.includes(";") || command.includes("|")) return null;
+    // Compound takeoff: "mavlink_shell 'mode guided' && mavlink_shell 'takeoff N'"
+    const takeoffMatch = command.match(/mavlink_shell\s+'takeoff\s+(\d+(?:\.\d+)?)'/i);
+    if (takeoffMatch) return { type: "takeoff", payload: { altitude: Number(takeoffMatch[1]) || 20 } };
+    // For compound commands (e.g. "mavlink_shell 'X' && sleep 2 && echo Y"), parse the first segment
+    if (command.includes("&&") || command.includes(";")) {
+      const first = command.split(/&&|;/)[0]?.trim() || "";
+      if (first) command = first;
+    }
+    if (command.includes("|")) return null;
 
     if (/^mavlink_shell\s+'arm throttle'$/i.test(command)) return { type: "arm" };
     if (/^mavlink_shell\s+'disarm(?: force)?'$/i.test(command)) return { type: "disarm" };
@@ -1504,6 +1503,8 @@ export async function registerRoutes(
     if (modeMatch) return { type: "set_mode", payload: { mode: String(modeMatch[1]).toUpperCase() } };
     if (/^mavlink_shell\s+'servo set 9 2000'$/i.test(command)) return { type: "gripper_open" };
     if (/^mavlink_shell\s+'servo set 9 1000'$/i.test(command)) return { type: "gripper_close" };
+    const gimbalPitchMatch = command.match(/^mavlink_shell\s+'gimbal pitch\s+(-?\d+(?:\.\d+)?)'$/i);
+    if (gimbalPitchMatch) return { type: "gimbal", payload: { pitch: Number(gimbalPitchMatch[1]) ?? -45 } };
     return null;
   };
 
@@ -1532,7 +1533,11 @@ export async function registerRoutes(
     if (type === "loiter") return { type: "set_mode", payload: { mode: "LOITER" } };
     if (type === "guided") return { type: "set_mode", payload: { mode: "GUIDED" } };
     if (type === "auto") return { type: "set_mode", payload: { mode: "AUTO" } };
-    if (["arm", "disarm", "reboot", "gripper_open", "gripper_close", "set_mode", "takeoff"].includes(type)) {
+    if (type === "gimbal") {
+      const pitch = Number(payload.pitch ?? -45);
+      return { type: "gimbal", payload: { pitch: Number.isFinite(pitch) ? pitch : -45, yaw: Number(payload.yaw ?? 0) } };
+    }
+    if (["arm", "disarm", "reboot", "gripper_open", "gripper_close", "set_mode", "takeoff", "gimbal"].includes(type)) {
       return { type, payload };
     }
     return null;
@@ -1674,7 +1679,9 @@ export async function registerRoutes(
               ? "reboot"
               : type === "takeoff"
                 ? "takeoff"
-                : null;
+                : type === "gimbal"
+                  ? "gimbal"
+                  : null;
     if (!mavAction) {
       return {
         ok: false,
@@ -1696,6 +1703,10 @@ export async function registerRoutes(
         return { ok: false, acknowledged: false, error: "altitude must be a positive number for takeoff" };
       }
       args.push("--altitude", String(altitude));
+    } else if (mavAction === "gimbal") {
+      const pitch = Number(payload.pitch ?? -45);
+      const yaw = Number(payload.yaw ?? 0);
+      args.push("--pitch", String(Number.isFinite(pitch) ? pitch : -45), "--yaw", String(Number.isFinite(yaw) ? yaw : 0));
     }
 
     const result = await runMavlinkVehicleControl(args);
@@ -1783,7 +1794,7 @@ export async function registerRoutes(
     run.updatedAt = run.completedAt;
     setMissionRunRecord(run.id, run);
     broadcast("mission_execution_update", run);
-    await appendCloudDocument("mission_runs", run, { session: session || null }).catch(() => {});
+    await appendCloudDocument("mission_runs", run, { session: session || null }).catch(logCloudErr);
   };
 
   const refreshMissionRunProgressFromFlightController = async (run: MissionRunRecord) => {
@@ -2065,6 +2076,8 @@ export async function registerRoutes(
   app.use("/api/bme688", requirePermission("view_telemetry"));
   app.use("/api/motor-telemetry", requirePermission("view_telemetry"));
   app.use("/api/sensor-data", requirePermission("view_telemetry"));
+  app.use("/api/firmware", requireAuth, requirePermission("system_settings"));
+  app.use("/api/runtime-config", requireAuth);
 
   // Audio control API (cross-platform with local fallbacks)
   app.get("/api/audio/status", async (_req, res) => {
@@ -2110,13 +2123,13 @@ export async function registerRoutes(
     };
     audioBridgeSessions.set(id, updated);
     broadcast("audio_bridge_session", { action: "join", session: updated });
-    void syncCloudDocument("audio_bridge_sessions", updated.sessionId, updated, { session }).catch(() => {});
+    void syncCloudDocument("audio_bridge_sessions", updated.sessionId, updated, { session }).catch(logCloudErr);
     void appendCloudDocument("operator_actions", {
       action: "audio_session_join",
       mode,
       droneId,
       at: now,
-    }, { session, visibility: "admin" }).catch(() => {});
+    }, { session, visibility: "admin" }).catch(logCloudErr);
 
     res.json({ success: true, session: updated });
   });
@@ -2131,12 +2144,12 @@ export async function registerRoutes(
     if (existing) {
       audioBridgeSessions.delete(id);
       broadcast("audio_bridge_session", { action: "leave", session: existing });
-      void deleteCloudDocument("audio_bridge_sessions", id).catch(() => {});
+      void deleteCloudDocument("audio_bridge_sessions", id).catch(logCloudErr);
       void appendCloudDocument("operator_actions", {
         action: "audio_session_leave",
         droneId,
         at: new Date().toISOString(),
-      }, { session, visibility: "admin" }).catch(() => {});
+      }, { session, visibility: "admin" }).catch(logCloudErr);
     }
     res.json({ success: true });
   });
@@ -2226,7 +2239,7 @@ export async function registerRoutes(
       startedAt: new Date().toISOString(),
     };
     broadcast("audio_live", { ...audioState.live });
-    void syncCloudDocument("audio_state", "live", audioState.live, { session: requestSession(req), visibility: "admin" }).catch(() => {});
+    void syncCloudDocument("audio_state", "live", audioState.live, { session: requestSession(req), visibility: "admin" }).catch(logCloudErr);
     res.json({ success: true, live: audioState.live });
   });
 
@@ -2237,7 +2250,7 @@ export async function registerRoutes(
       startedAt: null,
     };
     broadcast("audio_live", { ...audioState.live });
-    void syncCloudDocument("audio_state", "live", audioState.live, { session: null, visibility: "admin" }).catch(() => {});
+    void syncCloudDocument("audio_state", "live", audioState.live, { session: null, visibility: "admin" }).catch(logCloudErr);
     res.json({ success: true, live: audioState.live });
   });
 
@@ -2260,7 +2273,7 @@ export async function registerRoutes(
     };
 
     broadcast("audio_drone_mic", { ...audioState.droneMic });
-    void syncCloudDocument("audio_state", "drone_mic", audioState.droneMic, { session: requestSession(req), visibility: "admin" }).catch(() => {});
+    void syncCloudDocument("audio_state", "drone_mic", audioState.droneMic, { session: requestSession(req), visibility: "admin" }).catch(logCloudErr);
     res.json({ success: true, droneMic: audioState.droneMic });
   });
 
@@ -3242,7 +3255,7 @@ export async function registerRoutes(
             calibrationState[mode].status = "completed";
             calibrationState[mode].ack = parsed.ack ?? null;
             calibrationState[mode].message = "Calibration accepted";
-            void appendCloudDocument("calibration_events", { mode, status: "completed", connectionString, ack: parsed.ack ?? null, timestamp: new Date().toISOString() }, { session: requestSession(req) }).catch(() => {});
+            void appendCloudDocument("calibration_events", { mode, status: "completed", connectionString, ack: parsed.ack ?? null, timestamp: new Date().toISOString() }, { session: requestSession(req) }).catch(logCloudErr);
             return res.json({ success: true, mode, ack: parsed.ack ?? null });
           }
           calibrationState[mode].status = "failed";
@@ -3545,18 +3558,21 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/mavlink/vehicle/action", async (req, res) => {
+  app.post("/api/mavlink/vehicle/action", rateLimitMiddleware, async (req, res) => {
     try {
       const connectionString = String(req.body?.connectionString || "").trim();
       const action = String(req.body?.action || "").trim().toLowerCase();
       const mode = String(req.body?.mode || "").trim().toUpperCase();
       if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
-      if (!["arm", "disarm", "set_mode", "reboot"].includes(action)) {
-        return res.status(400).json({ success: false, error: "action must be arm|disarm|set_mode|reboot" });
+      if (!["arm", "disarm", "set_mode", "reboot", "takeoff", "gimbal"].includes(action)) {
+        return res.status(400).json({ success: false, error: "action must be arm|disarm|set_mode|reboot|takeoff|gimbal" });
       }
       if (action === "set_mode" && !mode) {
         return res.status(400).json({ success: false, error: "mode is required for set_mode" });
       }
+      const altitude = Number(req.body?.altitude ?? 20);
+      const pitch = Number(req.body?.pitch ?? -45);
+      const yaw = Number(req.body?.yaw ?? 0);
 
       pushDebugEvent("info", "mavlink.vehicle_action", "Vehicle action dispatch requested", {
         action,
@@ -3565,6 +3581,10 @@ export async function registerRoutes(
       });
       const args = ["action", "--connection", connectionString, "--action", action, "--timeout", "8"];
       if (mode) args.push("--mode", mode);
+      if (action === "takeoff" && Number.isFinite(altitude)) args.push("--altitude", String(altitude));
+      if (action === "gimbal") {
+        args.push("--pitch", String(pitch), "--yaw", String(yaw));
+      }
       const result = await runMavlinkVehicleControl(args);
       if (!result.ok) {
         pushDebugEvent("error", "mavlink.vehicle_action", "Vehicle action failed", {
@@ -3575,8 +3595,8 @@ export async function registerRoutes(
         });
         return res.status(500).json({ success: false, error: result.error || "Vehicle action failed" });
       }
-      void publishCloudRealtime("vehicle_command", { connectionString, action, mode: mode || null, result: result.data }).catch(() => {});
-      void appendCloudDocument("vehicle_commands", { connectionString, action, mode: mode || null, result: result.data, timestamp: new Date().toISOString() }, { session: requestSession(req) }).catch(() => {});
+      void publishCloudRealtime("vehicle_command", { connectionString, action, mode: mode || null, result: result.data }).catch(logCloudErr);
+      void appendCloudDocument("vehicle_commands", { connectionString, action, mode: mode || null, result: result.data, timestamp: new Date().toISOString() }, { session: requestSession(req) }).catch(logCloudErr);
       pushDebugEvent("success", "mavlink.vehicle_action", "Vehicle action dispatched successfully", {
         action,
         mode: mode || null,
@@ -3625,14 +3645,14 @@ export async function registerRoutes(
       ]);
 
       if (!result.ok) return res.status(500).json({ success: false, error: result.error || "Manual control failed" });
-      void publishCloudRealtime("manual_control", { connectionString, x: Number(x), y: Number(y), z: Number(z), r: Number(r) }).catch(() => {});
+      void publishCloudRealtime("manual_control", { connectionString, x: Number(x), y: Number(y), z: Number(z), r: Number(r) }).catch(logCloudErr);
       res.json({ success: true, result: result.data });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error?.message || "Manual control failed" });
     }
   });
 
-  app.post("/api/commands/dispatch", async (req: any, res) => {
+  app.post("/api/commands/dispatch", rateLimitMiddleware, async (req: any, res) => {
     try {
       const session = req.serverSession as ServerSession | undefined;
       if (!session) {
@@ -3682,11 +3702,11 @@ export async function registerRoutes(
       );
 
       if (record.status === "acked") {
-        void publishCloudRealtime("command_acked", record, { session }).catch(() => {});
+        void publishCloudRealtime("command_acked", record, { session }).catch(logCloudErr);
       } else {
-        void publishCloudRealtime("command_failed", record, { session }).catch(() => {});
+        void publishCloudRealtime("command_failed", record, { session }).catch(logCloudErr);
       }
-      void appendCloudDocument("command_history", record, { session }).catch(() => {});
+      void appendCloudDocument("command_history", record, { session }).catch(logCloudErr);
 
       return res.json({ success: record.status === "acked", command: record });
     } catch (error: any) {
@@ -3718,17 +3738,6 @@ export async function registerRoutes(
     if (!command) return res.status(404).json({ success: false, error: "Command not found" });
     return res.json({ success: true, command });
   });
-
-  const isAirspaceAuthorizationCodeValid = (rawCode: string) => {
-    const code = String(rawCode || "").trim();
-    if (!code) return false;
-    const configuredCodes = String(process.env.AIRSPACE_AUTH_CODES || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (configuredCodes.length === 0) return false;
-    return configuredCodes.includes(code);
-  };
 
   const loadMissionStaticRestrictionZones = async (includePartTime: boolean) => {
     const files: Array<{ key: string; file: string; label: string }> = [
@@ -3836,8 +3845,6 @@ export async function registerRoutes(
       const routePolicy = req.body?.routePolicy && typeof req.body.routePolicy === "object" ? req.body.routePolicy : {};
       const overrideNoFlyRestrictions = routePolicy.overrideNoFlyRestrictions === true;
       const partTimeRestrictionsActive = routePolicy.partTimeRestrictionsActive === true;
-      const authorizationCode = String(routePolicy.authorizationCode || "").trim();
-      const hasEmergencyOverridePermission = hasServerPermission(session, "emergency_override");
 
       const routeBbox = waypoints.reduce(
         (acc, wp) => ({
@@ -3874,14 +3881,36 @@ export async function registerRoutes(
           },
         });
       }
-
-      if (blockers.length > 0 && overrideNoFlyRestrictions && !hasEmergencyOverridePermission) {
-        const codeValid = isAirspaceAuthorizationCodeValid(authorizationCode);
-        if (!codeValid) {
+      if (blockers.length > 0 && overrideNoFlyRestrictions) {
+        if (!hasServerPermission(session, "emergency_override")) {
           return res.status(403).json({
             success: false,
-            error: "Restricted-airspace override requires valid authorization code or emergency override permission",
+            error: "emergency_override permission required to bypass no-fly restrictions",
           });
+        }
+        const overrideReason = String(routePolicy.overrideReason || "").trim();
+        if (overrideReason.length < 10) {
+          return res.status(400).json({
+            success: false,
+            error: "overrideReason required (min 10 chars) for audit when bypassing no-fly zones",
+          });
+        }
+        try {
+          const auditDir = path.join(process.cwd(), "data");
+          await mkdir(auditDir, { recursive: true });
+          const auditLine = JSON.stringify({
+            type: "no_fly_override",
+            missionId,
+            userId: session.userId,
+            userName: session.name,
+            role: session.role,
+            reason: overrideReason.slice(0, 500),
+            blockedCount: blockers.length,
+            at: new Date().toISOString(),
+          }) + "\n";
+          await appendFile(path.join(auditDir, "audit_no_fly_override.jsonl"), auditLine);
+        } catch (auditErr: any) {
+          console.error("Audit log write failed:", auditErr);
         }
       }
 
@@ -3979,7 +4008,7 @@ export async function registerRoutes(
       setMissionRunRecord(runId, run);
       broadcast("mission_execution_update", run);
       startMissionRunProgressMonitor(runId);
-      void appendCloudDocument("mission_runs", run, { session }).catch(() => {});
+      void appendCloudDocument("mission_runs", run, { session }).catch(logCloudErr);
       return res.json({ success: true, run });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || "Mission execution failed" });
@@ -4178,7 +4207,7 @@ export async function registerRoutes(
       run.updatedAt = new Date().toISOString();
       automationRuns.set(runId, run);
       broadcast("automation_run_update", run);
-      void appendCloudDocument("automation_runs", run, { session }).catch(() => {});
+      void appendCloudDocument("automation_runs", run, { session }).catch(logCloudErr);
 
       return res.json({
         success: run.status === "completed",
@@ -4247,8 +4276,8 @@ export async function registerRoutes(
         total: results.length,
         results,
       };
-      void appendCloudDocument("swarm_actions", payload, { session: requestSession(req) }).catch(() => {});
-      void publishCloudRealtime("swarm_action", payload).catch(() => {});
+      void appendCloudDocument("swarm_actions", payload, { session: requestSession(req) }).catch(logCloudErr);
+      void publishCloudRealtime("swarm_action", payload).catch(logCloudErr);
       pushDebugEvent(payload.success ? "success" : "warn", "mavlink.swarm_action", "Swarm action dispatch completed", {
         action,
         mode: mode || null,
@@ -4351,8 +4380,8 @@ export async function registerRoutes(
         });
       }
       const payload = { success: true, action, mode: mode || null, staggerMs, results };
-      void appendCloudDocument("swarm_actions", payload, { session: requestSession(req) }).catch(() => {});
-      void publishCloudRealtime("swarm_sync_action", payload).catch(() => {});
+      void appendCloudDocument("swarm_actions", payload, { session: requestSession(req) }).catch(logCloudErr);
+      void publishCloudRealtime("swarm_sync_action", payload).catch(logCloudErr);
       pushDebugEvent("success", "mavlink.swarm_sync_action", "Synchronized swarm action dispatch completed", {
         action,
         mode: mode || null,
@@ -4385,7 +4414,7 @@ export async function registerRoutes(
         }))
         .filter((m: any) => Number.isFinite(m.mission[0].lat) && Number.isFinite(m.mission[0].lng));
       const payload = { success: true, count: missions.length, missions };
-      void appendCloudDocument("swarm_formation_missions", payload, { session: requestSession(req) }).catch(() => {});
+      void appendCloudDocument("swarm_formation_missions", payload, { session: requestSession(req) }).catch(logCloudErr);
       res.json(payload);
     } catch (error: any) {
       res.status(500).json({ success: false, error: error?.message || "Formation mission generation failed" });
@@ -4581,9 +4610,11 @@ export async function registerRoutes(
 
   app.post("/api/mavlink/radio-sik/modem-query", async (req, res) => {
     try {
-      const port = String(req.body?.port || "").trim();
-      const command = String(req.body?.command || "ATI").trim();
-      if (!port) return res.status(400).json({ success: false, error: "port is required" });
+      const portRaw = String(req.body?.port || "").trim();
+      const commandRaw = String(req.body?.command || "ATI").trim();
+      if (!portRaw) return res.status(400).json({ success: false, error: "port is required" });
+      const port = allowlistShellArg(portRaw, "port");
+      const command = allowlistShellArg(commandRaw.replace(/'/g, ""), "cmd");
       const template = process.env.MOUSE_SIK_AT_CMD || "";
       if (!template.trim()) {
         return res.status(503).json({
@@ -4592,7 +4623,7 @@ export async function registerRoutes(
           example: "python3 /opt/mouse/tools/sik_at.py --port {port} --cmd '{cmd}'",
         });
       }
-      const cmd = template.replace(/\{port\}/g, port).replace(/\{cmd\}/g, command.replace(/'/g, ""));
+      const cmd = template.replace(/\{port\}/g, port).replace(/\{cmd\}/g, command);
       const proc = spawn("/bin/zsh", ["-lc", cmd], { cwd: process.cwd(), env: process.env });
       let out = "";
       let err = "";
@@ -4619,9 +4650,10 @@ export async function registerRoutes(
 
   app.post("/api/mavlink/radio-sik/modem-apply-profile", async (req, res) => {
     try {
-      const port = String(req.body?.port || "").trim();
+      const portRaw = String(req.body?.port || "").trim();
       const profileId = String(req.body?.profileId || "").trim();
-      if (!port || !profileId) return res.status(400).json({ success: false, error: "port and profileId are required" });
+      if (!portRaw || !profileId) return res.status(400).json({ success: false, error: "port and profileId are required" });
+      const port = allowlistShellArg(portRaw, "port");
       const template = process.env.MOUSE_SIK_AT_CMD || "";
       if (!template.trim()) return res.status(503).json({ success: false, error: "MOUSE_SIK_AT_CMD is not configured" });
       const cmds = SIK_MODEM_PROFILES[profileId];
@@ -4629,7 +4661,8 @@ export async function registerRoutes(
 
       const results: Array<{ command: string; success: boolean; stdout: string; stderr: string; code: number | null }> = [];
       for (const c of cmds) {
-        const cmd = template.replace(/\{port\}/g, port).replace(/\{cmd\}/g, c.replace(/'/g, ""));
+        const cmdSafe = allowlistShellArg(String(c || "").replace(/'/g, ""), "cmd");
+        const cmd = template.replace(/\{port\}/g, port).replace(/\{cmd\}/g, cmdSafe);
         const result = await new Promise<{ success: boolean; stdout: string; stderr: string; code: number | null }>((resolve) => {
           const proc = spawn("/bin/zsh", ["-lc", cmd], { cwd: process.cwd(), env: process.env });
           let out = "";
@@ -4718,12 +4751,14 @@ export async function registerRoutes(
   app.post("/api/mavlink/serial-passthrough/start", async (req, res) => {
     try {
       if (serialPassthroughProcess) return res.status(409).json({ success: false, error: "Serial passthrough already running" });
-      const connectionString = String(req.body?.connectionString || "").trim();
+      const connectionStringRaw = String(req.body?.connectionString || "").trim();
       const localPort = Number(req.body?.localPort || 5760);
-      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      if (!connectionStringRaw) return res.status(400).json({ success: false, error: "connectionString is required" });
       if (!Number.isFinite(localPort) || localPort < 1 || localPort > 65535) {
         return res.status(400).json({ success: false, error: "localPort must be 1..65535" });
       }
+      const connectionString = allowlistShellArg(connectionStringRaw, "conn");
+      const portStr = allowlistShellArg(String(localPort), "port");
 
       const template = process.env.MOUSE_SERIAL_PASSTHROUGH_CMD || "";
       if (!template.trim()) {
@@ -4736,7 +4771,7 @@ export async function registerRoutes(
 
       const cmd = template
         .replace(/\{conn\}/g, connectionString)
-        .replace(/\{port\}/g, String(localPort));
+        .replace(/\{port\}/g, portStr);
       const child = spawn("/bin/zsh", ["-lc", cmd], {
         cwd: process.cwd(),
         env: process.env,
@@ -4790,9 +4825,19 @@ export async function registerRoutes(
         error: "MOUSE_NTRIP_CLIENT_CMD is not configured (example: str2str -in ntrip://{user}:{pass}@{host}:{port}/{mount} -out serial://{conn})",
       };
     }
+    try {
+      host = allowlistShellArg(host, "host");
+      mountpoint = allowlistShellArg(mountpoint, "mount");
+      username = allowlistShellArg(username, "user");
+      password = allowlistShellArg(password, "pass");
+      connectionString = allowlistShellArg(connectionString, "conn");
+    } catch (e: any) {
+      return { ok: false, error: e?.message || "Invalid parameter" };
+    }
+    const portStr = allowlistShellArg(String(port), "port");
     const cmd = template
       .replace(/\{host\}/g, host)
-      .replace(/\{port\}/g, String(port))
+      .replace(/\{port\}/g, portStr)
       .replace(/\{mount\}/g, mountpoint)
       .replace(/\{user\}/g, username)
       .replace(/\{pass\}/g, password)
@@ -5016,6 +5061,13 @@ export async function registerRoutes(
         return res.status(400).json({ success: false, error: "host and mountpoint (or profileId) are required" });
       }
 
+      const hostSafe = allowlistShellArg(host, "host");
+      const mountSafe = allowlistShellArg(mountpoint, "mount");
+      const userSafe = allowlistShellArg(username, "user");
+      const passSafe = allowlistShellArg(password, "pass");
+      const connSafe = allowlistShellArg(connectionString, "conn");
+      const portStr = allowlistShellArg(String(port), "port");
+
       const template = process.env.MOUSE_GPS_INJECT_CMD || "";
       if (!template.trim()) {
         return res.status(503).json({
@@ -5026,12 +5078,12 @@ export async function registerRoutes(
       }
 
       const cmd = template
-        .replace(/\{host\}/g, host)
-        .replace(/\{port\}/g, String(port))
-        .replace(/\{mount\}/g, mountpoint)
-        .replace(/\{user\}/g, username)
-        .replace(/\{pass\}/g, password)
-        .replace(/\{conn\}/g, connectionString);
+        .replace(/\{host\}/g, hostSafe)
+        .replace(/\{port\}/g, portStr)
+        .replace(/\{mount\}/g, mountSafe)
+        .replace(/\{user\}/g, userSafe)
+        .replace(/\{pass\}/g, passSafe)
+        .replace(/\{conn\}/g, connSafe);
       const child = spawn("/bin/zsh", ["-lc", cmd], {
         cwd: process.cwd(),
         env: process.env,
@@ -5823,7 +5875,7 @@ export async function registerRoutes(
       }
 
       const sessionToken = generateSessionToken();
-      setActiveSession(sessionToken, {
+      await setSession(sessionToken, {
         userId: authenticated.id,
         role: authenticated.role,
         name: authenticated.fullName || authenticated.username,
@@ -5839,7 +5891,7 @@ export async function registerRoutes(
       }, {
         session: { userId: authenticated.id, role: authenticated.role, name: authenticated.fullName || authenticated.username },
         visibility: "admin",
-      }).catch(() => {});
+      }).catch(logCloudErr);
 
       console.log(`User ${authenticated.fullName} (${authenticated.id}) logged in with role: ${authenticated.role}`);
 
@@ -5880,7 +5932,7 @@ export async function registerRoutes(
       const sessionToken = req.headers['x-session-token'] as string;
       const session = validateSession(sessionToken);
       if (sessionToken) {
-        deleteActiveSession(sessionToken);
+        await deleteSession(sessionToken);
       }
       if (session) {
         void appendCloudDocument("operator_actions", {
@@ -5891,7 +5943,7 @@ export async function registerRoutes(
         }, {
           session,
           visibility: "admin",
-        }).catch(() => {});
+        }).catch(logCloudErr);
       }
       res.json({ success: true });
     } catch (error) {
@@ -5939,9 +5991,9 @@ export async function registerRoutes(
       });
 
       if (!user.enabled) {
-        revokeUserSessions(user.id);
+        revokeUserSessionsStore(user.id);
       } else {
-        refreshUserSessions(user.id, { role: user.role, name: user.fullName || user.username });
+        refreshUserSessionsStore(user.id, { role: user.role, name: user.fullName || user.username });
       }
       return res.json({ success: true, user });
     } catch (error: any) {
@@ -5970,10 +6022,185 @@ export async function registerRoutes(
         return res.status(400).json({ success: false, error: "You cannot delete your own account" });
       }
       deleteAuthUser(targetUserId);
-      revokeUserSessions(targetUserId);
+      revokeUserSessionsStore(targetUserId);
       return res.json({ success: true });
     } catch (error: any) {
       return res.status(400).json({ success: false, error: error?.message || "Failed to delete user" });
+    }
+  });
+
+  type AdminUserGroup = {
+    id: string;
+    name: string;
+    memberIds: string[];
+    defaultRole?: "admin" | "operator" | "viewer";
+    createdAt: string;
+    createdBy: string;
+  };
+
+  const ADMIN_GROUPS_SETTING_KEY = "admin_user_groups";
+  const ADMIN_GROUPS_SETTING_CATEGORY = "user_access";
+  const ADMIN_GROUP_ROLE_SET = new Set(["admin", "operator", "viewer"]);
+
+  const normalizeAdminUserGroups = (value: unknown): AdminUserGroup[] => {
+    if (!Array.isArray(value)) return [];
+    const groups = value
+      .map((entry: any) => {
+        const roleRaw = String(entry?.defaultRole || "").toLowerCase();
+        const defaultRole = ADMIN_GROUP_ROLE_SET.has(roleRaw)
+          ? (roleRaw as AdminUserGroup["defaultRole"])
+          : undefined;
+        return {
+          id: String(entry?.id || ""),
+          name: String(entry?.name || "").trim(),
+          memberIds: Array.isArray(entry?.memberIds)
+            ? Array.from(
+                new Set(
+                  entry.memberIds
+                    .map((memberId: any) => String(memberId || "").trim())
+                    .filter(Boolean),
+                ),
+              )
+            : [],
+          defaultRole,
+          createdAt: String(entry?.createdAt || ""),
+          createdBy: String(entry?.createdBy || ""),
+        } as AdminUserGroup;
+      })
+      .filter((entry) => entry.id && entry.name);
+    return groups.sort((a, b) => a.name.localeCompare(b.name));
+  };
+
+  const readAdminUserGroups = async (): Promise<AdminUserGroup[]> => {
+    const setting = await storage.getSetting(ADMIN_GROUPS_SETTING_KEY);
+    return normalizeAdminUserGroups(setting?.value);
+  };
+
+  const saveAdminUserGroups = async (groups: AdminUserGroup[]) => {
+    const normalized = normalizeAdminUserGroups(groups);
+    await storage.upsertSetting({
+      key: ADMIN_GROUPS_SETTING_KEY,
+      category: ADMIN_GROUPS_SETTING_CATEGORY,
+      value: normalized,
+    });
+    return normalized;
+  };
+
+  app.get("/api/admin/groups", requirePermission("user_management"), async (_req, res) => {
+    try {
+      const groups = await readAdminUserGroups();
+      return res.json({ success: true, groups });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || "Failed to list groups" });
+    }
+  });
+
+  app.get("/api/groups", requireAuth, async (_req, res) => {
+    try {
+      const groups = await readAdminUserGroups();
+      return res.json({ success: true, groups });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || "Failed to list groups" });
+    }
+  });
+
+  app.post("/api/admin/groups", requirePermission("user_management"), async (req: any, res) => {
+    try {
+      const session = req.serverSession as ServerSession | undefined;
+      const name = String(req.body?.name || "").trim();
+      const memberIds: string[] = Array.isArray(req.body?.memberIds)
+        ? Array.from(
+            new Set(
+              (req.body.memberIds as any[])
+                .map((id: any) => String(id || "").trim())
+                .filter((id): id is string => Boolean(id)),
+            ),
+          )
+        : [];
+      const roleRaw = String(req.body?.defaultRole || "").toLowerCase();
+      const defaultRole = ADMIN_GROUP_ROLE_SET.has(roleRaw)
+        ? (roleRaw as AdminUserGroup["defaultRole"])
+        : undefined;
+
+      if (!name) return res.status(400).json({ success: false, error: "Group name is required" });
+
+      const groups = await readAdminUserGroups();
+      if (groups.some((group) => group.name.toLowerCase() === name.toLowerCase())) {
+        return res.status(409).json({ success: false, error: "A group with this name already exists" });
+      }
+
+      const group: AdminUserGroup = {
+        id: `group_${Date.now()}_${randomBytes(4).toString("hex")}`,
+        name,
+        memberIds,
+        defaultRole,
+        createdAt: new Date().toISOString(),
+        createdBy: session?.userId || "system",
+      };
+
+      const nextGroups = await saveAdminUserGroups([...groups, group]);
+      return res.json({ success: true, group, groups: nextGroups });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, error: error?.message || "Failed to create group" });
+    }
+  });
+
+  app.patch("/api/admin/groups/:id", requirePermission("user_management"), async (req: any, res) => {
+    try {
+      const groupId = String(req.params.id || "").trim();
+      if (!groupId) return res.status(400).json({ success: false, error: "group id is required" });
+
+      const groups = await readAdminUserGroups();
+      const idx = groups.findIndex((group) => group.id === groupId);
+      if (idx < 0) return res.status(404).json({ success: false, error: "Group not found" });
+
+      const name = req.body?.name != null ? String(req.body.name || "").trim() : groups[idx].name;
+      if (!name) return res.status(400).json({ success: false, error: "Group name is required" });
+      if (groups.some((group, i) => i !== idx && group.name.toLowerCase() === name.toLowerCase())) {
+        return res.status(409).json({ success: false, error: "A group with this name already exists" });
+      }
+
+      const memberIds: string[] = Array.isArray(req.body?.memberIds)
+        ? Array.from(
+            new Set(
+              (req.body.memberIds as any[])
+                .map((id: any) => String(id || "").trim())
+                .filter((id): id is string => Boolean(id)),
+            ),
+          )
+        : groups[idx].memberIds;
+      const roleRaw = req.body?.defaultRole != null ? String(req.body.defaultRole || "").toLowerCase() : groups[idx].defaultRole;
+      const defaultRole = ADMIN_GROUP_ROLE_SET.has(String(roleRaw || ""))
+        ? (String(roleRaw) as AdminUserGroup["defaultRole"])
+        : undefined;
+
+      const updated: AdminUserGroup = {
+        ...groups[idx],
+        name,
+        memberIds,
+        defaultRole,
+      };
+      groups[idx] = updated;
+      const nextGroups = await saveAdminUserGroups(groups);
+      return res.json({ success: true, group: updated, groups: nextGroups });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, error: error?.message || "Failed to update group" });
+    }
+  });
+
+  app.delete("/api/admin/groups/:id", requirePermission("user_management"), async (req: any, res) => {
+    try {
+      const groupId = String(req.params.id || "").trim();
+      if (!groupId) return res.status(400).json({ success: false, error: "group id is required" });
+
+      const groups = await readAdminUserGroups();
+      const idx = groups.findIndex((group) => group.id === groupId);
+      if (idx < 0) return res.status(404).json({ success: false, error: "Group not found" });
+      const [deleted] = groups.splice(idx, 1);
+      const nextGroups = await saveAdminUserGroups(groups);
+      return res.json({ success: true, deletedId: deleted.id, groups: nextGroups });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, error: error?.message || "Failed to delete group" });
     }
   });
 
@@ -5991,7 +6218,7 @@ export async function registerRoutes(
     try {
       const validated = insertSettingsSchema.parse(req.body);
       const setting = await storage.upsertSetting(validated);
-      void syncCloudDocument("settings", `${setting.category}:${setting.key}`, setting, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("settings", `${setting.category}:${setting.key}`, setting, { session: requestSession(req) }).catch(logCloudErr);
       res.json(setting);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -6028,7 +6255,7 @@ export async function registerRoutes(
     try {
       const validated = insertMissionSchema.parse(req.body);
       const mission = await storage.createMission(validated);
-      void syncCloudDocument("missions", mission.id, mission, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("missions", mission.id, mission, { session: requestSession(req) }).catch(logCloudErr);
       res.json(mission);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -6045,7 +6272,7 @@ export async function registerRoutes(
       if (!mission) {
         return res.status(404).json({ error: "Mission not found" });
       }
-      void syncCloudDocument("missions", mission.id, mission, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("missions", mission.id, mission, { session: requestSession(req) }).catch(logCloudErr);
       res.json(mission);
     } catch (error) {
       res.status(500).json({ error: "Failed to update mission" });
@@ -6055,7 +6282,7 @@ export async function registerRoutes(
   app.delete("/api/missions/:id", async (req, res) => {
     try {
       await storage.deleteMission(req.params.id);
-      void deleteCloudDocument("missions", req.params.id).catch(() => {});
+      void deleteCloudDocument("missions", req.params.id).catch(logCloudErr);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete mission" });
@@ -6076,7 +6303,7 @@ export async function registerRoutes(
     try {
       const validated = insertWaypointSchema.parse(req.body);
       const waypoint = await storage.createWaypoint(validated);
-      void syncCloudDocument("waypoints", waypoint.id, waypoint, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("waypoints", waypoint.id, waypoint, { session: requestSession(req) }).catch(logCloudErr);
       res.json(waypoint);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -6093,7 +6320,7 @@ export async function registerRoutes(
       if (!waypoint) {
         return res.status(404).json({ error: "Waypoint not found" });
       }
-      void syncCloudDocument("waypoints", waypoint.id, waypoint, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("waypoints", waypoint.id, waypoint, { session: requestSession(req) }).catch(logCloudErr);
       res.json(waypoint);
     } catch (error) {
       res.status(500).json({ error: "Failed to update waypoint" });
@@ -6103,7 +6330,7 @@ export async function registerRoutes(
   app.delete("/api/waypoints/:id", async (req, res) => {
     try {
       await storage.deleteWaypoint(req.params.id);
-      void deleteCloudDocument("waypoints", req.params.id).catch(() => {});
+      void deleteCloudDocument("waypoints", req.params.id).catch(logCloudErr);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete waypoint" });
@@ -6116,7 +6343,7 @@ export async function registerRoutes(
       const validated = insertFlightLogSchema.parse(req.body);
       const log = await storage.createFlightLog(validated);
       broadcast("telemetry", log);
-      void appendCloudDocument("flight_logs", log, { session: requestSession(req) }).catch(() => {});
+      void appendCloudDocument("flight_logs", log, { session: requestSession(req) }).catch(logCloudErr);
       res.json(log);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -6152,7 +6379,7 @@ export async function registerRoutes(
       const validated = insertMotorTelemetrySchema.parse(req.body);
       const telemetry = await storage.createMotorTelemetry(validated);
       broadcast("motor_telemetry", telemetry);
-      void appendCloudDocument("motor_telemetry", telemetry, { session: requestSession(req) }).catch(() => {});
+      void appendCloudDocument("motor_telemetry", telemetry, { session: requestSession(req) }).catch(logCloudErr);
       res.json(telemetry);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -6179,7 +6406,7 @@ export async function registerRoutes(
       const validated = insertSensorDataSchema.parse(req.body);
       const data = await storage.createSensorData(validated);
       broadcast("sensor_data", data);
-      void appendCloudDocument("sensor_data", data, { session: requestSession(req) }).catch(() => {});
+      void appendCloudDocument("sensor_data", data, { session: requestSession(req) }).catch(logCloudErr);
       res.json(data);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -6214,7 +6441,7 @@ export async function registerRoutes(
     try {
       const settings = await storage.updateCameraSettings(req.body);
       broadcast("camera_settings", settings);
-      void syncCloudDocument("camera_settings", "active", settings, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("camera_settings", "active", settings, { session: requestSession(req) }).catch(logCloudErr);
       res.json(settings);
     } catch (error) {
       res.status(500).json({ error: "Failed to update camera settings" });
@@ -6462,36 +6689,6 @@ export async function registerRoutes(
           envVar: "OPENAIP_API_KEY",
         },
       ],
-    });
-  });
-
-  app.post("/api/airspace/authorization/validate", async (req, res) => {
-    const code = String(req.body?.code || "").trim();
-    if (!code) return res.status(400).json({ authorized: false, error: "Authorization code is required" });
-
-    const configuredCodes = String(process.env.AIRSPACE_AUTH_CODES || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    if (configuredCodes.length === 0) {
-      return res.status(503).json({
-        authorized: false,
-        configured: false,
-        error: "AIRSPACE_AUTH_CODES is not configured",
-      });
-    }
-
-    const authorized = configuredCodes.includes(code);
-    if (!authorized) {
-      return res.status(403).json({ authorized: false, configured: true, error: "Invalid authorization code" });
-    }
-
-    return res.json({
-      authorized: true,
-      configured: true,
-      grantedAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
     });
   });
 
@@ -6863,7 +7060,7 @@ export async function registerRoutes(
       const validated = insertDroneSchema.parse(req.body);
       const drone = await storage.createDrone(validated);
       broadcast("drone_added", drone);
-      void syncCloudDocument("drones", drone.id, drone, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("drones", drone.id, drone, { session: requestSession(req) }).catch(logCloudErr);
       res.json(drone);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -6881,7 +7078,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Drone not found" });
       }
       broadcast("drone_updated", drone);
-      void syncCloudDocument("drones", drone.id, drone, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("drones", drone.id, drone, { session: requestSession(req) }).catch(logCloudErr);
       res.json(drone);
     } catch (error) {
       res.status(500).json({ error: "Failed to update drone" });
@@ -6902,7 +7099,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Drone not found" });
       }
       broadcast("drone_location", { id: drone.id, latitude, longitude, altitude, heading });
-      void syncCloudDocument("drones", drone.id, drone, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("drones", drone.id, drone, { session: requestSession(req) }).catch(logCloudErr);
       void syncCloudDocument("drone_locations", drone.id, {
         id: drone.id,
         latitude,
@@ -6910,7 +7107,7 @@ export async function registerRoutes(
         altitude,
         heading,
         updatedAt: new Date().toISOString(),
-      }, { session: requestSession(req) }).catch(() => {});
+      }, { session: requestSession(req) }).catch(logCloudErr);
       res.json(drone);
     } catch (error) {
       res.status(500).json({ error: "Failed to update drone location" });
@@ -6921,8 +7118,8 @@ export async function registerRoutes(
     try {
       await storage.deleteDrone(req.params.id);
       broadcast("drone_removed", { id: req.params.id });
-      void deleteCloudDocument("drones", req.params.id).catch(() => {});
-      void deleteCloudDocument("drone_locations", req.params.id).catch(() => {});
+      void deleteCloudDocument("drones", req.params.id).catch(logCloudErr);
+      void deleteCloudDocument("drone_locations", req.params.id).catch(logCloudErr);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete drone" });
@@ -6987,7 +7184,7 @@ export async function registerRoutes(
           recordedAt: asset.capturedAt,
         });
       }
-      void syncCloudDocument("media_assets", asset.id, asset, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("media_assets", asset.id, asset, { session: requestSession(req) }).catch(logCloudErr);
       res.json(asset);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -7004,7 +7201,7 @@ export async function registerRoutes(
       if (!asset) {
         return res.status(404).json({ error: "Media asset not found" });
       }
-      void syncCloudDocument("media_assets", asset.id, asset, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("media_assets", asset.id, asset, { session: requestSession(req) }).catch(logCloudErr);
       res.json(asset);
     } catch (error) {
       res.status(500).json({ error: "Failed to update media asset" });
@@ -7014,7 +7211,7 @@ export async function registerRoutes(
   app.delete("/api/media/:id", async (req, res) => {
     try {
       await storage.deleteMediaAsset(req.params.id);
-      void deleteCloudDocument("media_assets", req.params.id).catch(() => {});
+      void deleteCloudDocument("media_assets", req.params.id).catch(logCloudErr);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete media asset" });
@@ -7036,7 +7233,7 @@ export async function registerRoutes(
     try {
       const validated = insertOfflineBacklogSchema.parse(req.body);
       const item = await storage.createBacklogItem(validated);
-      void syncCloudDocument("offline_backlog", item.id, item, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("offline_backlog", item.id, item, { session: requestSession(req) }).catch(logCloudErr);
       res.json(item);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -7098,13 +7295,13 @@ export async function registerRoutes(
           const dataType = String(validatedItem?.dataType || "").trim().toLowerCase();
           if (dataType === "telemetry") {
             await storage.createFlightLog(validatedItem.data);
-            void appendCloudDocument("flight_logs", validatedItem.data, { session: requestSession(req) }).catch(() => {});
+            void appendCloudDocument("flight_logs", validatedItem.data, { session: requestSession(req) }).catch(logCloudErr);
           } else if (dataType === "sensor") {
             await storage.createSensorData(validatedItem.data);
-            void appendCloudDocument("sensor_data", validatedItem.data, { session: requestSession(req) }).catch(() => {});
+            void appendCloudDocument("sensor_data", validatedItem.data, { session: requestSession(req) }).catch(logCloudErr);
           } else if (dataType === "media") {
             await storage.createMediaAsset(validatedItem.data);
-            void appendCloudDocument("media_assets", validatedItem.data, { session: requestSession(req) }).catch(() => {});
+            void appendCloudDocument("media_assets", validatedItem.data, { session: requestSession(req) }).catch(logCloudErr);
           } else if (dataType === "event") {
             void appendCloudDocument(
               "flight_events",
@@ -7115,14 +7312,14 @@ export async function registerRoutes(
                 recordedAt: validatedItem?.recordedAt || new Date().toISOString(),
               },
               { session: requestSession(req) },
-            ).catch(() => {});
+            ).catch(logCloudErr);
           } else {
             throw new Error(`Unsupported backlog dataType: ${dataType || "unknown"}`);
           }
           
           if (itemId) {
             await storage.markBacklogSynced(itemId);
-            void deleteCloudDocument("offline_backlog", itemId).catch(() => {});
+            void deleteCloudDocument("offline_backlog", itemId).catch(logCloudErr);
           }
           offlineSyncIdempotency.set(clientRequestId, { status: "synced" });
           results.push({ id: itemId, clientRequestId, status: "synced" });
@@ -7142,7 +7339,7 @@ export async function registerRoutes(
   app.patch("/api/backlog/:id/synced", async (req, res) => {
     try {
       await storage.markBacklogSynced(req.params.id);
-      void deleteCloudDocument("offline_backlog", req.params.id).catch(() => {});
+      void deleteCloudDocument("offline_backlog", req.params.id).catch(logCloudErr);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to mark as synced" });
@@ -7152,7 +7349,7 @@ export async function registerRoutes(
   app.delete("/api/backlog/:id", async (req, res) => {
     try {
       await storage.deleteBacklogItem(req.params.id);
-      void deleteCloudDocument("offline_backlog", req.params.id).catch(() => {});
+      void deleteCloudDocument("offline_backlog", req.params.id).catch(logCloudErr);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete backlog item" });
@@ -7266,7 +7463,7 @@ export async function registerRoutes(
         visibility: message.recipientId || (Array.isArray(message.recipients) && message.recipients.length > 0) ? "dm" : "shared",
         recipientId: message.recipientId || null,
         recipientName: message.recipientName || null,
-      }).catch(() => {});
+      }).catch(logCloudErr);
       res.json(message);
       
       // Sync messages to Google Sheets in background (non-blocking)
@@ -7313,7 +7510,7 @@ export async function registerRoutes(
         visibility: message.recipientId || (Array.isArray(message.recipients) && message.recipients.length > 0) ? "dm" : "shared",
         recipientId: message.recipientId || null,
         recipientName: message.recipientName || null,
-      }).catch(() => {});
+      }).catch(logCloudErr);
       res.json(message);
       
       // Sync messages to Google Sheets in background (non-blocking)
@@ -7355,7 +7552,7 @@ export async function registerRoutes(
       } else {
         broadcast("message_deleted", { id: req.params.id });
       }
-      void deleteCloudDocument("messages", req.params.id).catch(() => {});
+      void deleteCloudDocument("messages", req.params.id).catch(logCloudErr);
       res.json({ success: true });
       
       // Sync messages to Google Sheets in background (non-blocking)
@@ -7813,7 +8010,7 @@ export async function registerRoutes(
           nodeVersion: process.version,
           platform: `${process.platform}/${process.arch}`,
           wsClients: clients.size,
-          activeUserSessions: activeSessions.size,
+          activeUserSessions: getSessionMap().size,
           memory: {
             rss: mem.rss,
             heapTotal: mem.heapTotal,
@@ -8067,7 +8264,7 @@ export async function registerRoutes(
       });
 
       broadcast("telemetry_recorded", flightLog);
-      void appendCloudDocument("flight_logs", flightLog, { session: requestSession(req) }).catch(() => {});
+      void appendCloudDocument("flight_logs", flightLog, { session: requestSession(req) }).catch(logCloudErr);
       res.json({ success: true, flightLog });
     } catch (error) {
       res.status(500).json({ error: "Failed to record telemetry" });
@@ -8099,7 +8296,7 @@ export async function registerRoutes(
       });
 
       broadcast("flight_session_started", session);
-      void syncCloudDocument("flight_sessions", session.id, session, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("flight_sessions", session.id, session, { session: requestSession(req) }).catch(logCloudErr);
       console.log(`[FLIGHT] Session ${session.id} started for drone ${droneId}`);
       res.json({ success: true, session });
     } catch (error) {
@@ -8140,7 +8337,7 @@ export async function registerRoutes(
       }
 
       broadcast("flight_session_ended", session);
-      void syncCloudDocument("flight_sessions", session.id, session, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("flight_sessions", session.id, session, { session: requestSession(req) }).catch(logCloudErr);
       console.log(`[FLIGHT] Session ${session.id} ended`);
       res.json({ success: true, session });
     } catch (error) {
@@ -8188,7 +8385,7 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Session not found" });
       }
       broadcast("flight_session_updated", session);
-      void syncCloudDocument("flight_sessions", session.id, session, { session: requestSession(req) }).catch(() => {});
+      void syncCloudDocument("flight_sessions", session.id, session, { session: requestSession(req) }).catch(logCloudErr);
       res.json(session);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -8210,7 +8407,7 @@ export async function registerRoutes(
   app.delete("/api/flight-sessions/:id", async (req, res) => {
     try {
       await storage.deleteFlightSession(req.params.id);
-      void deleteCloudDocument("flight_sessions", req.params.id).catch(() => {});
+      void deleteCloudDocument("flight_sessions", req.params.id).catch(logCloudErr);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete session" });

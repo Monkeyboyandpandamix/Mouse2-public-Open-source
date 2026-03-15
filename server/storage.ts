@@ -58,7 +58,7 @@ async function readJsonFile<T>(filename: string, defaultValue: T[] = []): Promis
   return defaultValue;
 }
 
-// Write JSON file safely
+// Write JSON file safely. Surfaces errors to callers instead of silently swallowing.
 async function writeJsonFile<T>(filename: string, data: T[]): Promise<void> {
   await ensureDataDir();
   const filepath = path.join(DATA_DIR, filename);
@@ -66,6 +66,7 @@ async function writeJsonFile<T>(filename: string, data: T[]): Promise<void> {
     await writeFile(filepath, JSON.stringify(data, null, 2));
   } catch (error) {
     console.error(`Error writing ${filename}:`, error);
+    throw error;
   }
 }
 
@@ -931,7 +932,7 @@ export class FileStorage implements IStorage {
       const driveClient = await getGoogleDriveClient();
       
       if (!sheetsClient && !driveClient) {
-        console.log('Google sync not available (offline mode)');
+        this.syncPending = false;
         return;
       }
 

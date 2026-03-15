@@ -164,12 +164,8 @@ export function SpeakerPanel() {
 
     loadVoices();
     speechSynthesis.onvoiceschanged = loadVoices;
-    loadAudioStatus().catch(() => {
-      // no-op: panel remains operational with local defaults
-    });
-    detectUsbDevices().catch(() => {
-      // no-op for offline fallback
-    });
+    loadAudioStatus().catch((err) => console.warn("[SpeakerPanel] loadAudioStatus failed:", err));
+    detectUsbDevices().catch((err) => console.warn("[SpeakerPanel] detectUsbDevices failed:", err));
     return () => {
       speechSynthesis.onvoiceschanged = null;
       if (micStreamRef.current) {
@@ -183,7 +179,7 @@ export function SpeakerPanel() {
     const poll = window.setInterval(() => {
       const realtimeIsFresh = Date.now() - lastRealtimeUpdateRef.current < 15_000;
       if (realtimeIsFresh) return;
-      loadAudioStatus().catch(() => {});
+      loadAudioStatus().catch((err) => console.warn("[SpeakerPanel] poll loadAudioStatus failed:", err));
     }, 10_000);
     return () => window.clearInterval(poll);
   }, []);
@@ -225,41 +221,21 @@ export function SpeakerPanel() {
     };
   }, []);
 
+  // Single debounced effect for output selection (avoids duplicate API calls)
   useEffect(() => {
-    if (audioDevice === "usb" && selectedUsbDevice) {
+    const t = window.setTimeout(() => {
       apiJson("/api/audio/output/select", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          deviceType: "usb",
-          deviceId: selectedUsbDevice,
+          deviceType: audioDevice,
+          deviceId: audioDevice === "usb" ? selectedUsbDevice || "usb-default" : audioDevice === "gpio" ? "gpio-default" : audioDevice,
           volume: volume[0],
         }),
-      }).catch(() => {});
-      return;
-    }
-    apiJson("/api/audio/output/select", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        deviceType: audioDevice,
-        deviceId: audioDevice === "gpio" ? "gpio-default" : audioDevice,
-        volume: volume[0],
-      }),
-    }).catch(() => {});
-  }, [audioDevice, selectedUsbDevice]);
-
-  useEffect(() => {
-    apiJson("/api/audio/output/select", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        deviceType: audioDevice,
-        deviceId: audioDevice === "usb" ? selectedUsbDevice || "usb-default" : audioDevice,
-        volume: volume[0],
-      }),
-    }).catch(() => {});
-  }, [volume]);
+      }).catch((err) => console.warn("[SpeakerPanel] output select failed:", err));
+    }, 150);
+    return () => window.clearTimeout(t);
+  }, [audioDevice, selectedUsbDevice, volume]);
 
   const getSelectedVoice = () => {
     const voices = speechSynthesis.getVoices();
@@ -401,7 +377,7 @@ export function SpeakerPanel() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ droneId: selectedDroneId, mode: "talk" }),
-        }).catch(() => {});
+        }).catch((err) => console.warn("[SpeakerPanel] session join failed:", err));
       }
       if (result?.live?.active === true) {
         setIsRecording(true);
@@ -423,18 +399,18 @@ export function SpeakerPanel() {
       micStreamRef.current.getTracks().forEach((track) => track.stop());
       micStreamRef.current = null;
     }
-    await apiJson("/api/audio/live/stop", { method: "POST" }).catch(() => {});
+    await apiJson("/api/audio/live/stop", { method: "POST" }).catch((err) => console.warn("[SpeakerPanel] live stop failed:", err));
     const selectedDroneId = getSelectedDroneId();
     if (selectedDroneId) {
       await apiJson("/api/audio/session/leave", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ droneId: selectedDroneId }),
-      }).catch(() => {});
+      }).catch((err) => console.warn("[SpeakerPanel] session leave failed:", err));
     }
     setIsRecording(false);
     toast.info("Live broadcast stopped");
-    loadAudioStatus().catch(() => {});
+    loadAudioStatus().catch((err) => console.warn("[SpeakerPanel] loadAudioStatus failed:", err));
   };
 
   const handleAddQuickMessage = () => {
@@ -501,13 +477,13 @@ export function SpeakerPanel() {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ droneId: selectedDroneId, mode: "listen" }),
-          }).catch(() => {});
+          }).catch((err) => console.warn("[SpeakerPanel] session join (listen) failed:", err));
         } else {
           await apiJson("/api/audio/session/leave", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ droneId: selectedDroneId }),
-          }).catch(() => {});
+          }).catch((err) => console.warn("[SpeakerPanel] session leave (listen) failed:", err));
         }
       }
       setIsListeningFromDrone(nextListeningState);
@@ -526,7 +502,7 @@ export function SpeakerPanel() {
         listening: isListeningFromDrone,
         volume: droneMicVolume[0],
       }),
-    }).catch(() => {});
+    }).catch((err) => console.warn("[SpeakerPanel] drone-mic volume update failed:", err));
   }, [droneMicVolume]);
 
   // Show permission denied if user doesn't have access

@@ -1804,6 +1804,10 @@ export function VideoFeed() {
                   </div>
                 ))}
                 
+                {/* Local camera badge */}
+                <div className="absolute top-2 right-2">
+                  <Badge variant="secondary" className="bg-amber-600/90 text-[10px]">Local Camera</Badge>
+                </div>
                 {/* Detection status */}
                 <div className="absolute top-10 left-2 flex gap-1">
                   <Badge className={isDetecting ? "bg-emerald-500 text-[8px]" : "bg-gray-500 text-[8px]"}>
@@ -1886,15 +1890,20 @@ export function VideoFeed() {
               </div>
             </div>
           ) : (
-            <img 
-              src={activeCam === 'fpv' ? fpvImg : aerialImg} 
-              alt="Drone Feed" 
-              className={cn(
-                "w-full h-full object-cover pointer-events-none",
-                thermalMode ? "opacity-90 hue-rotate-[280deg] saturate-[200%]" : "opacity-90"
-              )}
-              draggable={false}
-            />
+            <div className="relative w-full h-full">
+              <img 
+                src={activeCam === 'fpv' ? fpvImg : aerialImg} 
+                alt="Drone Feed" 
+                className={cn(
+                  "w-full h-full object-cover pointer-events-none",
+                  thermalMode ? "opacity-90 hue-rotate-[280deg] saturate-[200%]" : "opacity-90"
+                )}
+                draggable={false}
+              />
+              <div className="absolute top-2 right-2">
+                <Badge variant="secondary" className="bg-amber-600/90 text-[10px]">Demo</Badge>
+              </div>
+            </div>
           )}
         </div>
          

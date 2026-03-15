@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { normalizeClientRequestId, OfflineSyncIdempotencyStore } from "../../server/offlineSyncIdempotency";
 
 test("normalizeClientRequestId accepts valid UUID", () => {
@@ -13,7 +14,7 @@ test("normalizeClientRequestId rejects invalid ID", () => {
 
 test("OfflineSyncIdempotencyStore keeps deterministic per-request sync outcome", () => {
   const store = new OfflineSyncIdempotencyStore();
-  const id = "550e8400-e29b-41d4-a716-446655440000";
+  const id = randomUUID();
 
   assert.equal(store.get(id), null);
   store.set(id, { status: "synced" });

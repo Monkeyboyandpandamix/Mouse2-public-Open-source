@@ -508,9 +508,14 @@ export default function Home() {
       case "feeds":
         return (
           <div className="flex-1 relative bg-background p-3 sm:p-6 overflow-auto">
-            <h2 className="text-xl sm:text-2xl font-bold mb-3 sm:mb-4">Camera Feeds & 3D Mapping</h2>
+            <div className="flex items-center gap-3 mb-3">
+              <h2 className="text-xl sm:text-2xl font-bold">Camera Feeds & 3D Mapping</h2>
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/50">
+                LOCAL PREVIEW ONLY
+              </span>
+            </div>
             <p className="text-xs text-muted-foreground mb-3">
-              Feed tiles below are local browser previews unless a dedicated drone stream bridge is configured.
+              Tiles show your laptop/device camera. Configure RTSP or a stream bridge for real drone feeds.
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
               <div className="bg-black rounded-lg border-2 border-primary/50 aspect-video flex items-center justify-center relative overflow-hidden">

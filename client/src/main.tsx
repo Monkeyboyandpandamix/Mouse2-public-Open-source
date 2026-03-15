@@ -59,7 +59,8 @@ const originalFetch = window.fetch.bind(window);
 window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
   const token = localStorage.getItem("mouse_gcs_session_token");
   const reqUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-  const isApiRequest = reqUrl.startsWith("/api/") || reqUrl.includes("/api/");
+  // Only inject token for same-origin relative API paths to prevent token exfiltration
+  const isApiRequest = reqUrl.startsWith("/api/") && !reqUrl.startsWith("http");
 
   if (!token || !isApiRequest) {
     return originalFetch(input, init);

@@ -101,31 +101,11 @@ const defaultRolePermissions: RolePermissions = {
   viewer: ["view_telemetry", "view_map", "view_camera"]
 };
 
-function mergeRolePermissions(saved: RolePermissions): RolePermissions {
-  const merged: RolePermissions = { ...saved };
-  for (const role of Object.keys(defaultRolePermissions)) {
-    merged[role] = Array.from(new Set([...(saved[role] || []), ...defaultRolePermissions[role]]));
-  }
-  return merged;
-}
-
 const BUILTIN_ROLES = ['admin', 'operator', 'viewer'] as const;
 
 export function UserAccessPanel() {
   const [users, setUsers] = useState<User[]>([]);
-  
-  const [rolePermissions, setRolePermissions] = useState<RolePermissions>(() => {
-    const saved = localStorage.getItem('mouse_gcs_role_permissions');
-    if (!saved) return defaultRolePermissions;
-    try {
-      const parsed = JSON.parse(saved);
-      const merged = mergeRolePermissions(parsed);
-      localStorage.setItem('mouse_gcs_role_permissions', JSON.stringify(merged));
-      return merged;
-    } catch {
-      return defaultRolePermissions;
-    }
-  });
+  const rolePermissions: RolePermissions = defaultRolePermissions;
 
   const [session, setSession] = useState<CurrentSession>(() => {
     const saved = localStorage.getItem('mouse_gcs_session');
@@ -146,10 +126,7 @@ export function UserAccessPanel() {
   const [activeTab, setActiveTab] = useState("users");
   
   // Group management state
-  const [groups, setGroups] = useState<UserGroup[]>(() => {
-    const saved = localStorage.getItem('mouse_gcs_groups');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [groups, setGroups] = useState<UserGroup[]>([]);
   const [showNewGroupDialog, setShowNewGroupDialog] = useState(false);
   const [showEditGroupDialog, setShowEditGroupDialog] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<UserGroup | null>(null);
@@ -157,18 +134,7 @@ export function UserAccessPanel() {
   const [editGroupName, setEditGroupName] = useState("");
   const [selectedGroupMembers, setSelectedGroupMembers] = useState<string[]>([]);
   const [selectedGroupRole, setSelectedGroupRole] = useState<string>("viewer");
-  
-  // Custom roles state - allows creating additional roles beyond admin/operator/viewer
-  const [customRoles, setCustomRoles] = useState<string[]>(() => {
-    const saved = localStorage.getItem('mouse_gcs_custom_roles');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [newRoleName, setNewRoleName] = useState("");
-  const [editingRoleName, setEditingRoleName] = useState<string | null>(null);
-  const [editRoleValue, setEditRoleValue] = useState("");
-  
-  // All available roles (built-in + custom)
-  const allRoles = [...BUILTIN_ROLES, ...customRoles];
+  const allRoles = [...BUILTIN_ROLES];
 
   const fetchUsers = async () => {
     const response = await fetch('/api/admin/users');
@@ -177,6 +143,15 @@ export function UserAccessPanel() {
       throw new Error(payload?.error || "Failed to load users");
     }
     setUsers(payload.users as User[]);
+  };
+
+  const fetchGroups = async () => {
+    const response = await fetch('/api/admin/groups');
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !Array.isArray(payload?.groups)) {
+      throw new Error(payload?.error || "Failed to load groups");
+    }
+    setGroups(payload.groups as UserGroup[]);
   };
 
   useEffect(() => {
@@ -191,66 +166,22 @@ export function UserAccessPanel() {
 
   useEffect(() => {
     if (!session.isLoggedIn || session.user?.role !== 'admin') return;
-    fetchUsers().catch((error) => {
-      console.error('Failed to fetch users:', error);
-      toast.error(error instanceof Error ? error.message : "Failed to load users");
+    Promise.all([fetchUsers(), fetchGroups()]).catch((error) => {
+      console.error('Failed to fetch admin user access data:', error);
+      toast.error(error instanceof Error ? error.message : "Failed to load user access data");
     });
   }, [session.isLoggedIn, session.user?.role]);
   
   useEffect(() => {
-    localStorage.setItem('mouse_gcs_groups', JSON.stringify(groups));
     // Dispatch custom event for TopBar group autocomplete
     window.dispatchEvent(new CustomEvent('groups-updated'));
   }, [groups]);
-
-  useEffect(() => {
-    localStorage.setItem('mouse_gcs_role_permissions', JSON.stringify(rolePermissions));
-  }, [rolePermissions]);
-  
-  useEffect(() => {
-    localStorage.setItem('mouse_gcs_custom_roles', JSON.stringify(customRoles));
-    // Initialize permissions for new custom roles
-    customRoles.forEach(role => {
-      if (!rolePermissions[role]) {
-        setRolePermissions(prev => ({
-          ...prev,
-          [role]: ['view_telemetry', 'view_map', 'view_camera'] // Default to viewer-like permissions
-        }));
-      }
-    });
-  }, [customRoles]);
 
   useEffect(() => {
     localStorage.setItem('mouse_gcs_session', JSON.stringify(session));
     window.dispatchEvent(new CustomEvent('session-change', { detail: session }));
     window.dispatchEvent(new CustomEvent('session-updated', { detail: session }));
   }, [session]);
-
-  // Cross-tab synchronization via storage event
-  useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'mouse_gcs_custom_roles' && e.newValue) {
-        try {
-          const newRoles = JSON.parse(e.newValue);
-          setCustomRoles(newRoles);
-        } catch {}
-      }
-      if (e.key === 'mouse_gcs_groups' && e.newValue) {
-        try {
-          const newGroups = JSON.parse(e.newValue);
-          setGroups(newGroups);
-        } catch {}
-      }
-      if (e.key === 'mouse_gcs_role_permissions' && e.newValue) {
-        try {
-          const newPermissions = JSON.parse(e.newValue);
-          setRolePermissions(newPermissions);
-        } catch {}
-      }
-    };
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, []);
 
   const [loginError, setLoginError] = useState<string | null>(null);
   
@@ -292,7 +223,8 @@ export function UserAccessPanel() {
       };
       setSession({ user: authenticatedUser, isLoggedIn: true });
       if (authenticatedUser.role === "admin") {
-        await fetchUsers().catch(() => {
+        await fetchUsers().catch((err) => {
+          console.warn("[UserAccessPanel] fetchUsers after login failed:", err);
           setUsers([authenticatedUser]);
         });
       } else {
@@ -530,17 +462,6 @@ export function UserAccessPanel() {
     }
   };
 
-  const handleTogglePermission = (role: string, permissionId: string) => {
-    setRolePermissions(prev => {
-      const current = prev[role] || [];
-      if (current.includes(permissionId)) {
-        return { ...prev, [role]: current.filter(p => p !== permissionId) };
-      } else {
-        return { ...prev, [role]: [...current, permissionId] };
-      }
-    });
-  };
-
   const getRoleBadge = (role: string) => {
     switch (role) {
       case 'admin': return { color: "bg-red-500", icon: ShieldAlert };
@@ -551,7 +472,7 @@ export function UserAccessPanel() {
   };
 
   // Group management handlers
-  const handleCreateGroup = () => {
+  const handleCreateGroup = async () => {
     if (!newGroupName.trim()) {
       toast.error("Group name is required");
       return;
@@ -560,22 +481,30 @@ export function UserAccessPanel() {
       toast.error("A group with this name already exists");
       return;
     }
-    
-    const newGroup: UserGroup = {
-      id: `group_${Date.now()}`,
-      name: newGroupName.trim(),
-      memberIds: selectedGroupMembers,
-      defaultRole: selectedGroupRole,
-      createdAt: new Date().toISOString(),
-      createdBy: session.user?.id || 'unknown'
-    };
-    
-    setGroups(prev => [...prev, newGroup]);
-    setShowNewGroupDialog(false);
-    setNewGroupName("");
-    setSelectedGroupMembers([]);
-    setSelectedGroupRole("viewer");
-    toast.success(`Group "${newGroup.name}" created`);
+
+    try {
+      const response = await fetch('/api/admin/groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newGroupName.trim(),
+          memberIds: selectedGroupMembers,
+          defaultRole: selectedGroupRole,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.group) {
+        throw new Error(payload?.error || "Failed to create group");
+      }
+      setGroups(prev => [...prev, payload.group as UserGroup].sort((a, b) => a.name.localeCompare(b.name)));
+      setShowNewGroupDialog(false);
+      setNewGroupName("");
+      setSelectedGroupMembers([]);
+      setSelectedGroupRole("viewer");
+      toast.success(`Group "${String(payload.group.name || "group")}" created`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to create group");
+    }
   };
   
   const handleEditGroup = (group: UserGroup) => {
@@ -586,7 +515,7 @@ export function UserAccessPanel() {
     setShowEditGroupDialog(true);
   };
   
-  const handleSaveGroupEdit = () => {
+  const handleSaveGroupEdit = async () => {
     if (!selectedGroup) return;
     
     if (!editGroupName.trim()) {
@@ -598,98 +527,41 @@ export function UserAccessPanel() {
       return;
     }
     
-    setGroups(prev => prev.map(g => 
-      g.id === selectedGroup.id 
-        ? { ...g, name: editGroupName.trim(), memberIds: selectedGroupMembers, defaultRole: selectedGroupRole }
-        : g
-    ));
-    
-    setShowEditGroupDialog(false);
-    setSelectedGroup(null);
-    toast.success("Group updated");
-  };
-  
-  // Custom role management handlers
-  const handleAddCustomRole = () => {
-    const roleName = newRoleName.trim().toLowerCase().replace(/\s+/g, '_');
-    if (!roleName) {
-      toast.error("Role name is required");
-      return;
-    }
-    if (allRoles.includes(roleName)) {
-      toast.error("This role already exists");
-      return;
-    }
-    setCustomRoles(prev => [...prev, roleName]);
-    setNewRoleName("");
-    toast.success(`Role "${roleName}" created`);
-  };
-  
-  const handleRenameRole = (oldName: string) => {
-    const newName = editRoleValue.trim().toLowerCase().replace(/\s+/g, '_');
-    if (!newName) {
-      toast.error("Role name is required");
-      return;
-    }
-    if (allRoles.includes(newName) && newName !== oldName) {
-      toast.error("This role already exists");
-      return;
-    }
-    
-    // Update the role name
-    setCustomRoles(prev => prev.map(r => r === oldName ? newName : r));
-    
-    // Update role permissions
-    setRolePermissions(prev => {
-      const newPerms = { ...prev };
-      if (prev[oldName]) {
-        newPerms[newName] = prev[oldName];
-        delete newPerms[oldName];
+    try {
+      const response = await fetch(`/api/admin/groups/${selectedGroup.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: editGroupName.trim(),
+          memberIds: selectedGroupMembers,
+          defaultRole: selectedGroupRole,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.group) {
+        throw new Error(payload?.error || "Failed to update group");
       }
-      return newPerms;
-    });
-    
-    // Update users with this role
-    setUsers(prev => prev.map(u => 
-      u.role === oldName ? { ...u, role: newName as 'admin' | 'operator' | 'viewer' } : u
-    ));
-    
-    // Update groups with this default role
-    setGroups(prev => prev.map(g => 
-      g.defaultRole === oldName ? { ...g, defaultRole: newName } : g
-    ));
-    
-    setEditingRoleName(null);
-    setEditRoleValue("");
-    toast.success(`Role renamed to "${newName}"`);
-  };
-  
-  const handleDeleteRole = (roleName: string) => {
-    // Check if any users have this role
-    const usersWithRole = users.filter(u => u.role === roleName);
-    if (usersWithRole.length > 0) {
-      toast.error(`Cannot delete: ${usersWithRole.length} user(s) have this role. Change their role first.`);
-      return;
+      setGroups(prev => prev.map(g => g.id === selectedGroup.id ? (payload.group as UserGroup) : g));
+      setShowEditGroupDialog(false);
+      setSelectedGroup(null);
+      toast.success("Group updated");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update group");
     }
-    
-    setCustomRoles(prev => prev.filter(r => r !== roleName));
-    setRolePermissions(prev => {
-      const newPerms = { ...prev };
-      delete newPerms[roleName];
-      return newPerms;
-    });
-    
-    // Update groups with this default role to viewer
-    setGroups(prev => prev.map(g => 
-      g.defaultRole === roleName ? { ...g, defaultRole: 'viewer' } : g
-    ));
-    
-    toast.success(`Role "${roleName}" deleted`);
   };
   
-  const handleDeleteGroup = (groupId: string) => {
-    setGroups(prev => prev.filter(g => g.id !== groupId));
-    toast.success("Group deleted");
+  const handleDeleteGroup = async (groupId: string) => {
+    try {
+      const response = await fetch(`/api/admin/groups/${groupId}`, { method: 'DELETE' });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.success === false) {
+        throw new Error(payload?.error || "Failed to delete group");
+      }
+      setGroups(prev => prev.filter(g => g.id !== groupId));
+      toast.success("Group deleted");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete group");
+    }
   };
   
   const toggleGroupMember = (userId: string) => {
@@ -757,7 +629,7 @@ export function UserAccessPanel() {
               Login
             </Button>
             <p className="text-xs text-center text-muted-foreground mt-4">
-              Default: admin/admin123, operator1/operator123, viewer1/viewer123
+              Default accounts: admin, operator, viewer (passwords are env-driven or generated at first bootstrap)
             </p>
           </CardContent>
         </Card>

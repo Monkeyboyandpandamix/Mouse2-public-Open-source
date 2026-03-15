@@ -52,17 +52,17 @@ function buildDefaultBootstrapUsers() {
     },
     {
       id: "2",
-      username: "operator1",
+      username: "operator",
       fullName: "Flight Operator",
       role: "operator",
-      password: resolvePassword("DEFAULT_OPERATOR_PASSWORD", "operator1"),
+      password: resolvePassword("DEFAULT_OPERATOR_PASSWORD", "operator"),
     },
     {
       id: "3",
-      username: "viewer1",
+      username: "viewer",
       fullName: "Mission Observer",
       role: "viewer",
-      password: resolvePassword("DEFAULT_VIEWER_PASSWORD", "viewer1"),
+      password: resolvePassword("DEFAULT_VIEWER_PASSWORD", "viewer"),
     },
   ] as const;
 
@@ -161,7 +161,7 @@ function readAuthUsers(): AuthUserRecord[] {
     const raw = readFileSync(AUTH_USERS_FILE, "utf-8");
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.map((entry: any) => ({
+    const users = parsed.map((entry: any) => ({
       id: String(entry.id || ""),
       username: String(entry.username || "").trim(),
       fullName: String(entry.fullName || entry.username || "").trim(),
@@ -172,6 +172,11 @@ function readAuthUsers(): AuthUserRecord[] {
       passwordHash: String(entry.passwordHash || ""),
       passwordSalt: String(entry.passwordSalt || ""),
     }));
+    const normalized = migrateLegacyBootstrapUsernames(users);
+    if (normalized.changed) {
+      writeAuthUsers(normalized.users);
+    }
+    return normalized.users;
   } catch {
     return [];
   }
@@ -184,6 +189,38 @@ function writeAuthUsers(users: AuthUserRecord[]) {
 
 function sanitizeUsername(username: string) {
   return String(username || "").trim().toLowerCase();
+}
+
+function migrateLegacyBootstrapUsernames(users: AuthUserRecord[]) {
+  let changed = false;
+  const normalizedUsers = [...users];
+
+  const hasOperator = normalizedUsers.some((entry) => sanitizeUsername(entry.username) === "operator");
+  const hasViewer = normalizedUsers.some((entry) => sanitizeUsername(entry.username) === "viewer");
+
+  const legacyOperatorIdx = normalizedUsers.findIndex(
+    (entry) => entry.id === "2" && sanitizeUsername(entry.username) === "operator1",
+  );
+  if (legacyOperatorIdx >= 0 && !hasOperator) {
+    normalizedUsers[legacyOperatorIdx] = {
+      ...normalizedUsers[legacyOperatorIdx],
+      username: "operator",
+    };
+    changed = true;
+  }
+
+  const legacyViewerIdx = normalizedUsers.findIndex(
+    (entry) => entry.id === "3" && sanitizeUsername(entry.username) === "viewer1",
+  );
+  if (legacyViewerIdx >= 0 && !hasViewer) {
+    normalizedUsers[legacyViewerIdx] = {
+      ...normalizedUsers[legacyViewerIdx],
+      username: "viewer",
+    };
+    changed = true;
+  }
+
+  return { users: normalizedUsers, changed };
 }
 
 function toAuthenticatedUser(record: AuthUserRecord): AuthenticatedUser {
@@ -300,6 +337,21 @@ export function updateAuthUser(
     )
   ) {
     throw new Error("username already exists");
+  }
+
+  // Last-admin invariant: at least one enabled admin must remain (check before applying updates)
+  const wasEnabledAdmin = normalizeRole(user.role) === "admin" && user.enabled !== false;
+  const wouldDemoteOrDisable =
+    (updates.role != null && normalizeRole(updates.role) !== "admin") ||
+    (updates.enabled === false) ||
+    (updates.enabled != null && !updates.enabled);
+  if (wasEnabledAdmin && wouldDemoteOrDisable) {
+    const otherEnabledAdmins = users.filter(
+      (e, i) => i !== idx && normalizeRole(e.role) === "admin" && e.enabled !== false,
+    );
+    if (otherEnabledAdmins.length === 0) {
+      throw new Error("cannot demote or disable the last admin user");
+    }
   }
 
   user.username = nextUsername;

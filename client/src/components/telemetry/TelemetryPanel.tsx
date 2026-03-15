@@ -130,6 +130,14 @@ export function TelemetryPanel() {
   const lastExternalTelemetryTsRef = useRef(0);
   const batteryPercentRef = useRef(100);
   const [guidedTarget, setGuidedTarget] = useState<{ lat: number; lng: number } | null>(null);
+  const [externalTelemetryLive, setExternalTelemetryLive] = useState(false);
+  const [allowLocalTelemetryFallback] = useState(() => {
+    try {
+      return localStorage.getItem("mouse_enable_telemetry_sim") === "1";
+    } catch {
+      return false;
+    }
+  });
   
   // Use refs to avoid stale closures
   const positionRef = useRef(position);
@@ -295,6 +303,7 @@ export function TelemetryPanel() {
       (window as any).__currentTelemetry = { ...(window as any).__currentTelemetry, ...data };
       if (data.source !== 'sim') {
         lastExternalTelemetryTsRef.current = Date.now();
+        setExternalTelemetryLive(true);
       }
       if (data.attitude) setAttitude(data.attitude);
       if (data.heading !== undefined) setHeading(data.heading);
@@ -350,29 +359,35 @@ export function TelemetryPanel() {
     return () => window.removeEventListener('telemetry-update' as any, handleTelemetryUpdate);
   }, []);
 
-  // Pull environmental pressure/temperature when available to populate sensor tab.
+  // Consolidated server poll: freshness check + BME688 (replaces separate 1s and 8s intervals)
   useEffect(() => {
     let cancelled = false;
+    let tickCount = 0;
     const poll = async () => {
-      try {
-        const res = await fetch("/api/bme688/read");
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled) return;
-        setSensorHealth((prev) => ({
-          ...prev,
-          barometer: typeof data.pressure === "number" ? data.pressure : prev.barometer,
-          cpuTemp:
-            typeof data.temperature_c === "number"
-              ? Math.max(prev.cpuTemp ?? 0, data.temperature_c)
-              : prev.cpuTemp,
-        }));
-      } catch {
-        // ignore polling errors
+      const fresh = Date.now() - lastExternalTelemetryTsRef.current < 3000;
+      setExternalTelemetryLive(fresh);
+      tickCount += 1;
+      if (tickCount % 4 === 0) {
+        try {
+          const res = await fetch("/api/bme688/read");
+          if (!res.ok || cancelled) return;
+          const data = await res.json();
+          if (cancelled) return;
+          setSensorHealth((prev) => ({
+            ...prev,
+            barometer: typeof data.pressure === "number" ? data.pressure : prev.barometer,
+            cpuTemp:
+              typeof data.temperature_c === "number"
+                ? Math.max(prev.cpuTemp ?? 0, data.temperature_c)
+                : prev.cpuTemp,
+          }));
+        } catch (err) {
+          console.warn("[TelemetryPanel] BME688 poll failed:", err);
+        }
       }
     };
     poll();
-    const timer = setInterval(poll, 8000);
+    const timer = setInterval(poll, 2000);
     return () => {
       cancelled = true;
       clearInterval(timer);
@@ -381,8 +396,9 @@ export function TelemetryPanel() {
 
   // Local fallback telemetry simulation when no external stream is available.
   useEffect(() => {
+    if (!allowLocalTelemetryFallback) return;
     const interval = setInterval(() => {
-      if (!isArmed) return;
+      if (isArmed) return;
       if (Date.now() - lastExternalTelemetryTsRef.current < 2000) return;
 
       const altitudeStep = flightMode === 'takeoff' ? 1.2 : flightMode === 'landing' ? -1.1 : 0;
@@ -487,7 +503,7 @@ export function TelemetryPanel() {
     }, 250);
 
     return () => clearInterval(interval);
-  }, [isArmed, flightMode, altitude, groundSpeed, heading, attitude, position, motors, guidedTarget, batteryPercent, gpsSatellites]);
+  }, [allowLocalTelemetryFallback, isArmed, flightMode, altitude, groundSpeed, heading, attitude, position, motors, guidedTarget, batteryPercent, gpsSatellites]);
 
   // Update distance to home when position changes
   useEffect(() => {
@@ -521,7 +537,11 @@ export function TelemetryPanel() {
           <span className="flex items-center gap-2">
             <Gauge className="h-4 w-4" /> Telemetry
             {isArmed ? (
-              <Badge variant="default" className="bg-emerald-500/20 text-emerald-500 text-[8px] px-1.5 py-0 border-emerald-500/30">LIVE</Badge>
+              externalTelemetryLive ? (
+                <Badge variant="default" className="bg-emerald-500/20 text-emerald-500 text-[8px] px-1.5 py-0 border-emerald-500/30">LIVE</Badge>
+              ) : (
+                <Badge variant="destructive" className="text-[8px] px-1.5 py-0">STALE</Badge>
+              )
             ) : (
               <Badge variant="outline" className="text-muted-foreground text-[8px] px-1.5 py-0">OFFLINE</Badge>
             )}
@@ -544,6 +564,11 @@ export function TelemetryPanel() {
           </TabsList>
 
           <TabsContent value="flight" className="flex-1 overflow-y-auto px-4 mt-2 space-y-4">
+            {isArmed && !externalTelemetryLive && (
+              <div className="rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1 text-[10px] text-destructive">
+                External telemetry link is stale. Local simulation is disabled while armed.
+              </div>
+            )}
             {/* Attitude & Gyro Indicators */}
             <div className="flex justify-center gap-4 py-2">
               <div className="text-center">

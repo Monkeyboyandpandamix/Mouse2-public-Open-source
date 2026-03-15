@@ -63,6 +63,13 @@ def action_to_command(mavutil, action: str, params: Dict) -> Tuple[int, List[flo
     if a == "hover":
         hold = float(params.get("hoverTime", 5))
         return mavutil.mavlink.MAV_CMD_NAV_LOITER_TIME, [hold, 0, 0, 0, 0, 0, 0]
+    if a in {"alert", "notify"}:
+        # Alert on arrival: waypoint with 0s hold (marker/notification point)
+        return mavutil.mavlink.MAV_CMD_CONDITION_DELAY, [0, 0, 0, 0, 0, 0, 0]
+    if a == "patrol":
+        radius = float(params.get("patrolRadius", 20))
+        turns = float(params.get("turns", 2))
+        return mavutil.mavlink.MAV_CMD_NAV_LOITER_TURNS, [turns, radius, 0, 0, 0, 0, 0]
     if a == "loiter_turns":
         turns = float(params.get("turns", 1))
         radius = float(params.get("radius", 20))

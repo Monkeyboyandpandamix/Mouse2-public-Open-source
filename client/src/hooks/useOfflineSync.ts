@@ -90,7 +90,7 @@ export function useOfflineSync(droneId?: number) {
           syncStatus: 'pending',
           syncAttempts: 0,
         }),
-      }).catch(() => {});
+      }).catch((err) => console.warn("[useOfflineSync] backlog POST failed:", err));
     }
     
     return newItem;
