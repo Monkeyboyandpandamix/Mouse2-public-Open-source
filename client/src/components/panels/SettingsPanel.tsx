@@ -2487,7 +2487,6 @@ export function SettingsPanel() {
             </Card>
 
             <FirebaseCloudManager />
-            <FullDebugManager />
           </TabsContent>
 
           <TabsContent value="operations" className="space-y-4 mt-4">
@@ -2561,6 +2560,8 @@ export function SettingsPanel() {
                 </p>
               </CardContent>
             </Card>
+
+            <FullDebugManager />
           </TabsContent>
 
           <TabsContent value="advanced" className="space-y-4 mt-4">

@@ -155,6 +155,26 @@ This section is the exhaustive functional inventory of the current app surface.
 - `GUIConfigPanel`
 - `SettingsPanel`
 
+### Settings Panel: Full Functional Surface
+- `General`: system profile, startup behavior, core UI/runtime options
+- `Hardware`: motor/airframe/hardware setup workflow with dependent parameter updates
+- `Backup`: Google Sheets backup status and manual sync
+- `Storage`: Google Drive media storage, Firebase Cloud manager, account switching
+- `Operations`: integrated Operations Console + Full Debug Console (live command dispatch, runtime/service health, database responsiveness)
+- `Advanced`: one-time stack setup modules
+- `Advanced > Mode Setup`: `FlightModeMappingPanel`
+- `Advanced > MAVLink Tools`: `MavlinkToolsPanel`
+- `Advanced > RTK / NTRIP`: `RtkNtripPanel`
+- `Advanced > Plugins`: `PluginToolchainPanel`
+- `Advanced > MP Parity`: `MissionPlannerParityPanel`
+- `Connections`: USB/GPIO/CAN/WiFi links, telemetry wiring
+- `Sensors`: sensor feature toggles + data channel configuration
+- `Input`: joystick/radio/manual control bindings
+- `Camera`: camera source/stream/capture behavior
+- `Failsafe`: disarm/RTL/safety guard behavior
+- `Network`: cloud link and remote connectivity behavior
+- `Firmware`: firmware catalog, flashing workflow, status
+
 ### Sidebar/Route-Level Functional Areas
 - `map`
 - `mission`
@@ -431,6 +451,24 @@ chmod +x start-linux.sh
 # Start the application
 ./start-linux.sh
 ```
+
+### Cloud Command and Telemetry Control APIs
+- `POST /api/cloud/commands/dispatch`: queue remote drone commands via cloud pipeline
+- `POST /api/cloud/commands/:id/ack`: acknowledge/update command execution status from drone/operator path
+- `GET /api/cloud/commands`: query command history/queue state by drone and status
+- `POST /api/cloud/telemetry/ingest`: ingest operational telemetry for a drone into centralized cloud stream
+- `GET /api/cloud/telemetry/live`: retrieve latest + recent telemetry across one or many drones
+
+### Cloud/Debug APIs (Operational Reliability)
+- `GET /api/cloud/config`
+- `POST /api/cloud/config`
+- `GET /api/cloud/status`
+- `POST /api/cloud/test`
+- `POST /api/cloud/sync-all`
+- `GET /api/debug/system`
+- `POST /api/debug/system/probe`
+- `GET /api/debug/events`
+- `POST /api/debug/events/clear`
 
 ### macOS
 ```bash
