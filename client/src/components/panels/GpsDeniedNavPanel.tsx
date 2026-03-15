@@ -10,6 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { toast } from "sonner";
+import { dispatchBackendCommand } from "@/lib/commandService";
 import {
   Navigation,
   Satellite,
@@ -141,22 +143,33 @@ export function GpsDeniedNavPanel() {
     const lat = parseFloat(destLat);
     const lng = parseFloat(destLng);
     const alt = parseFloat(destAlt) || 30;
-    if (isNaN(lat) || isNaN(lng)) return;
-    window.dispatchEvent(new CustomEvent("flight-command", {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      toast.error("Enter valid destination coordinates");
+      return;
+    }
+    window.dispatchEvent(new CustomEvent("ml-nav-command", {
       detail: { command: "set_nav_destination", destination: { lat, lng, alt } },
     }));
   };
 
   const handleClearDestination = () => {
-    window.dispatchEvent(new CustomEvent("flight-command", {
+    window.dispatchEvent(new CustomEvent("ml-nav-command", {
       detail: { command: "clear_nav_destination" },
     }));
   };
 
-  const handleBacktrace = () => {
-    window.dispatchEvent(new CustomEvent("flight-command", {
-      detail: { command: "backtrace" },
-    }));
+  const handleBacktrace = async () => {
+    try {
+      await dispatchBackendCommand({ commandType: "rtl" });
+      window.dispatchEvent(
+        new CustomEvent("ml-nav-command", {
+          detail: { command: "backtrace_request" },
+        }),
+      );
+      toast.info("Backtrace mapped to RTL and acknowledged");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Backtrace command failed");
+    }
   };
 
   const methodLabels: Record<string, string> = {

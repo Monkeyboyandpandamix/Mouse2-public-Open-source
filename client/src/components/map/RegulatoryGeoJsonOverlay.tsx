@@ -6,6 +6,7 @@ import { ChevronDown, ChevronUp, GripVertical } from "lucide-react";
 
 const DEFAULT_RADIUS_MILES = 30;
 const PANEL_MARGIN = 8;
+const PANEL_SAFE_LEFT = 88;
 const PANEL_SAFE_TOP = 72;
 
 type FeatureCollection = {
@@ -125,10 +126,11 @@ export function RegulatoryGeoJsonOverlay({
   operatorPosition = null,
 }: RegulatoryGeoJsonOverlayProps) {
   const clampPanelPosition = useCallback((x: number, y: number, panelWidth = 288, panelHeight = 200) => {
-    const maxX = Math.max(PANEL_MARGIN, window.innerWidth - panelWidth - PANEL_MARGIN);
+    const minX = Math.max(PANEL_MARGIN, PANEL_SAFE_LEFT);
+    const maxX = Math.max(minX, window.innerWidth - panelWidth - PANEL_MARGIN);
     const maxY = Math.max(PANEL_SAFE_TOP, window.innerHeight - panelHeight - PANEL_MARGIN);
     return {
-      x: Math.max(PANEL_MARGIN, Math.min(x, maxX)),
+      x: Math.max(minX, Math.min(x, maxX)),
       y: Math.max(PANEL_SAFE_TOP, Math.min(y, maxY)),
     };
   }, []);
@@ -152,16 +154,17 @@ export function RegulatoryGeoJsonOverlay({
         const x = Number(parsed?.x);
         const y = Number(parsed?.y);
         if (Number.isFinite(x) && Number.isFinite(y)) {
-          const maxX = Math.max(PANEL_MARGIN, window.innerWidth - 300);
+          const minX = Math.max(PANEL_MARGIN, PANEL_SAFE_LEFT);
+          const maxX = Math.max(minX, window.innerWidth - 300);
           const maxY = Math.max(PANEL_SAFE_TOP, window.innerHeight - 200);
           return {
-            x: Math.max(PANEL_MARGIN, Math.min(x, maxX)),
+            x: Math.max(minX, Math.min(x, maxX)),
             y: Math.max(PANEL_SAFE_TOP, Math.min(y, maxY)),
           };
         }
       }
-      return { x: 16, y: PANEL_SAFE_TOP };
-    } catch { return { x: 16, y: PANEL_SAFE_TOP }; }
+      return { x: PANEL_SAFE_LEFT, y: PANEL_SAFE_TOP };
+    } catch { return { x: PANEL_SAFE_LEFT, y: PANEL_SAFE_TOP }; }
   });
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
@@ -349,11 +352,19 @@ export function RegulatoryGeoJsonOverlay({
           style={{ left: panelPos.x, top: panelPos.y, width: collapsed ? "auto" : 288 }}
           data-testid="faa-overlay-panel"
         >
-          <div className="flex items-center justify-between p-2 gap-1">
+          <div
+            className="flex items-center justify-between p-2 gap-1 cursor-grab active:cursor-grabbing"
+            onMouseDown={handleDragStart}
+            onDoubleClick={() => {
+              setPanelPos({ x: PANEL_SAFE_LEFT, y: PANEL_SAFE_TOP });
+              localStorage.removeItem("mouse_faa_panel_pos");
+            }}
+            title="Drag this header to move, double-click to reset position"
+          >
             <button
-              className="cursor-grab active:cursor-grabbing p-0.5 text-muted-foreground hover:text-foreground"
-              onMouseDown={handleDragStart}
-              onDoubleClick={() => { setPanelPos({ x: 16, y: PANEL_SAFE_TOP }); localStorage.removeItem("mouse_faa_panel_pos"); }}
+              className="p-0.5 text-muted-foreground hover:text-foreground"
+              onMouseDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
               title="Drag to move, double-click to reset position"
               data-testid="faa-panel-drag"
             >
@@ -363,7 +374,12 @@ export function RegulatoryGeoJsonOverlay({
             <span className="text-[10px] text-muted-foreground mr-1">{totalVisibleFeatures}</span>
             <button
               className="p-0.5 text-muted-foreground hover:text-foreground"
-              onClick={() => setCollapsed((c) => !c)}
+              onMouseDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                setCollapsed((c) => !c);
+              }}
               data-testid="faa-panel-toggle"
             >
               {collapsed ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronUp className="h-3.5 w-3.5" />}

@@ -1,0 +1,35 @@
+[
+  {
+    "id": "1",
+    "username": "admin",
+    "fullName": "System Administrator",
+    "role": "admin",
+    "enabled": true,
+    "createdAt": "2026-03-15T14:03:42.351Z",
+    "lastLogin": "2026-03-15T14:55:21.896Z",
+    "passwordHash": "4ec23fb7edd12154df8734621a353ec38896ef2f4be177c1c6ae3da6f411a88bdecd3f72caa18ea8cfdc25f06804322ff4a335fdee68f1e58bf0eab2954ebde5",
+    "passwordSalt": "74960e923374babf389ee3165bf83f99"
+  },
+  {
+    "id": "2",
+    "username": "operator1",
+    "fullName": "Flight Operator",
+    "role": "operator",
+    "enabled": true,
+    "createdAt": "2026-03-15T14:03:42.351Z",
+    "lastLogin": null,
+    "passwordHash": "5ac412e35a32179d5b84e71e669d9fde9a557bdfee64336691e7679cc1d2a5f198c59e6a493f0d455ee81e9fb465ff36d0dd723bb53ec35df4e8ef2a7d199d7d",
+    "passwordSalt": "d0d0d34953ea5766ede845a9dce7c45e"
+  },
+  {
+    "id": "3",
+    "username": "viewer1",
+    "fullName": "Mission Observer",
+    "role": "viewer",
+    "enabled": true,
+    "createdAt": "2026-03-15T14:03:42.351Z",
+    "lastLogin": null,
+    "passwordHash": "aa99c0d93841da1a894f89c709b90668e716c1d0e0f76ea8e2230b717e3c03f0bd8ccafebe5479e43127e82271790887e4f5b7dad47a40e26c38daac1e469118",
+    "passwordSalt": "74e7891c2c174b7d4ada09b0a852eeef"
+  }
+]

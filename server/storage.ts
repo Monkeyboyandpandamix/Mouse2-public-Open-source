@@ -234,6 +234,7 @@ export interface IStorage {
   getAllMessages(): Promise<UserMessage[]>;
   getAllMessagesWithHistory(): Promise<UserMessage[]>; // For admin - includes originals
   getMessagesForUser(userId: string): Promise<UserMessage[]>;
+  getMessageById(id: string): Promise<UserMessage | undefined>;
   getChatUsers(): Promise<{ id: string; username: string; role: string }[]>;
   createMessage(message: InsertUserMessage): Promise<UserMessage>;
   updateMessage(id: string, content: string): Promise<UserMessage | undefined>;
@@ -764,10 +765,22 @@ export class FileStorage implements IStorage {
     const messages = readJsonFile<UserMessage>('messages.json');
     return messages
       .filter(m => {
-        // Show if: broadcast (no recipient), user is sender, or user is recipient
-        return !m.recipientId || m.senderId === userId || m.recipientId === userId;
+        const recipientIds = Array.isArray(m.recipients)
+          ? m.recipients
+              .filter((r) => r?.type === "user")
+              .map((r) => String(r.id))
+          : [];
+        const isBroadcast = !m.recipientId && recipientIds.length === 0;
+        const isDirectRecipient = Boolean(m.recipientId && String(m.recipientId) === userId);
+        const isMultiRecipient = recipientIds.includes(userId);
+        return isBroadcast || m.senderId === userId || isDirectRecipient || isMultiRecipient;
       })
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }
+
+  async getMessageById(id: string): Promise<UserMessage | undefined> {
+    const messages = readJsonFile<UserMessage>('messages.json');
+    return messages.find((m) => m.id === id);
   }
 
   async getChatUsers(): Promise<{ id: string; username: string; role: string }[]> {

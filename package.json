@@ -8,6 +8,7 @@
     "dev": "tsx server/index.ts",
     "build": "npm run check && tsx script/build.ts",
     "start": "node dist/index.cjs",
+    "test:critical": "node --import tsx --test tests/critical/*.test.ts",
     "gcp-build": "npm run build",
     "start:linux": "bash ./start-linux.sh",
     "start:macos": "bash ./start-macos.sh",

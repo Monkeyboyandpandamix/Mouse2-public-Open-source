@@ -159,6 +159,7 @@ export function MissionPlanningPanel() {
     terrainFollow: false,
   });
   const [isExecuting, setIsExecuting] = useState(false);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
   const [fcConnectionString, setFcConnectionString] = useState(() => {
     const saved = localStorage.getItem("mouse_selected_drone");
@@ -930,59 +931,86 @@ export function MissionPlanningPanel() {
     setEditingWaypoint(null);
   };
 
-  const executeMission = () => {
+  const executeMission = async () => {
     if (!selectedMissionData || waypoints.length === 0) {
       toast.error("No waypoints to execute");
       return;
     }
-    
+
     setIsExecuting(true);
-    
-    // Dispatch mission execution event with waypoints
-    window.dispatchEvent(new CustomEvent('mission-execute', {
-      detail: {
-        missionId: selectedMission,
-        missionName: selectedMissionData.name,
-        waypoints: orderedWaypoints.map(wp => ({
-          id: wp.id,
-          order: wp.order,
-          lat: wp.latitude,
-          lng: wp.longitude,
-          altitude: wp.altitude,
-          action: wp.action,
-          actionParams: wp.actionParams
-        })),
-        homePosition: {
-          lat: selectedMissionData.homeLatitude,
-          lng: selectedMissionData.homeLongitude,
-          alt: selectedMissionData.homeAltitude
-        },
-        routePolicy: {
-          overrideNoFlyRestrictions,
-          partTimeRestrictionsActive: partTimeRestrictedZones.length > 0,
-        },
+    try {
+      const response = await fetch(`/api/missions/${selectedMissionData.id}/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          connectionString: fcConnectionString,
+          armBeforeStart: false,
+          routePolicy: {
+            overrideNoFlyRestrictions,
+            partTimeRestrictionsActive: partTimeRestrictedZones.length > 0,
+          },
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.success || !data?.run?.id) {
+        throw new Error(data?.error || data?.run?.error || "Mission execution failed");
       }
-    }));
-    
-    // Dispatch takeoff command to start the mission
-    window.dispatchEvent(new CustomEvent('flight-command', {
-      detail: { command: 'takeoff', altitude: orderedWaypoints[0]?.altitude || 50 }
-    }));
-    
-    toast.success(`Executing mission: ${selectedMissionData.name}`, {
-      description: `${waypoints.length} waypoints queued. Click Stop to abort.`
-    });
-    
-    // isExecuting remains true until user clicks Stop or mission completes
+      setActiveRunId(data.run.id);
+      toast.success(`Executing mission: ${selectedMissionData.name}`, {
+        description: `${waypoints.length} waypoints uploaded and AUTO mode acknowledged.`,
+      });
+    } catch (error) {
+      setIsExecuting(false);
+      setActiveRunId(null);
+      toast.error(error instanceof Error ? error.message : "Mission execution failed");
+    }
   };
 
-  const stopMission = () => {
-    window.dispatchEvent(new CustomEvent('flight-command', {
-      detail: { command: 'land' }
-    }));
-    setIsExecuting(false);
-    toast.info("Mission stopped - landing");
+  const stopMission = async () => {
+    if (!activeRunId) {
+      toast.error("No active mission run to stop");
+      return;
+    }
+    try {
+      const response = await fetch(`/api/missions/runs/${activeRunId}/stop`, {
+        method: "POST",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || data?.run?.error || "Failed to stop mission");
+      }
+      setIsExecuting(false);
+      setActiveRunId(null);
+      toast.info("Mission stop acknowledged");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to stop mission");
+    }
   };
+
+  useEffect(() => {
+    if (!activeRunId) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const response = await fetch(`/api/missions/runs/${activeRunId}`);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data?.run) return;
+        const status = String(data.run.status || "");
+        if (status === "failed" || status === "stopped") {
+          setIsExecuting(false);
+          setActiveRunId(null);
+          if (status === "failed") {
+            toast.error(data.run.error || "Mission execution failed");
+          } else {
+            toast.info("Mission stopped");
+          }
+        }
+      } catch {
+        // polling errors are non-fatal
+      }
+    }, 2000);
+
+    return () => window.clearInterval(timer);
+  }, [activeRunId]);
 
   const handleSaveMission = () => {
     if (!selectedMissionData) {

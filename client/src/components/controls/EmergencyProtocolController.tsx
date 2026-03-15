@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { dispatchBackendCommand } from "@/lib/commandService";
 
 interface TelemetryEvent {
   batteryPercent?: number;
@@ -29,6 +30,24 @@ export function EmergencyProtocolController() {
     roadRisk: "unknown",
   });
   const lastActionTsRef = useRef(0);
+
+  const dispatchEmergencyCommand = async (commandType: "land" | "rtl") => {
+    try {
+      await dispatchBackendCommand({ commandType, timeoutMs: 15000 });
+    } catch (error) {
+      window.dispatchEvent(
+        new CustomEvent("system-error", {
+          detail: {
+            id: `emergency-command-failed-${Date.now()}`,
+            type: "critical",
+            title: "Emergency Command Failed",
+            message: error instanceof Error ? error.message : "Failed to dispatch emergency command",
+            timestamp: new Date(),
+          },
+        }),
+      );
+    }
+  };
 
   useEffect(() => {
     const onArm = (e: CustomEvent<{ armed: boolean }>) => {
@@ -82,7 +101,7 @@ export function EmergencyProtocolController() {
             },
           }),
         );
-        window.dispatchEvent(new CustomEvent("flight-command", { detail: { command: "backtrace", source: "emergency_protocol" } }));
+        void dispatchEmergencyCommand("land");
         return;
       }
 
@@ -100,11 +119,11 @@ export function EmergencyProtocolController() {
               },
             }),
           );
-          window.dispatchEvent(new CustomEvent("flight-command", { detail: { command: "land", source: "emergency_protocol" } }));
+          void dispatchEmergencyCommand("land");
         } else if (gpsOkRef.current) {
-          window.dispatchEvent(new CustomEvent("flight-command", { detail: { command: "rtl", source: "emergency_protocol" } }));
+          void dispatchEmergencyCommand("rtl");
         } else {
-          window.dispatchEvent(new CustomEvent("flight-command", { detail: { command: "backtrace", source: "emergency_protocol" } }));
+          void dispatchEmergencyCommand("land");
         }
         return;
       }
@@ -123,9 +142,9 @@ export function EmergencyProtocolController() {
           }),
         );
         if (gpsOkRef.current) {
-          window.dispatchEvent(new CustomEvent("flight-command", { detail: { command: "rtl", source: "emergency_protocol" } }));
+          void dispatchEmergencyCommand("rtl");
         } else {
-          window.dispatchEvent(new CustomEvent("flight-command", { detail: { command: "backtrace", source: "emergency_protocol" } }));
+          void dispatchEmergencyCommand("land");
         }
       }
     }, 1000);

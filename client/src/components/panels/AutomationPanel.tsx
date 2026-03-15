@@ -83,6 +83,7 @@ if (!gps.hasSignal) {
 export function AutomationPanel() {
   const { hasPermission } = usePermissions();
   const canAutomate = hasPermission('automation_scripts');
+  const automationExecutionEnabled = false;
   
   const [scripts, setScripts] = useState<AutomationScript[]>(() => {
     const saved = localStorage.getItem("mouse_automation_scripts");
@@ -105,6 +106,10 @@ export function AutomationPanel() {
   }, [scripts]);
 
   const executeScriptNow = (script: AutomationScript, reason: string) => {
+    if (!automationExecutionEnabled) {
+      toast.error(`"${script.name}" is disabled until a backend automation runner is configured`);
+      return;
+    }
     toast.info(`Running "${script.name}" (${reason})...`);
     setTimeout(() => {
       const nowIso = new Date().toISOString();
@@ -138,11 +143,15 @@ export function AutomationPanel() {
         });
     };
 
-    const onFlightCommand = (e: CustomEvent<{ command?: string }>) => {
-      const cmd = e.detail?.command;
+    const onCommandAck = (e: CustomEvent<{ commandType?: string; command?: { type?: string } }>) => {
+      const cmd = String(e.detail?.commandType || e.detail?.command?.type || "").trim().toLowerCase();
       if (cmd === "takeoff") runEnabledForTrigger("takeoff", "Takeoff event");
       if (cmd === "land") runEnabledForTrigger("landing", "Landing event");
-      if (cmd === "guided-waypoint") runEnabledForTrigger("waypoint", "Waypoint event");
+    };
+    const onNavGuidance = (e: CustomEvent<{ command?: string }>) => {
+      if (e.detail?.command === "guided-waypoint") {
+        runEnabledForTrigger("waypoint", "Waypoint guidance event");
+      }
     };
 
     const onWaypointReached = () => {
@@ -174,12 +183,14 @@ export function AutomationPanel() {
       runEnabledForTrigger("disconnect", "Connection lost", 12000);
     };
 
-    window.addEventListener("flight-command" as any, onFlightCommand);
+    window.addEventListener("command-acked" as any, onCommandAck);
+    window.addEventListener("ml-nav-guidance" as any, onNavGuidance);
     window.addEventListener("waypoint-reached" as any, onWaypointReached);
     window.addEventListener("telemetry-update" as any, onTelemetry);
     window.addEventListener("connection-lost" as any, onDisconnect);
     return () => {
-      window.removeEventListener("flight-command" as any, onFlightCommand);
+      window.removeEventListener("command-acked" as any, onCommandAck);
+      window.removeEventListener("ml-nav-guidance" as any, onNavGuidance);
       window.removeEventListener("waypoint-reached" as any, onWaypointReached);
       window.removeEventListener("telemetry-update" as any, onTelemetry);
       window.removeEventListener("connection-lost" as any, onDisconnect);

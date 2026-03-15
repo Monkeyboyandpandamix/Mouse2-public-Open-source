@@ -285,6 +285,7 @@ export type MediaAsset = z.infer<typeof mediaAssetSchema>;
 // Offline Data Backlog
 export const offlineBacklogSchema = z.object({
   id: z.string(),
+  clientRequestId: z.string().uuid().optional(),
   droneId: z.string().nullable().optional(),
   dataType: z.string(),
   data: z.any(),

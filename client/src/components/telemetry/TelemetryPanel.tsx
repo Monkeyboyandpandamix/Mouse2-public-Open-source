@@ -25,13 +25,6 @@ interface SensorHealth {
   compassStatus: string;
 }
 
-interface MissionExecuteWaypoint {
-  id?: number;
-  order?: number;
-  lat: number;
-  lng: number;
-}
-
 interface StabilizerStatus {
   armed: boolean;
   payloadShiftEstimate: number;
@@ -137,8 +130,6 @@ export function TelemetryPanel() {
   const lastExternalTelemetryTsRef = useRef(0);
   const batteryPercentRef = useRef(100);
   const [guidedTarget, setGuidedTarget] = useState<{ lat: number; lng: number } | null>(null);
-  const missionQueueRef = useRef<MissionExecuteWaypoint[]>([]);
-  const activeMissionWaypointRef = useRef<MissionExecuteWaypoint | null>(null);
   
   // Use refs to avoid stale closures
   const positionRef = useRef(position);
@@ -189,88 +180,52 @@ export function TelemetryPanel() {
         setBatteryCurrent(0);
       }
     };
-    const handleFlightCommand = (e: CustomEvent<{ command: string; target?: any; corrections?: any; waypoint?: any }>) => {
-      const { command, target, corrections, waypoint } = e.detail;
-      switch (command) {
-        case 'takeoff':
-          setFlightMode('takeoff');
-          // Set home position when taking off (use ref for current position)
+    const handleCommandAck = (e: CustomEvent<{ commandType?: string; command?: { type?: string; payload?: any } }>) => {
+      const commandType = String(e.detail?.commandType || e.detail?.command?.type || "").trim().toLowerCase();
+      const commandPayload = e.detail?.command?.payload;
+      switch (commandType) {
+        case "arm":
+          setFlightMode("takeoff");
           setHomePosition({ ...positionRef.current });
           break;
-        case 'land':
-          setFlightMode('landing');
+        case "land":
+          setFlightMode("landing");
           break;
-        case 'rtl':
-          setFlightMode('rtl');
-          // Use target from RTL command if provided (base location)
-          if (target && target.lat && target.lng) {
-            setHomePosition({ lat: target.lat, lng: target.lng });
+        case "rtl":
+          setFlightMode("rtl");
+          if (commandPayload?.target && typeof commandPayload.target.lat === "number" && typeof commandPayload.target.lng === "number") {
+            setHomePosition({ lat: commandPayload.target.lat, lng: commandPayload.target.lng });
           }
           break;
-        case 'abort':
-          setFlightMode('idle');
+        case "abort":
+        case "disarm":
+          setFlightMode("idle");
           setAltitude(0);
           setGroundSpeed(0);
           setGuidedTarget(null);
           break;
-        case 'guided-waypoint':
-          if (target && typeof target.lat === 'number' && typeof target.lng === 'number') {
-            setGuidedTarget({ lat: target.lat, lng: target.lng });
-            setFlightMode('rtl');
-            activeMissionWaypointRef.current = waypoint || activeMissionWaypointRef.current;
-          }
-          break;
-        case 'stabilize_adjust':
-          if (corrections) {
-            setAttitude(prev => ({
-              pitch: prev.pitch + (corrections.pitch || 0),
-              roll: prev.roll + (corrections.roll || 0),
-              yaw: prev.yaw + (corrections.yaw || 0),
-            }));
-            setAltitude(prev => Math.max(0, prev + (corrections.throttle || 0)));
-            setGroundSpeed(prev => Math.max(0, prev + (corrections.forward || 0)));
-            setHeading(prev => {
-              const next = prev + (corrections.yaw || 0);
-              return ((next % 360) + 360) % 360;
-            });
-          }
-          break;
       }
     };
-    const dispatchNextMissionWaypoint = () => {
-      const next = missionQueueRef.current.shift();
-      if (!next) {
-        activeMissionWaypointRef.current = null;
-        return;
+    const handleNavGuidance = (e: CustomEvent<{ command?: string; target?: any }>) => {
+      if (e.detail?.command === "guided-waypoint" && typeof e.detail.target?.lat === "number" && typeof e.detail.target?.lng === "number") {
+        setGuidedTarget({ lat: e.detail.target.lat, lng: e.detail.target.lng });
+        setFlightMode("rtl");
       }
-      activeMissionWaypointRef.current = next;
-      window.dispatchEvent(
-        new CustomEvent("flight-command", {
-          detail: {
-            command: "guided-waypoint",
-            target: { lat: next.lat, lng: next.lng },
-            source: "mission_execute",
-            waypoint: next,
-          },
-        }),
-      );
     };
-    const handleMissionExecute = (
-      e: CustomEvent<{ missionName?: string; waypoints?: MissionExecuteWaypoint[] }>,
-    ) => {
-      const waypoints = Array.isArray(e.detail?.waypoints)
-        ? e.detail.waypoints
-            .map((w) => ({
-              id: w.id,
-              order: w.order,
-              lat: Number(w.lat),
-              lng: Number(w.lng),
-            }))
-            .filter((w) => Number.isFinite(w.lat) && Number.isFinite(w.lng))
-            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-        : [];
-      missionQueueRef.current = waypoints;
-      dispatchNextMissionWaypoint();
+    const handleStabilizerCommand = (e: CustomEvent<{ command?: string; corrections?: any }>) => {
+      const { command, corrections } = e.detail || {};
+      if (command !== "stabilize_adjust" || !corrections) return;
+      setAttitude((prev) => ({
+        pitch: prev.pitch + (corrections.pitch || 0),
+        roll: prev.roll + (corrections.roll || 0),
+        yaw: prev.yaw + (corrections.yaw || 0),
+      }));
+      setAltitude((prev) => Math.max(0, prev + (corrections.throttle || 0)));
+      setGroundSpeed((prev) => Math.max(0, prev + (corrections.forward || 0)));
+      setHeading((prev) => {
+        const next = prev + (corrections.yaw || 0);
+        return ((next % 360) + 360) % 360;
+      });
     };
     const handleSensorUpdate = (e: CustomEvent<any>) => {
       const d = e.detail || {};
@@ -299,15 +254,17 @@ export function TelemetryPanel() {
     };
     window.addEventListener('motor-count-changed' as any, handleMotorCountChange);
     window.addEventListener('arm-state-changed' as any, handleArmStateChange);
-    window.addEventListener('flight-command' as any, handleFlightCommand);
-    window.addEventListener('mission-execute' as any, handleMissionExecute);
+    window.addEventListener('command-acked' as any, handleCommandAck);
+    window.addEventListener('ml-nav-guidance' as any, handleNavGuidance);
+    window.addEventListener('stabilizer-command' as any, handleStabilizerCommand);
     window.addEventListener('sensor-update' as any, handleSensorUpdate);
     window.addEventListener('motor-telemetry-update' as any, handleMotorTelemetry);
     return () => {
       window.removeEventListener('motor-count-changed' as any, handleMotorCountChange);
       window.removeEventListener('arm-state-changed' as any, handleArmStateChange);
-      window.removeEventListener('flight-command' as any, handleFlightCommand);
-      window.removeEventListener('mission-execute' as any, handleMissionExecute);
+      window.removeEventListener('command-acked' as any, handleCommandAck);
+      window.removeEventListener('ml-nav-guidance' as any, handleNavGuidance);
+      window.removeEventListener('stabilizer-command' as any, handleStabilizerCommand);
       window.removeEventListener('sensor-update' as any, handleSensorUpdate);
       window.removeEventListener('motor-telemetry-update' as any, handleMotorTelemetry);
     };
@@ -476,29 +433,11 @@ export function TelemetryPanel() {
         const dist = Math.sqrt(dLat * dLat + dLng * dLng);
         if (dist < 0.00001) {
           setGuidedTarget(null);
-          if (activeMissionWaypointRef.current) {
-            window.dispatchEvent(
-              new CustomEvent("waypoint-reached", {
-                detail: activeMissionWaypointRef.current,
-              }),
-            );
-          }
-          const next = missionQueueRef.current.shift();
-          if (next) {
-            activeMissionWaypointRef.current = next;
-            window.dispatchEvent(
-              new CustomEvent("flight-command", {
-                detail: {
-                  command: "guided-waypoint",
-                  source: "mission_execute",
-                  target: { lat: next.lat, lng: next.lng },
-                  waypoint: next,
-                },
-              }),
-            );
-          } else {
-            activeMissionWaypointRef.current = null;
-          }
+          window.dispatchEvent(
+            new CustomEvent("waypoint-reached", {
+              detail: { lat: guidedTarget.lat, lng: guidedTarget.lng },
+            }),
+          );
         } else {
           const step = Math.min(0.15, movementScale / Math.max(dist, 0.0000001));
           nextPosition = {

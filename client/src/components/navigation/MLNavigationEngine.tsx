@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback } from "react";
+import { dispatchBackendCommand } from "@/lib/commandService";
 
 interface Pose {
   lat: number;
@@ -430,7 +431,7 @@ export function MLNavigationEngine() {
       }
     };
 
-    const onFlightCommand = (e: CustomEvent<{ command?: string; destination?: { lat: number; lng: number; alt: number } }>) => {
+    const onNavCommand = (e: CustomEvent<{ command?: string; destination?: { lat: number; lng: number; alt: number } }>) => {
       const cmd = e.detail?.command;
       if (cmd === "set_nav_destination" && e.detail?.destination) {
         destinationRef.current = e.detail.destination;
@@ -443,13 +444,21 @@ export function MLNavigationEngine() {
         autoRtlTriggeredRef.current = false;
       }
     };
+    const onCommandAck = (e: CustomEvent<{ commandType?: string; command?: { type?: string } }>) => {
+      const type = String(e.detail?.commandType || e.detail?.command?.type || "").trim().toLowerCase();
+      if (type === "abort" || type === "land") {
+        destinationRef.current = null;
+        autoRtlTriggeredRef.current = false;
+      }
+    };
 
     window.addEventListener("ml-nav-config-changed" as any, onConfigChange);
     window.addEventListener("arm-state-changed" as any, onArm);
     window.addEventListener("telemetry-update" as any, onTelemetry);
     window.addEventListener("visual-odometry-update" as any, onVisualOdom);
     window.addEventListener("scene-capture" as any, onSceneCapture);
-    window.addEventListener("flight-command" as any, onFlightCommand);
+    window.addEventListener("ml-nav-command" as any, onNavCommand);
+    window.addEventListener("command-acked" as any, onCommandAck);
 
     return () => {
       window.removeEventListener("ml-nav-config-changed" as any, onConfigChange);
@@ -457,7 +466,8 @@ export function MLNavigationEngine() {
       window.removeEventListener("telemetry-update" as any, onTelemetry);
       window.removeEventListener("visual-odometry-update" as any, onVisualOdom);
       window.removeEventListener("scene-capture" as any, onSceneCapture);
-      window.removeEventListener("flight-command" as any, onFlightCommand);
+      window.removeEventListener("ml-nav-command" as any, onNavCommand);
+      window.removeEventListener("command-acked" as any, onCommandAck);
     };
   }, [loadConfig]);
 
@@ -581,7 +591,16 @@ export function MLNavigationEngine() {
       if (commsStatus.commsLost && cfg.commsLostAutoRtl && armedRef.current && !autoRtlTriggeredRef.current && homeRef.current) {
         autoRtlTriggeredRef.current = true;
         destinationRef.current = homeRef.current;
-        window.dispatchEvent(new CustomEvent("flight-command", {
+        void dispatchBackendCommand({ commandType: "rtl" }).catch((error) => {
+          window.dispatchEvent(new CustomEvent("system-error", {
+            detail: {
+              type: "critical",
+              title: "Comms Lost RTL Command Failed",
+              message: error instanceof Error ? error.message : "Failed to dispatch RTL command",
+            },
+          }));
+        });
+        window.dispatchEvent(new CustomEvent("ml-nav-guidance", {
           detail: { command: "guided-waypoint", source: "ml_nav_comms_lost_rtl", target: homeRef.current },
         }));
         window.dispatchEvent(new CustomEvent("system-error", {
@@ -594,7 +613,7 @@ export function MLNavigationEngine() {
         const bearing = bearingTo(estimatedPose.lat, estimatedPose.lng, destinationRef.current.lat, destinationRef.current.lng);
 
         if (dist > 3) {
-          window.dispatchEvent(new CustomEvent("flight-command", {
+          window.dispatchEvent(new CustomEvent("ml-nav-guidance", {
             detail: {
               command: "guided-waypoint",
               source: "ml_nav_destination",

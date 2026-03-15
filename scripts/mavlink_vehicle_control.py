@@ -102,11 +102,26 @@ def cmd_action(args):
                 0,
                 0,
             )
+        elif action == "takeoff":
+            altitude = float(args.altitude if args.altitude is not None else 20.0)
+            mav.mav.command_long_send(
+                mav.target_system,
+                mav.target_component,
+                mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                altitude,
+            )
         else:
-            raise RuntimeError("action must be arm|disarm|set_mode|reboot")
+            raise RuntimeError("action must be arm|disarm|set_mode|reboot|takeoff")
 
         ack = wait_command_ack(mav, args.timeout)
-        print(json.dumps({"success": True, "action": action, "mode": args.mode, "ack": ack}))
+        print(json.dumps({"success": True, "action": action, "mode": args.mode, "altitude": args.altitude, "ack": ack}))
     except Exception as e:
         print(json.dumps({"success": False, "error": str(e)}))
         sys.exit(1)
@@ -158,6 +173,7 @@ def main():
     a.add_argument("--connection", required=True)
     a.add_argument("--action", required=True)
     a.add_argument("--mode", required=False)
+    a.add_argument("--altitude", type=float, required=False)
     a.add_argument("--timeout", type=float, default=8.0)
     a.set_defaults(fn=cmd_action)
 

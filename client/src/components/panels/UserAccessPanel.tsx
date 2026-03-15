@@ -281,55 +281,53 @@ export function UserAccessPanel() {
   
   const handleLogin = async () => {
     setLoginError(null);
-    const user = users.find(u => u.username === loginForm.username);
-    
-    if (!user) {
-      setLoginError("Invalid username or password");
-      toast.error("Invalid username or password");
+    const username = loginForm.username.trim();
+    const password = loginForm.password;
+    if (!username || !password) {
+      setLoginError("Username and password are required");
+      toast.error("Username and password are required");
       return;
     }
-    
-    if (!user.enabled) {
-      setLoginError("This account has been disabled");
-      toast.error("This account has been disabled");
-      return;
-    }
-    
-    if (loginForm.password !== user.password) {
-      setLoginError("Invalid username or password");
-      toast.error("Invalid username or password");
-      return;
-    }
-    
-    // Create server-side session
+
     try {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: user.id,
-          username: user.username,
-          role: user.role,
-          name: user.fullName || user.username
+          username,
+          password,
         })
       });
-      
-      const result = await response.json();
-      if (result.sessionToken) {
-        // Store session token for WebSocket auth and API calls
-        localStorage.setItem('mouse_gcs_session_token', result.sessionToken);
+
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result?.sessionToken || !result?.user) {
+        throw new Error(result?.error || "Invalid username or password");
       }
+
+      localStorage.setItem('mouse_gcs_session_token', result.sessionToken);
+
+      const existingLocalUser = users.find((u) => u.username === result.user.username);
+      const authenticatedUser: User = {
+        id: result.user.id,
+        username: result.user.username,
+        fullName: result.user.fullName || result.user.username,
+        password: existingLocalUser?.password || "",
+        role: (["admin", "operator", "viewer"].includes(String(result.user.role)) ? result.user.role : "viewer") as User["role"],
+        createdAt: existingLocalUser?.createdAt || new Date().toISOString(),
+        lastLogin: new Date().toISOString(),
+        enabled: result.user.enabled !== false,
+      };
+      setSession({ user: authenticatedUser, isLoggedIn: true });
+      setUsers(prev => prev.map(u =>
+        u.username === authenticatedUser.username ? { ...u, lastLogin: new Date().toISOString() } : u
+      ));
+      toast.success(`Welcome back, ${authenticatedUser.fullName || authenticatedUser.username}!`);
+      setLoginForm({ username: "", password: "" });
     } catch (error) {
-      console.error('Failed to create server session:', error);
-      // Continue with local session even if server session fails
+      const message = error instanceof Error ? error.message : "Invalid username or password";
+      setLoginError(message);
+      toast.error(message);
     }
-    
-    setSession({ user, isLoggedIn: true });
-    setUsers(prev => prev.map(u => 
-      u.id === user.id ? { ...u, lastLogin: new Date().toISOString() } : u
-    ));
-    toast.success(`Welcome back, ${user.fullName || user.username}!`);
-    setLoginForm({ username: "", password: "" });
   };
 
   const handleLogout = async () => {

@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { usePermissions } from "@/hooks/usePermissions";
 import { toast } from "sonner";
 import { Label } from "@/components/ui/label";
+import { dispatchBackendCommand } from "@/lib/commandService";
 import { Lock, Radio, PlugZap, RefreshCw, Gamepad2 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
@@ -128,17 +129,11 @@ export function MavlinkToolsPanel() {
   const vehicleAction = async (action: "arm" | "disarm" | "set_mode") => {
     setBusy(true);
     try {
-      const res = await fetch("/api/mavlink/vehicle/action", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          connectionString,
-          action,
-          mode: action === "set_mode" ? mode : undefined,
-        }),
+      await dispatchBackendCommand({
+        commandType: action === "set_mode" ? "set_mode" : action,
+        payload: action === "set_mode" ? { mode } : {},
+        connectionString,
       });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "Vehicle action failed");
       toast.success(action === "set_mode" ? `Mode set to ${mode}` : `${action} command sent`);
     } catch (e: any) {
       toast.error(e.message || "Vehicle action failed");

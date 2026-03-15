@@ -800,11 +800,12 @@ export function MLStabilizationEngine() {
       if (e.detail) cameraRef.current = e.detail;
     };
 
-    const onFlightCommand = (e: CustomEvent<{ command: string; altitude?: number }>) => {
-      const cmd = e.detail?.command;
+    const onCommandAck = (e: CustomEvent<{ commandType?: string; command?: { type?: string; payload?: { altitude?: number } } }>) => {
+      const cmd = String(e.detail?.commandType || e.detail?.command?.type || "").trim().toLowerCase();
+      const payload = e.detail?.command?.payload || {};
       if (cmd === "takeoff") {
         flightPhaseRef.current = "takeoff";
-        const targetAlt = e.detail?.altitude ?? configRef.current.targetHoverAltitude;
+        const targetAlt = payload.altitude ?? configRef.current.targetHoverAltitude;
         holdAltRef.current = targetAlt;
         if (configRef.current.takeoffAssistEnabled) {
           takeoffRef.current.begin(targetAlt);
@@ -831,7 +832,7 @@ export function MLStabilizationEngine() {
     window.addEventListener("weather-update" as any, onWeather);
     window.addEventListener("imu-update" as any, onIMU);
     window.addEventListener("camera-features" as any, onCameraFeatures);
-    window.addEventListener("flight-command" as any, onFlightCommand);
+    window.addEventListener("command-acked" as any, onCommandAck);
     window.addEventListener("payload-release" as any, onPayloadRelease);
 
     return () => {
@@ -841,7 +842,7 @@ export function MLStabilizationEngine() {
       window.removeEventListener("weather-update" as any, onWeather);
       window.removeEventListener("imu-update" as any, onIMU);
       window.removeEventListener("camera-features" as any, onCameraFeatures);
-      window.removeEventListener("flight-command" as any, onFlightCommand);
+      window.removeEventListener("command-acked" as any, onCommandAck);
       window.removeEventListener("payload-release" as any, onPayloadRelease);
     };
   }, [loadConfig]);
@@ -988,7 +989,7 @@ export function MLStabilizationEngine() {
         predictorRef.current.train();
       }
 
-      window.dispatchEvent(new CustomEvent("flight-command", {
+      window.dispatchEvent(new CustomEvent("stabilizer-command", {
         detail: {
           command: "stabilize_adjust",
           source: "ml_stabilizer",

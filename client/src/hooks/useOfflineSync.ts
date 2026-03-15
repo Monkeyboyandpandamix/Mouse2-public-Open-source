@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 
 interface BacklogItem {
-  id?: number;
-  droneId?: number;
+  id?: string;
+  clientRequestId: string;
+  droneId?: number | string | null;
   dataType: 'telemetry' | 'media' | 'event' | 'sensor';
   data: any;
   priority: number;
@@ -24,6 +25,14 @@ const SYNC_INTERVAL = 30000;
 const HEARTBEAT_INTERVAL = 5000;
 const MAX_RETRY_ATTEMPTS = 3;
 const LOCAL_STORAGE_KEY = 'mouse_offline_backlog';
+
+function makeClientRequestId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  const segment = () => Math.floor((1 + Math.random()) * 0x10000).toString(16).slice(1);
+  return `${segment()}${segment()}-${segment()}-4${segment().slice(1)}-a${segment().slice(1)}-${segment()}${segment()}${segment()}`;
+}
 
 export function useOfflineSync(droneId?: number) {
   const [syncState, setSyncState] = useState<SyncState>({
@@ -58,9 +67,13 @@ export function useOfflineSync(droneId?: number) {
     }
   }, []);
 
-  const queueData = useCallback((item: Omit<BacklogItem, 'recordedAt'>) => {
+  const queueData = useCallback((item: Omit<BacklogItem, 'recordedAt' | 'clientRequestId'> & { clientRequestId?: string }) => {
+    const clientRequestId = item.clientRequestId || makeClientRequestId();
     const newItem: BacklogItem = {
       ...item,
+      id: item.id || clientRequestId,
+      clientRequestId,
+      droneId: item.droneId == null ? null : String(item.droneId),
       recordedAt: new Date().toISOString(),
     };
     
@@ -140,18 +153,19 @@ export function useOfflineSync(droneId?: number) {
         const result = await response.json();
         const syncedIds = new Set(
           result.results
-            .filter((r: any) => r.status === 'synced')
-            .map((r: any) => r.id)
+            .filter((r: any) => r.status === 'synced' || r.status === 'duplicate')
+            .map((r: any) => r.clientRequestId || r.id)
+            .filter(Boolean)
         );
         
         const failedItems = result.results.filter((r: any) => r.status === 'failed');
         
         localBacklog.current = localBacklog.current.filter(
-          (item, index) => !syncedIds.has(item.id) && !syncedIds.has(index)
+          (item) => !syncedIds.has(item.clientRequestId) && !syncedIds.has(item.id)
         );
         saveLocalBacklog();
         
-        const syncedCount = result.results.filter((r: any) => r.status === 'synced').length;
+        const syncedCount = result.results.filter((r: any) => r.status === 'synced' || r.status === 'duplicate').length;
         
         if (syncedCount > 0) {
           toast.success(`Synced ${syncedCount} backlog items`);

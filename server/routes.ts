@@ -4,11 +4,16 @@ import { storage } from "./storage";
 import { WebSocketServer, WebSocket } from "ws";
 import { spawn } from "child_process";
 import { existsSync, mkdirSync } from "fs";
-import { readFile, writeFile, readdir } from "fs/promises";
+import { randomBytes } from "crypto";
+import { readFile, writeFile, readdir, chmod } from "fs/promises";
 import path from "path";
 import os from "os";
 import net from "net";
 import { flightDynamicsEngine } from "./flightDynamics";
+import { authenticateWithPassword, getAuthenticatedUserById } from "./authStore";
+import { CommandService, type CommandExecutionResult } from "./commandService";
+import { buildPluginToolSpawnSpec, normalizePluginId } from "./pluginToolRunner";
+import { normalizeClientRequestId, OfflineSyncIdempotencyStore } from "./offlineSyncIdempotency";
 
 // Use system Python to ensure Adafruit libraries are available
 // On Raspberry Pi, venv may not have the hardware libraries but system Python does
@@ -120,6 +125,19 @@ const serverRolePermissions: Record<string, PermissionId[]> = {
 };
 
 const activeSessions = new Map<string, ServerSession>();
+const commandService = new CommandService();
+const offlineSyncIdempotency = new OfflineSyncIdempotencyStore();
+interface MissionRunRecord {
+  id: string;
+  missionId: string;
+  status: "queued" | "uploading" | "arming" | "starting" | "running" | "stopped" | "failed";
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+  connectionString: string;
+  commandIds: string[];
+}
+const missionRuns = new Map<string, MissionRunRecord>();
 const airspaceCache = new Map<string, { expiresAt: number; payload: any }>();
 const staticAirspaceCache = new Map<string, any>();
 let serialPassthroughProcess: any = null;
@@ -289,8 +307,6 @@ async function writeFirmwareCatalog(entries: any[]) {
   await writeFile(FIRMWARE_CATALOG_FILE, JSON.stringify(entries, null, 2), "utf-8");
 }
 
-import { randomBytes } from 'crypto';
-
 // Generate a cryptographically secure random token
 function generateSessionToken(): string {
   return randomBytes(32).toString('hex'); // 64 hex chars, 256 bits of entropy
@@ -315,10 +331,7 @@ function requestSession(req: any): ServerSession | null {
 }
 
 function hasServerPermission(session: ServerSession | null, permission: PermissionId): boolean {
-  if (!session) {
-    if (activeSessions.size === 0) return true;
-    return false;
-  }
+  if (!session) return false;
   const role = String(session.role || "viewer").toLowerCase();
   if (role === "admin") return true;
   return (serverRolePermissions[role] || []).includes(permission);
@@ -327,10 +340,6 @@ function hasServerPermission(session: ServerSession | null, permission: Permissi
 function requireAuth(req: any, res: any, next: any) {
   const session = requestSession(req);
   if (!session) {
-    if (activeSessions.size === 0) {
-      req.serverSession = { userId: "preview", role: "admin", name: "Preview User" };
-      return next();
-    }
     return res.status(401).json({ success: false, error: "Authentication required" });
   }
   req.serverSession = session;
@@ -341,10 +350,6 @@ function requirePermission(permission: PermissionId) {
   return (req: any, res: any, next: any) => {
     const session = requestSession(req);
     if (!session) {
-      if (activeSessions.size === 0) {
-        req.serverSession = { userId: "preview", role: "admin", name: "Preview User" };
-        return next();
-      }
       return res.status(401).json({ success: false, error: "Authentication required" });
     }
     if (!hasServerPermission(session, permission)) {
@@ -770,13 +775,13 @@ export async function registerRoutes(
   };
 
   const hasOperatorControlPermission = (session: ServerSession | null) => {
-    if (!session) return activeSessions.size === 0;
+    if (!session) return false;
     const role = String(session.role || "").toLowerCase();
     return role === "admin" || role === "operator";
   };
 
   const hasTelemetryReadPermission = (session: ServerSession | null) => {
-    if (!session) return activeSessions.size === 0;
+    if (!session) return false;
     return hasServerPermission(session, "view_telemetry") || hasOperatorControlPermission(session);
   };
 
@@ -842,13 +847,20 @@ export async function registerRoutes(
 
   // Smart broadcast - handles DMs privately, broadcasts public messages
   const smartBroadcast = (type: string, data: any) => {
-    // Check if this is a DM (has recipientId)
-    if (data.recipientId) {
-      // Only send to sender and recipient
-      const targetUsers = [data.senderId, data.recipientId].filter(Boolean);
+    const recipients = Array.isArray(data?.recipients)
+      ? data.recipients
+          .filter((r: any) => r?.type === "user" && String(r?.id || "").trim())
+          .map((r: any) => String(r.id))
+      : [];
+    const legacyRecipient = String(data?.recipientId || "").trim();
+    const isDirect = Boolean(legacyRecipient || recipients.length > 0);
+
+    if (isDirect) {
+      const targetUsers = Array.from(
+        new Set([String(data?.senderId || "").trim(), legacyRecipient, ...recipients].filter(Boolean)),
+      );
       sendToUsers(type, data, targetUsers);
     } else {
-      // Public message - broadcast to all
       broadcast(type, data);
     }
   };
@@ -1072,6 +1084,177 @@ export async function registerRoutes(
     });
   };
 
+  const isRaspberryPiRuntime = () =>
+    process.env.DEVICE_ROLE === "ONBOARD" || existsSync("/sys/firmware/devicetree/base/model");
+
+  const parseTerminalCommand = (raw: string): { type: string; payload?: Record<string, unknown> } | null => {
+    const command = String(raw || "").trim();
+    if (!command) return null;
+    if (command.includes("&&") || command.includes(";") || command.includes("|")) return null;
+
+    if (/^mavlink_shell\s+'arm throttle'$/i.test(command)) return { type: "arm" };
+    if (/^mavlink_shell\s+'disarm(?: force)?'$/i.test(command)) return { type: "disarm" };
+    if (/^mavlink_shell\s+'reboot'$/i.test(command)) return { type: "reboot" };
+    const modeMatch = command.match(/^mavlink_shell\s+'mode\s+([a-z0-9_]+)'$/i);
+    if (modeMatch) return { type: "set_mode", payload: { mode: String(modeMatch[1]).toUpperCase() } };
+    if (/^mavlink_shell\s+'servo set 9 2000'$/i.test(command)) return { type: "gripper_open" };
+    if (/^mavlink_shell\s+'servo set 9 1000'$/i.test(command)) return { type: "gripper_close" };
+    return null;
+  };
+
+  const resolveUnifiedCommand = (
+    rawType: string,
+    payload: Record<string, unknown>,
+  ): { type: string; payload: Record<string, unknown> } | null => {
+    const type = String(rawType || "").trim().toLowerCase();
+    if (!type) return null;
+
+    if (type === "terminal" || type === "terminal_command") {
+      const parsed = parseTerminalCommand(String(payload.command || ""));
+      return parsed ? { type: parsed.type, payload: parsed.payload || {} } : null;
+    }
+
+    if (type === "mission_start") return { type: "set_mode", payload: { mode: "AUTO" } };
+    if (type === "mission_stop") return { type: "set_mode", payload: { mode: "LAND" } };
+    if (type === "abort") return { type: "disarm", payload: {} };
+    if (type === "takeoff") {
+      const altitude = Number(payload.altitude ?? payload.targetAltitude ?? 20);
+      return { type: "takeoff", payload: { altitude: Number.isFinite(altitude) ? altitude : 20 } };
+    }
+    if (type === "rtl") return { type: "set_mode", payload: { mode: "RTL" } };
+    if (type === "land") return { type: "set_mode", payload: { mode: "LAND" } };
+    if (type === "loiter") return { type: "set_mode", payload: { mode: "LOITER" } };
+    if (type === "guided") return { type: "set_mode", payload: { mode: "GUIDED" } };
+    if (type === "auto") return { type: "set_mode", payload: { mode: "AUTO" } };
+    if (["arm", "disarm", "reboot", "gripper_open", "gripper_close", "set_mode", "takeoff"].includes(type)) {
+      return { type, payload };
+    }
+    return null;
+  };
+
+  const executeUnifiedCommand = async (opts: {
+    type: string;
+    payload: Record<string, unknown>;
+    connectionString: string;
+  }): Promise<CommandExecutionResult> => {
+    const type = String(opts.type || "").toLowerCase();
+    const payload = opts.payload || {};
+    const connectionString = String(opts.connectionString || "").trim();
+
+    if (type === "gripper_open" || type === "gripper_close") {
+      if (!isRaspberryPiRuntime()) {
+        return {
+          ok: false,
+          acknowledged: false,
+          error: "Gripper hardware command disabled when not running on onboard hardware",
+        };
+      }
+      const action = type === "gripper_open" ? "open" : "close";
+      const args = [path.join(SCRIPTS_DIR, "servo_control.py"), action, "--json"];
+      const run = await execCommand(PYTHON_EXEC, args);
+      if (!run.ok) {
+        return {
+          ok: false,
+          acknowledged: false,
+          error: run.stderr || run.stdout || "Servo command failed",
+        };
+      }
+      try {
+        const parsed = JSON.parse((run.stdout || "").trim() || "{}");
+        if (parsed?.success) {
+          return { ok: true, acknowledged: true, result: parsed };
+        }
+        return { ok: false, acknowledged: false, error: parsed?.error || "Servo command failed", result: parsed };
+      } catch {
+        return { ok: false, acknowledged: false, error: "Invalid servo response" };
+      }
+    }
+
+    if (!connectionString) {
+      return { ok: false, acknowledged: false, error: "connectionString is required" };
+    }
+
+    const mavAction =
+      type === "set_mode"
+        ? "set_mode"
+        : type === "arm"
+          ? "arm"
+          : type === "disarm"
+            ? "disarm"
+            : type === "reboot"
+              ? "reboot"
+              : type === "takeoff"
+                ? "takeoff"
+                : null;
+    if (!mavAction) {
+      return {
+        ok: false,
+        acknowledged: false,
+        error: `Unsupported command type: ${type}`,
+      };
+    }
+
+    const args = ["action", "--connection", connectionString, "--action", mavAction, "--timeout", "10"];
+    if (mavAction === "set_mode") {
+      const mode = String(payload.mode || "").trim().toUpperCase();
+      if (!mode) {
+        return { ok: false, acknowledged: false, error: "mode is required for set_mode" };
+      }
+      args.push("--mode", mode);
+    } else if (mavAction === "takeoff") {
+      const altitude = Number(payload.altitude ?? payload.targetAltitude ?? 20);
+      if (!Number.isFinite(altitude) || altitude <= 0) {
+        return { ok: false, acknowledged: false, error: "altitude must be a positive number for takeoff" };
+      }
+      args.push("--altitude", String(altitude));
+    }
+
+    const result = await runMavlinkVehicleControl(args);
+    if (!result.ok) {
+      return { ok: false, acknowledged: false, error: result.error || "Vehicle command failed", result: result.data };
+    }
+
+    const ack = result.data?.ack;
+    const acknowledged = ack !== null && ack !== undefined;
+    if (!acknowledged) {
+      return {
+        ok: false,
+        acknowledged: false,
+        error: "Vehicle did not provide ACK",
+        result: result.data,
+      };
+    }
+    return { ok: true, acknowledged: true, result: result.data };
+  };
+
+  const runMissionUploadBridge = async (connectionString: string, waypoints: any[]) => {
+    return await new Promise<{ ok: boolean; data?: any; error?: string }>((resolve) => {
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_mission.py"),
+        "upload",
+        "--connection",
+        connectionString,
+        "--timeout",
+        "14",
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.stdin.write(JSON.stringify({ waypoints }));
+      py.stdin.end();
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) return resolve({ ok: true, data: parsed });
+          return resolve({ ok: false, error: parsed?.error || err || "Mission upload failed" });
+        } catch {
+          return resolve({ ok: false, error: err || "Invalid mission bridge response" });
+        }
+      });
+    });
+  };
+
   interface AudioSystemState {
     deviceType: "gpio" | "usb" | "buzzer";
     deviceId: string;
@@ -1266,14 +1449,46 @@ export async function registerRoutes(
   app.use("/api/mavlink", requirePermission("flight_control"));
   app.use("/api/debug", requirePermission("system_settings"));
   app.use("/api/messages", requireAuth);
-  app.use("/api/settings", requirePermissionForWrites("system_settings"));
-  app.use("/api/missions", requirePermissionForWrites("mission_planning"));
-  app.use("/api/waypoints", requirePermissionForWrites("mission_planning"));
+  app.use("/api/chat-users", requireAuth);
+  app.use("/api/settings", requirePermission("system_settings"));
+  app.use("/api/missions", requirePermission("mission_planning"));
+  app.use("/api/waypoints", requirePermission("mission_planning"));
+  app.use("/api/flight-sessions", requirePermission("access_flight_recorder"));
+  app.use("/api/drones", requirePermission("view_map"));
   app.use("/api/drones", requirePermissionForWrites("system_settings"));
-  app.use("/api/media", requirePermissionForWrites("camera_control"));
-  app.use("/api/flight-logs", requirePermissionForWrites("access_flight_recorder"));
-  app.use("/api/motor-telemetry", requirePermissionForWrites("view_telemetry"));
-  app.use("/api/sensor-data", requirePermissionForWrites("view_telemetry"));
+  app.use("/api/airspace", requirePermission("view_map"));
+  app.use("/api/airspace", requirePermissionForWrites("manage_geofences"));
+  app.use("/api/mapping", requirePermission("view_map"));
+  app.use("/api/geocode", requirePermission("view_map"));
+  app.use("/api/reverse-geocode", requirePermission("view_map"));
+  app.use("/api/plugins", requirePermission("system_settings"));
+  app.use("/api/backup", requirePermission("system_settings"));
+  app.use("/api/drive", requirePermission("system_settings"));
+  app.use("/api/google", (req: any, res: any, next: any) => {
+    if (String(req.path || "") === "/callback") return next();
+    return requirePermission("system_settings")(req, res, next);
+  });
+  app.use("/api/connections", requirePermission("system_settings"));
+  app.use("/api/integrations", requirePermission("system_settings"));
+  app.use("/api/cloud/config", requirePermission("system_settings"));
+  app.use("/api/cloud/status", requirePermission("system_settings"));
+  app.use("/api/cloud/test", requirePermission("system_settings"));
+  app.use("/api/cloud/media", requirePermission("camera_control"));
+  app.use("/api/cloud/awareness", requirePermission("view_map"));
+  app.use("/api/cloud/telemetry/live", requirePermission("view_telemetry"));
+  app.use("/api/cloud/sync-all", requirePermission("system_settings"));
+  app.use("/api/cloud/admin-dashboard", requirePermission("system_settings"));
+  app.use("/api/backlog", requirePermission("view_telemetry"));
+  app.use("/api/commands", requirePermission("flight_control"));
+  app.use("/api/servo", requirePermission("flight_control"));
+  app.use("/api/stabilization", requirePermission("flight_control"));
+  app.use("/api/camera-settings", requirePermission("camera_control"));
+  app.use("/api/media", requirePermission("camera_control"));
+  app.use("/api/flight-logs", requirePermission("access_flight_recorder"));
+  app.use("/api/telemetry", requirePermission("view_telemetry"));
+  app.use("/api/bme688", requirePermission("view_telemetry"));
+  app.use("/api/motor-telemetry", requirePermission("view_telemetry"));
+  app.use("/api/sensor-data", requirePermission("view_telemetry"));
 
   // Audio control API (cross-platform with local fallbacks)
   app.get("/api/audio/status", async (_req, res) => {
@@ -1681,13 +1896,20 @@ export async function registerRoutes(
           return res.json({ success: true, command, pitch, yaw, output: stdout.trim(), hardware: true });
         }
 
-        pushDebugEvent("warn", "mavlink.command", "Gimbal command queued without MAVLink connection", {
+        pushDebugEvent("warn", "mavlink.command", "Gimbal command rejected without MAVLink connection", {
           command,
           hardware: false,
           pitch,
           yaw,
         });
-        return res.json({ success: true, command, pitch, yaw, hardware: false, message: "Gimbal command queued (no MAVLink connection)" });
+        return res.status(503).json({
+          success: false,
+          error: "MAVLink connection is required for gimbal control",
+          hardware: false,
+          command,
+          pitch,
+          yaw,
+        });
       }
 
       pushDebugEvent("warn", "mavlink.command", "Unknown command rejected", { command });
@@ -2785,6 +3007,234 @@ export async function registerRoutes(
       res.json({ success: true, result: result.data });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error?.message || "Manual control failed" });
+    }
+  });
+
+  app.post("/api/commands/dispatch", async (req: any, res) => {
+    try {
+      const session = req.serverSession as ServerSession | undefined;
+      if (!session) {
+        return res.status(401).json({ success: false, error: "Authentication required" });
+      }
+
+      const rawType = String(req.body?.commandType || req.body?.type || "").trim().toLowerCase();
+      const payload = req.body?.payload && typeof req.body.payload === "object" ? req.body.payload : {};
+      if (req.body?.command && !payload.command) {
+        (payload as any).command = String(req.body.command);
+      }
+      const resolved = resolveUnifiedCommand(rawType, payload);
+      if (!resolved) {
+        return res.status(400).json({
+          success: false,
+          error: "Unsupported command. This command is disabled until a safe backend implementation is available.",
+        });
+      }
+
+      const connectionString = String(req.body?.connectionString || payload.connectionString || "").trim();
+
+      const record = await commandService.dispatchAndWait(
+        {
+          type: resolved.type,
+          payload: {
+            ...resolved.payload,
+            connectionString,
+          },
+          timeoutMs: Number(req.body?.timeoutMs || 12000),
+          requestedBy: {
+            userId: session.userId,
+            role: session.role,
+            name: session.name,
+          },
+        },
+        async () =>
+          executeUnifiedCommand({
+            type: resolved.type,
+            payload: resolved.payload,
+            connectionString,
+          }),
+      );
+
+      if (record.status === "acked") {
+        void publishCloudRealtime("command_acked", record, { session }).catch(() => {});
+      } else {
+        void publishCloudRealtime("command_failed", record, { session }).catch(() => {});
+      }
+      void appendCloudDocument("command_history", record, { session }).catch(() => {});
+
+      return res.json({ success: record.status === "acked", command: record });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || "Command dispatch failed" });
+    }
+  });
+
+  app.get("/api/commands", async (req, res) => {
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit || 100)));
+    return res.json({ success: true, commands: commandService.list(limit) });
+  });
+
+  app.get("/api/commands/:id", async (req, res) => {
+    const command = commandService.get(String(req.params.id || "").trim());
+    if (!command) return res.status(404).json({ success: false, error: "Command not found" });
+    return res.json({ success: true, command });
+  });
+
+  app.post("/api/missions/:id/execute", async (req: any, res) => {
+    try {
+      const session = req.serverSession as ServerSession | undefined;
+      if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+
+      const missionId = String(req.params.id || "").trim();
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const armBeforeStart = req.body?.armBeforeStart === true;
+      if (!missionId) return res.status(400).json({ success: false, error: "mission id is required" });
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+
+      const mission = await storage.getMission(missionId);
+      if (!mission) return res.status(404).json({ success: false, error: "Mission not found" });
+      const waypoints = (await storage.getWaypointsByMission(missionId)).sort((a, b) => a.order - b.order);
+      if (!waypoints.length) return res.status(400).json({ success: false, error: "Mission has no waypoints" });
+
+      const validationErrors: string[] = [];
+      waypoints.forEach((wp, idx) => {
+        const n = idx + 1;
+        if (!Number.isFinite(Number(wp.latitude)) || Number(wp.latitude) < -90 || Number(wp.latitude) > 90) {
+          validationErrors.push(`WP ${n}: invalid latitude`);
+        }
+        if (!Number.isFinite(Number(wp.longitude)) || Number(wp.longitude) < -180 || Number(wp.longitude) > 180) {
+          validationErrors.push(`WP ${n}: invalid longitude`);
+        }
+        if (!Number.isFinite(Number(wp.altitude)) || Number(wp.altitude) < 0 || Number(wp.altitude) > 500) {
+          validationErrors.push(`WP ${n}: altitude must be 0..500m`);
+        }
+      });
+      if (validationErrors.length) {
+        return res.status(400).json({ success: false, error: "Mission validation failed", validationErrors });
+      }
+
+      const runId = `${Date.now()}-${randomBytes(4).toString("hex")}`;
+      const run: MissionRunRecord = {
+        id: runId,
+        missionId,
+        status: "uploading",
+        error: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        connectionString,
+        commandIds: [],
+      };
+      missionRuns.set(runId, run);
+      broadcast("mission_execution_update", run);
+
+      const uploadResult = await runMissionUploadBridge(
+        connectionString,
+        waypoints.map((wp) => ({
+          order: wp.order,
+          lat: wp.latitude,
+          lng: wp.longitude,
+          altitude: wp.altitude,
+          action: wp.action || "flythrough",
+          actionParams: wp.actionParams || {},
+        })),
+      );
+      if (!uploadResult.ok) {
+        run.status = "failed";
+        run.error = uploadResult.error || "Mission upload failed";
+        run.updatedAt = new Date().toISOString();
+        missionRuns.set(runId, run);
+        broadcast("mission_execution_update", run);
+        return res.status(500).json({ success: false, run });
+      }
+
+      if (armBeforeStart) {
+        run.status = "arming";
+        run.updatedAt = new Date().toISOString();
+        missionRuns.set(runId, run);
+        broadcast("mission_execution_update", run);
+        const armRecord = await commandService.dispatchAndWait(
+          {
+            type: "arm",
+            payload: { connectionString },
+            requestedBy: { userId: session.userId, role: session.role, name: session.name },
+            timeoutMs: 12000,
+          },
+          async () => executeUnifiedCommand({ type: "arm", payload: {}, connectionString }),
+        );
+        run.commandIds.push(armRecord.id);
+        if (armRecord.status !== "acked") {
+          run.status = "failed";
+          run.error = armRecord.error || "Failed to arm before mission start";
+          run.updatedAt = new Date().toISOString();
+          missionRuns.set(runId, run);
+          broadcast("mission_execution_update", run);
+          return res.status(500).json({ success: false, run, armCommand: armRecord });
+        }
+      }
+
+      run.status = "starting";
+      run.updatedAt = new Date().toISOString();
+      missionRuns.set(runId, run);
+      broadcast("mission_execution_update", run);
+      const startRecord = await commandService.dispatchAndWait(
+        {
+          type: "mission_start",
+          payload: { connectionString },
+          requestedBy: { userId: session.userId, role: session.role, name: session.name },
+          timeoutMs: 12000,
+        },
+        async () => executeUnifiedCommand({ type: "mission_start", payload: {}, connectionString }),
+      );
+      run.commandIds.push(startRecord.id);
+      if (startRecord.status !== "acked") {
+        run.status = "failed";
+        run.error = startRecord.error || "Failed to start mission";
+        run.updatedAt = new Date().toISOString();
+        missionRuns.set(runId, run);
+        broadcast("mission_execution_update", run);
+        return res.status(500).json({ success: false, run, startCommand: startRecord });
+      }
+
+      run.status = "running";
+      run.updatedAt = new Date().toISOString();
+      missionRuns.set(runId, run);
+      broadcast("mission_execution_update", run);
+      void appendCloudDocument("mission_runs", run, { session }).catch(() => {});
+      return res.json({ success: true, run });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || "Mission execution failed" });
+    }
+  });
+
+  app.get("/api/missions/runs/:runId", async (req, res) => {
+    const run = missionRuns.get(String(req.params.runId || "").trim());
+    if (!run) return res.status(404).json({ success: false, error: "Mission run not found" });
+    return res.json({ success: true, run });
+  });
+
+  app.post("/api/missions/runs/:runId/stop", async (req: any, res) => {
+    try {
+      const session = req.serverSession as ServerSession | undefined;
+      if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+      const run = missionRuns.get(String(req.params.runId || "").trim());
+      if (!run) return res.status(404).json({ success: false, error: "Mission run not found" });
+
+      const stopRecord = await commandService.dispatchAndWait(
+        {
+          type: "mission_stop",
+          payload: { connectionString: run.connectionString },
+          requestedBy: { userId: session.userId, role: session.role, name: session.name },
+          timeoutMs: 12000,
+        },
+        async () => executeUnifiedCommand({ type: "mission_stop", payload: {}, connectionString: run.connectionString }),
+      );
+      run.commandIds.push(stopRecord.id);
+      run.status = stopRecord.status === "acked" ? "stopped" : "failed";
+      run.error = stopRecord.status === "acked" ? null : stopRecord.error || "Failed to stop mission";
+      run.updatedAt = new Date().toISOString();
+      missionRuns.set(run.id, run);
+      broadcast("mission_execution_update", run);
+      return res.json({ success: stopRecord.status === "acked", run, stopCommand: stopRecord });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || "Mission stop failed" });
     }
   });
 
@@ -4111,40 +4561,57 @@ export async function registerRoutes(
 
   app.post("/api/plugins/:id/enable", async (req, res) => {
     try {
-      const id = String(req.params.id || "").trim();
+      const id = normalizePluginId(req.params.id);
       const enabled = req.body?.enabled !== false;
       const state = await readPluginState();
       state[id] = { enabled };
       await writePluginState(state);
       res.json({ success: true, id, enabled });
     } catch (error: any) {
+      if (String(error?.message || "").toLowerCase().includes("invalid plugin id")) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
       res.status(500).json({ success: false, error: error?.message || "Failed to update plugin state" });
     }
   });
 
   app.post("/api/plugins/:id/run-tool", async (req, res) => {
     try {
-      const id = String(req.params.id || "").trim();
+      const id = normalizePluginId(req.params.id);
       const toolId = String(req.body?.toolId || "").trim();
-      const argsRaw = String(req.body?.args || "").trim();
+      const userArgs = req.body?.args ?? [];
       const state = await readPluginState();
       if (state[id] && state[id].enabled === false) {
         return res.status(403).json({ success: false, error: "Plugin is disabled" });
       }
 
-      const manifestPath = path.join(PLUGINS_DIR, id, "plugin.json");
+      const pluginDir = path.resolve(PLUGINS_DIR, id);
+      if (!pluginDir.startsWith(`${path.resolve(PLUGINS_DIR)}${path.sep}`)) {
+        return res.status(400).json({ success: false, error: "Invalid plugin path" });
+      }
+
+      const manifestPath = path.join(pluginDir, "plugin.json");
       if (!existsSync(manifestPath)) return res.status(404).json({ success: false, error: "Plugin not found" });
       const raw = await readFile(manifestPath, "utf-8");
       const manifest = JSON.parse(raw);
       const tools = Array.isArray(manifest?.tools) ? manifest.tools : [];
       const tool = tools.find((t: any) => String(t?.id || "") === toolId);
-      if (!tool || !String(tool.command || "").trim()) {
+      if (!tool || !String(tool.exec || tool.command || "").trim()) {
         return res.status(404).json({ success: false, error: "Tool not found in plugin manifest" });
       }
 
-      // Command comes from local plugin manifest; args are appended as plain text.
-      const cmd = `${String(tool.command).trim()}${argsRaw ? ` ${argsRaw}` : ""}`;
-      const proc = spawn("/bin/zsh", ["-lc", cmd], { cwd: process.cwd(), env: process.env });
+      const spawnSpec = buildPluginToolSpawnSpec({
+        pluginsDir: PLUGINS_DIR,
+        pluginId: id,
+        tool,
+        userArgs,
+      });
+
+      const proc = spawn(spawnSpec.command, spawnSpec.args, {
+        cwd: spawnSpec.cwd,
+        env: process.env,
+        shell: false,
+      });
       let out = "";
       let err = "";
       proc.stdout.on("data", (d: Buffer) => (out += d.toString()));
@@ -4160,17 +4627,23 @@ export async function registerRoutes(
         });
       });
     } catch (error: any) {
+      const msg = String(error?.message || "");
+      if (
+        msg.toLowerCase().includes("invalid plugin id") ||
+        msg.toLowerCase().includes("path escapes plugin directory") ||
+        msg.toLowerCase().includes("legacy shell command tools are disabled") ||
+        msg.toLowerCase().includes("allowlisted")
+      ) {
+        return res.status(400).json({ success: false, error: msg });
+      }
       res.status(500).json({ success: false, error: error?.message || "Failed to run plugin tool" });
     }
   });
 
   app.post("/api/plugins/sdk/create-template", async (req, res) => {
     try {
-      const id = String(req.body?.id || "").trim().toLowerCase();
+      const id = normalizePluginId(String(req.body?.id || "").trim().toLowerCase());
       const name = String(req.body?.name || "").trim();
-      if (!id || !/^[a-z0-9_-]+$/.test(id)) {
-        return res.status(400).json({ success: false, error: "id is required (a-z0-9_-)" });
-      }
       const pluginDir = path.join(PLUGINS_DIR, id);
       const toolsDir = path.join(pluginDir, "tools");
       if (existsSync(pluginDir)) return res.status(409).json({ success: false, error: "plugin id already exists" });
@@ -4183,7 +4656,9 @@ export async function registerRoutes(
           {
             id: "hello",
             name: "Hello Tool",
-            command: `bash plugins/${id}/tools/hello.sh`,
+            exec: "bash",
+            args: ["tools/hello.sh"],
+            allowUserArgs: false,
           },
         ],
       };
@@ -4199,20 +4674,22 @@ export async function registerRoutes(
         "utf-8",
       );
       try {
-        const proc = spawn("/bin/zsh", ["-lc", `chmod +x ${path.join(toolsDir, "hello.sh")}`], { cwd: process.cwd(), env: process.env });
-        proc.on("close", () => {});
+        await chmod(path.join(toolsDir, "hello.sh"), 0o755);
       } catch {
         // best effort
       }
       res.json({ success: true, id, pluginDir });
     } catch (error: any) {
+      if (String(error?.message || "").toLowerCase().includes("invalid plugin id")) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
       res.status(500).json({ success: false, error: error?.message || "Failed to create plugin template" });
     }
   });
 
   app.post("/api/plugins/sdk/validate", async (req, res) => {
     try {
-      const id = String(req.body?.id || "").trim();
+      const id = normalizePluginId(req.body?.id);
       if (!id) return res.status(400).json({ success: false, error: "id is required" });
       const pluginDir = path.join(PLUGINS_DIR, id);
       const manifestPath = path.join(pluginDir, "plugin.json");
@@ -4227,28 +4704,32 @@ export async function registerRoutes(
       if (!tools.length) warnings.push("no tools defined");
       for (const tool of tools) {
         const tid = String(tool?.id || "").trim();
-        const cmd = String(tool?.command || "").trim();
+        const exec = String(tool?.exec || "").trim();
         if (!tid) errors.push("tool id missing");
-        if (!cmd) errors.push(`tool ${tid || "<unknown>"} missing command`);
+        if (!exec) errors.push(`tool ${tid || "<unknown>"} missing exec`);
       }
       res.json({ success: errors.length === 0, id, errors, warnings, toolCount: tools.length });
     } catch (error: any) {
+      if (String(error?.message || "").toLowerCase().includes("invalid plugin id")) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
       res.status(500).json({ success: false, error: error?.message || "Plugin validation failed" });
     }
   });
 
   app.post("/api/plugins/sdk/package", async (req, res) => {
     try {
-      const id = String(req.body?.id || "").trim();
+      const id = normalizePluginId(req.body?.id);
       if (!id) return res.status(400).json({ success: false, error: "id is required" });
       const pluginDir = path.join(PLUGINS_DIR, id);
       if (!existsSync(pluginDir)) return res.status(404).json({ success: false, error: "plugin not found" });
       const outDir = path.resolve(process.cwd(), "data", "plugins");
       mkdirSync(outDir, { recursive: true });
       const archivePath = path.join(outDir, `${id}-${Date.now()}.tar.gz`);
-      const proc = spawn("/bin/zsh", ["-lc", `tar -czf "${archivePath}" -C "${PLUGINS_DIR}" "${id}"`], {
+      const proc = spawn("tar", ["-czf", archivePath, "-C", PLUGINS_DIR, id], {
         cwd: process.cwd(),
         env: process.env,
+        shell: false,
       });
       let err = "";
       proc.stderr.on("data", (d: Buffer) => (err += d.toString()));
@@ -4259,6 +4740,9 @@ export async function registerRoutes(
         return res.json({ success: true, id, archivePath });
       });
     } catch (error: any) {
+      if (String(error?.message || "").toLowerCase().includes("invalid plugin id")) {
+        return res.status(400).json({ success: false, error: error.message });
+      }
       res.status(500).json({ success: false, error: error?.message || "Plugin packaging failed" });
     }
   });
@@ -4364,51 +4848,70 @@ export async function registerRoutes(
     }
   });
 
-  // Authentication: Create server-side session on login
-  // SECURITY MODEL: This GCS is designed for closed network deployment with trusted team members.
-  // Users are managed client-side (localStorage). The server validates that:
-  // 1. Login requests generate cryptographically secure session tokens (256-bit entropy)
-  // 2. Session tokens are required for WebSocket DM routing
-  // 3. Session tokens are required for admin-only API endpoints
-  // For internet-facing deployments, implement server-side credential validation.
+  // Authentication: Create server-side session from server-validated credentials.
   app.post("/api/auth/login", async (req, res) => {
     try {
-      const { userId, username, role, name } = req.body;
-      const normalizedRole = ["admin", "operator", "viewer"].includes(String(role || "").toLowerCase())
-        ? String(role).toLowerCase()
-        : "viewer";
-      
-      // Generate a secure session token
+      const username = String(req.body?.username || "").trim();
+      const password = String(req.body?.password || "");
+      if (!username || !password) {
+        return res.status(400).json({ success: false, error: "username and password are required" });
+      }
+
+      const authenticated = authenticateWithPassword(username, password);
+      if (!authenticated) {
+        return res.status(401).json({ success: false, error: "Invalid username or password" });
+      }
+
       const sessionToken = generateSessionToken();
-      
-      // Store session on server
       activeSessions.set(sessionToken, {
-        userId,
-        role: normalizedRole,
-        name: name || username || 'Unknown',
-        createdAt: Date.now()
+        userId: authenticated.id,
+        role: authenticated.role,
+        name: authenticated.fullName || authenticated.username,
+        createdAt: Date.now(),
       });
+
       void appendCloudDocument("operator_actions", {
         action: "login",
-        userId,
-        username: username || null,
-        role: normalizedRole,
+        userId: authenticated.id,
+        username: authenticated.username,
+        role: authenticated.role,
         at: new Date().toISOString(),
       }, {
-        session: { userId, role: normalizedRole, name: name || username || "Unknown" },
+        session: { userId: authenticated.id, role: authenticated.role, name: authenticated.fullName || authenticated.username },
         visibility: "admin",
       }).catch(() => {});
-      
-      console.log(`User ${name} (${userId}) logged in with role: ${normalizedRole}`);
-      
-      res.json({ 
-        success: true, 
+
+      console.log(`User ${authenticated.fullName} (${authenticated.id}) logged in with role: ${authenticated.role}`);
+
+      res.json({
+        success: true,
         sessionToken,
-        message: 'Login successful' 
+        user: authenticated,
+        message: "Login successful",
       });
     } catch (error) {
       res.status(500).json({ error: "Login failed" });
     }
+  });
+
+  app.get("/api/auth/session", requireAuth, async (req: any, res) => {
+    const session = req.serverSession as ServerSession;
+    if (!session) {
+      return res.status(401).json({ success: false, error: "Authentication required" });
+    }
+    const fullUser = getAuthenticatedUserById(session.userId);
+    if (!fullUser) {
+      return res.status(401).json({ success: false, error: "Session user no longer exists" });
+    }
+    return res.json({
+      success: true,
+      user: fullUser,
+      session: {
+        userId: session.userId,
+        role: session.role,
+        name: session.name,
+      },
+    });
   });
 
   // Authentication: Logout - invalidate session
@@ -5487,37 +5990,90 @@ export async function registerRoutes(
 
   app.post("/api/backlog/sync", async (req, res) => {
     try {
-      const { items } = req.body;
+      const items = req.body?.items;
       
       if (!Array.isArray(items)) {
         return res.status(400).json({ error: "Items must be an array" });
       }
       
-      const results = [];
+      const results: Array<{ id: string | null; clientRequestId: string | null; status: "synced" | "failed" | "duplicate"; error?: string }> = [];
       for (const item of items) {
+        const itemId = typeof item?.id === "string" ? item.id : null;
+        let validatedItem: any;
         try {
-          if (item.dataType === "telemetry") {
-            await storage.createFlightLog(item.data);
-            void appendCloudDocument("flight_logs", item.data, { session: requestSession(req) }).catch(() => {});
-          } else if (item.dataType === "sensor") {
-            await storage.createSensorData(item.data);
-            void appendCloudDocument("sensor_data", item.data, { session: requestSession(req) }).catch(() => {});
-          } else if (item.dataType === "media") {
-            await storage.createMediaAsset(item.data);
-            void appendCloudDocument("media_assets", item.data, { session: requestSession(req) }).catch(() => {});
+          validatedItem = insertOfflineBacklogSchema.parse(item);
+        } catch (error: any) {
+          const validationError =
+            error instanceof ZodError
+              ? fromError(error).toString()
+              : error?.message || "Invalid backlog item payload";
+          results.push({
+            id: itemId,
+            clientRequestId: null,
+            status: "failed",
+            error: validationError,
+          });
+          continue;
+        }
+
+        let clientRequestId: string | null = null;
+        try {
+          clientRequestId = normalizeClientRequestId(validatedItem?.clientRequestId ?? itemId);
+        } catch (error: any) {
+          results.push({
+            id: itemId,
+            clientRequestId: null,
+            status: "failed",
+            error: error?.message || "Invalid clientRequestId",
+          });
+          continue;
+        }
+
+        const existing = offlineSyncIdempotency.get(clientRequestId);
+        if (existing && existing.status === "synced") {
+          results.push({ id: itemId, clientRequestId, status: "duplicate" });
+          continue;
+        }
+
+        try {
+          const dataType = String(validatedItem?.dataType || "").trim().toLowerCase();
+          if (dataType === "telemetry") {
+            await storage.createFlightLog(validatedItem.data);
+            void appendCloudDocument("flight_logs", validatedItem.data, { session: requestSession(req) }).catch(() => {});
+          } else if (dataType === "sensor") {
+            await storage.createSensorData(validatedItem.data);
+            void appendCloudDocument("sensor_data", validatedItem.data, { session: requestSession(req) }).catch(() => {});
+          } else if (dataType === "media") {
+            await storage.createMediaAsset(validatedItem.data);
+            void appendCloudDocument("media_assets", validatedItem.data, { session: requestSession(req) }).catch(() => {});
+          } else if (dataType === "event") {
+            void appendCloudDocument(
+              "flight_events",
+              {
+                sessionId: validatedItem?.data?.sessionId || null,
+                eventType: String(validatedItem?.data?.eventType || "offline_event"),
+                eventData: validatedItem?.data || {},
+                recordedAt: validatedItem?.recordedAt || new Date().toISOString(),
+              },
+              { session: requestSession(req) },
+            ).catch(() => {});
+          } else {
+            throw new Error(`Unsupported backlog dataType: ${dataType || "unknown"}`);
           }
           
-          if (item.id) {
-            await storage.markBacklogSynced(item.id);
-            void deleteCloudDocument("offline_backlog", item.id).catch(() => {});
+          if (itemId) {
+            await storage.markBacklogSynced(itemId);
+            void deleteCloudDocument("offline_backlog", itemId).catch(() => {});
           }
-          results.push({ id: item.id, status: "synced" });
+          offlineSyncIdempotency.set(clientRequestId, { status: "synced" });
+          results.push({ id: itemId, clientRequestId, status: "synced" });
         } catch (err: any) {
-          results.push({ id: item.id, status: "failed", error: err.message });
+          offlineSyncIdempotency.set(clientRequestId, { status: "failed", error: err?.message || "sync failed" });
+          results.push({ id: itemId, clientRequestId, status: "failed", error: err?.message || "sync failed" });
         }
       }
       
-      broadcast("backlog_synced", { count: results.filter(r => r.status === "synced").length });
+      broadcast("backlog_synced", { count: results.filter(r => r.status === "synced" || r.status === "duplicate").length });
       res.json({ success: true, results });
     } catch (error) {
       res.status(500).json({ error: "Failed to sync backlog" });
@@ -5557,14 +6113,16 @@ export async function registerRoutes(
   // User Messages API (Team Communication)
   app.get("/api/messages", async (req, res) => {
     try {
-      const userId = req.query.userId as string | undefined;
-      // Server-side filtering: if userId provided, filter to only show:
-      // - Broadcast messages (no recipientId)
-      // - Messages sent by the user
-      // - Messages where user is recipient
-      const messages = userId 
-        ? await storage.getMessagesForUser(userId)
-        : await storage.getAllMessages();
+      const session = (req as any).serverSession as ServerSession | undefined;
+      if (!session) return res.status(401).json({ error: "Authentication required" });
+
+      const isAdmin = String(session.role || "").toLowerCase() === "admin";
+      const scopeAll = isAdmin && String(req.query.scope || "").toLowerCase() === "all";
+      const requestedUserId = String(req.query.userId || "").trim();
+
+      const messages = scopeAll
+        ? await storage.getAllMessages()
+        : await storage.getMessagesForUser(requestedUserId && isAdmin ? requestedUserId : session.userId);
       res.json(messages);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch messages" });
@@ -5584,10 +6142,8 @@ export async function registerRoutes(
   // Security: Validates admin role from server-side session store
   app.get("/api/messages/history", async (req, res) => {
     try {
-      // Validate session token from header against server session store
-      const sessionToken = req.headers['x-session-token'] as string | undefined;
-      const session = validateSession(sessionToken);
-      let isAdmin = session?.role === 'admin';
+      const session = (req as any).serverSession as ServerSession | undefined;
+      let isAdmin = session?.role === "admin";
       
       // Also allow if ADMIN_API_KEY is provided (for API access)
       const adminKey = process.env.ADMIN_API_KEY;
@@ -5609,22 +6165,46 @@ export async function registerRoutes(
 
   app.post("/api/messages", async (req, res) => {
     try {
-      const { senderId, senderName, senderRole, content, recipientId, recipientName } = req.body;
-      if (!senderId || !senderName || !senderRole || !content) {
+      const session = (req as any).serverSession as ServerSession | undefined;
+      if (!session) return res.status(401).json({ error: "Authentication required" });
+
+      const content = String(req.body?.content || "").trim();
+      if (!content) {
         return res.status(400).json({ error: "Missing required fields" });
       }
-      const message = await storage.createMessage({ 
-        senderId, 
-        senderName, 
-        senderRole, 
+
+      const rawRecipients = Array.isArray(req.body?.recipients) ? req.body.recipients : [];
+      const normalizedRecipients = rawRecipients
+        .map((entry: any) => ({
+          id: String(entry?.id || "").trim(),
+          name: String(entry?.name || entry?.id || "").trim(),
+          type: String(entry?.type || "user") === "group" ? "group" : "user",
+        }))
+        .filter((entry: any) => entry.id && entry.type === "user" && entry.id !== session.userId);
+
+      const legacyRecipientId = String(req.body?.recipientId || "").trim();
+      const legacyRecipientName = String(req.body?.recipientName || legacyRecipientId || "").trim();
+      if (legacyRecipientId && !normalizedRecipients.some((entry: any) => entry.id === legacyRecipientId)) {
+        normalizedRecipients.push({ id: legacyRecipientId, name: legacyRecipientName || legacyRecipientId, type: "user" });
+      }
+
+      const recipients = normalizedRecipients.length ? normalizedRecipients : null;
+      const recipientId = recipients && recipients.length === 1 ? recipients[0].id : null;
+      const recipientName = recipients && recipients.length === 1 ? recipients[0].name : null;
+
+      const message = await storage.createMessage({
+        senderId: session.userId,
+        senderName: session.name,
+        senderRole: session.role,
         content,
-        recipientId: recipientId || null,
-        recipientName: recipientName || null
+        recipientId,
+        recipientName,
+        recipients,
       });
       smartBroadcast("new_message", message);
       void syncCloudDocument("messages", message.id, message, {
-        session: requestSession(req),
-        visibility: message.recipientId ? "dm" : "shared",
+        session,
+        visibility: message.recipientId || (Array.isArray(message.recipients) && message.recipients.length > 0) ? "dm" : "shared",
         recipientId: message.recipientId || null,
         recipientName: message.recipientName || null,
       }).catch(() => {});
@@ -5646,10 +6226,23 @@ export async function registerRoutes(
 
   app.patch("/api/messages/:id", async (req, res) => {
     try {
-      const { content } = req.body;
+      const session = (req as any).serverSession as ServerSession | undefined;
+      if (!session) return res.status(401).json({ error: "Authentication required" });
+
+      const content = String(req.body?.content || "").trim();
       if (!content) {
         return res.status(400).json({ error: "Content required" });
       }
+
+      const existing = await storage.getMessageById(req.params.id);
+      if (!existing) {
+        return res.status(404).json({ error: "Message not found" });
+      }
+      const isAdmin = String(session.role || "").toLowerCase() === "admin";
+      if (!isAdmin && existing.senderId !== session.userId) {
+        return res.status(403).json({ error: "Only sender or admin can edit messages" });
+      }
+
       const message = await storage.updateMessage(req.params.id, content);
       if (!message) {
         return res.status(404).json({ error: "Message not found" });
@@ -5657,8 +6250,8 @@ export async function registerRoutes(
       // Use smartBroadcast for DM privacy
       smartBroadcast("message_updated", message);
       void syncCloudDocument("messages", message.id, message, {
-        session: requestSession(req),
-        visibility: message.recipientId ? "dm" : "shared",
+        session,
+        visibility: message.recipientId || (Array.isArray(message.recipients) && message.recipients.length > 0) ? "dm" : "shared",
         recipientId: message.recipientId || null,
         recipientName: message.recipientName || null,
       }).catch(() => {});
@@ -5680,15 +6273,26 @@ export async function registerRoutes(
 
   app.delete("/api/messages/:id", async (req, res) => {
     try {
-      // Get message first to know who should receive the delete notification
-      const messages = await storage.getAllMessages();
-      const msg = messages.find(m => m.id === req.params.id);
-      
-      await storage.deleteMessage(req.params.id);
+      const session = (req as any).serverSession as ServerSession | undefined;
+      if (!session) return res.status(401).json({ error: "Authentication required" });
+
+      const msg = await storage.getMessageById(req.params.id);
+      if (!msg) return res.status(404).json({ error: "Message not found" });
+      const isAdmin = String(session.role || "").toLowerCase() === "admin";
+      if (!isAdmin && msg.senderId !== session.userId) {
+        return res.status(403).json({ error: "Only sender or admin can delete messages" });
+      }
+
+      await storage.deleteMessage(req.params.id, session.userId);
       
       // Use smartBroadcast for DM privacy
       if (msg) {
-        smartBroadcast("message_deleted", { id: req.params.id, senderId: msg.senderId, recipientId: msg.recipientId });
+        smartBroadcast("message_deleted", {
+          id: req.params.id,
+          senderId: msg.senderId,
+          recipientId: msg.recipientId,
+          recipients: Array.isArray(msg.recipients) ? msg.recipients : null,
+        });
       } else {
         broadcast("message_deleted", { id: req.params.id });
       }
@@ -5711,6 +6315,10 @@ export async function registerRoutes(
 
   app.post("/api/messages/sync", async (req, res) => {
     try {
+      const session = (req as any).serverSession as ServerSession | undefined;
+      if (!session || !hasServerPermission(session, "user_management")) {
+        return res.status(403).json({ error: "Admin or user management permissions required" });
+      }
       const messages = req.body;
       if (!Array.isArray(messages)) {
         return res.status(400).json({ error: "Messages array required" });
@@ -5753,9 +6361,9 @@ export async function registerRoutes(
         queuedAt: nowIso,
         expiresAt: new Date(Date.now() + ttlSec * 1000).toISOString(),
         issuedBy: {
-          userId: session?.userId || "preview",
-          name: session?.name || "Preview User",
-          role: session?.role || "admin",
+          userId: session!.userId,
+          name: session!.name,
+          role: session!.role,
         },
       };
 
@@ -6228,7 +6836,13 @@ export async function registerRoutes(
         if (visibility === "shared") return true;
         if (visibility === "admin") return false;
         if (visibility === "dm") {
-          return m.senderId === session.userId || m.recipientId === session.userId;
+          const recipients = Array.isArray(m?.recipients)
+            ? m.recipients
+                .filter((entry: any) => entry?.type === "user")
+                .map((entry: any) => String(entry.id || "").trim())
+                .filter(Boolean)
+            : [];
+          return m.senderId === session.userId || m.recipientId === session.userId || recipients.includes(session.userId);
         }
         return true;
       });
@@ -6557,20 +7171,13 @@ export async function registerRoutes(
       const isRaspberryPi = process.env.DEVICE_ROLE === 'ONBOARD' || 
                            existsSync('/sys/firmware/devicetree/base/model');
       
-      // Helper to return simulated response
-      const returnSimulated = () => {
-        return res.json({ 
-          success: true, 
-          simulated: true,
-          action,
-          angle: action === 'open' ? 180 : action === 'close' ? 0 : angle,
-          message: `Gripper ${action} (simulated - not on Raspberry Pi)`
-        });
-      };
-      
-      // If not on Pi, return simulation
+      // If not on Pi, reject to avoid false-positive command execution.
       if (!isRaspberryPi) {
-        return returnSimulated();
+        return res.status(503).json({
+          success: false,
+          error: "Servo control requires onboard hardware runtime",
+          action,
+        });
       }
       
       // On Pi, try to call Python script
@@ -6595,8 +7202,11 @@ export async function registerRoutes(
       python.on('error', (err) => {
         if (!responded) {
           responded = true;
-          // Python not available, return simulated
-          returnSimulated();
+          return res.status(500).json({
+            success: false,
+            error: "Servo control bridge failed to start",
+            details: err?.message || String(err),
+          });
         }
       });
       

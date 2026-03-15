@@ -432,46 +432,28 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          senderId: session.user.id,
-          senderName: session.user.username,
-          senderRole: session.user.role,
           content: messageContent,
           recipientId,
           recipientName,
           recipients // New multi-recipient field
         })
       });
-      
-      if (res.ok) {
-        const message = await res.json();
-        setMessages(prev => {
-          if (prev.some(m => m.id === message.id)) return prev;
-          const updated = [...prev, message];
-          return updated.length > 200 ? updated.slice(-200) : updated;
-        });
-        setNewMessage(""); // Clear message but KEEP selectedRecipients (persistent)
-        setTimeout(() => scrollRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+
+      if (!res.ok) {
+        const errPayload = await res.json().catch(() => ({}));
+        throw new Error(errPayload?.error || "Message send failed");
       }
-    } catch (e) {
-      // Offline fallback - create local message
-      const message: UserMessage = {
-        id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        senderId: session.user.id,
-        senderName: session.user.username,
-        senderRole: session.user.role,
-        recipientId,
-        recipientName,
-        recipients,
-        content: messageContent,
-        timestamp: new Date().toISOString(),
-        editedAt: null,
-        deleted: false
-      };
+
+      const message = await res.json();
       setMessages(prev => {
+        if (prev.some(m => m.id === message.id)) return prev;
         const updated = [...prev, message];
         return updated.length > 200 ? updated.slice(-200) : updated;
       });
       setNewMessage(""); // Clear message but KEEP selectedRecipients (persistent)
+      setTimeout(() => scrollRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+    } catch {
+      toast.error("Message send failed");
     }
   };
 
@@ -484,16 +466,16 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: editContent.trim() })
       });
-      
-      if (res.ok) {
-        const updated = await res.json();
-        setMessages(prev => prev.map(m => m.id === id ? updated : m));
+
+      if (!res.ok) {
+        const errPayload = await res.json().catch(() => ({}));
+        throw new Error(errPayload?.error || "Message update failed");
       }
-    } catch (e) {
-      // Offline fallback
-      setMessages(prev => prev.map(m => 
-        m.id === id ? { ...m, content: editContent.trim(), editedAt: new Date().toISOString() } : m
-      ));
+
+      const updated = await res.json();
+      setMessages(prev => prev.map(m => m.id === id ? updated : m));
+    } catch {
+      toast.error("Message update failed");
     }
     
     setEditingId(null);
@@ -502,9 +484,13 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
 
   const deleteMessage = async (id: string) => {
     try {
-      await fetch(`/api/messages/${id}`, { method: 'DELETE' });
-    } catch (e) {
-      // Ignore errors - update locally anyway
+      const res = await fetch(`/api/messages/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        throw new Error();
+      }
+    } catch {
+      toast.error("Message delete failed");
+      return;
     }
     setMessages(prev => prev.map(m => 
       m.id === id ? { ...m, deleted: true, content: "[Message deleted]" } : m
@@ -534,8 +520,20 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     return () => window.removeEventListener('drone-selected' as any, handleDroneChange);
   }, []);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    const sessionToken = localStorage.getItem('mouse_gcs_session_token');
+    if (sessionToken) {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { 'X-Session-Token': sessionToken },
+        });
+      } catch {
+        // best-effort logout; local session is still cleared below
+      }
+    }
     localStorage.removeItem('mouse_gcs_session');
+    localStorage.removeItem('mouse_gcs_session_token');
     localStorage.removeItem('mouse_selected_drone');
     setSession({ user: null, isLoggedIn: false });
     setSelectedDrone(null);

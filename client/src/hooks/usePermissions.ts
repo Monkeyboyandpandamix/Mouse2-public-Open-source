@@ -34,14 +34,6 @@ const defaultRolePermissions: RolePermissions = {
   viewer: ["view_telemetry", "view_map", "view_camera"]
 };
 
-function mergeRolePermissions(saved: RolePermissions): RolePermissions {
-  const merged: RolePermissions = { ...saved };
-  for (const role of Object.keys(defaultRolePermissions)) {
-    merged[role] = Array.from(new Set([...(saved[role] || []), ...defaultRolePermissions[role]]));
-  }
-  return merged;
-}
-
 export function usePermissions() {
   const [session, setSession] = useState<Session>(() => {
     const saved = localStorage.getItem('mouse_gcs_session');
@@ -55,21 +47,7 @@ export function usePermissions() {
     return { user: null, isLoggedIn: false };
   });
 
-  const [rolePermissions, setRolePermissions] = useState<RolePermissions>(() => {
-    const saved = localStorage.getItem('mouse_gcs_role_permissions');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        const merged = mergeRolePermissions(parsed);
-        // Update localStorage with merged permissions
-        localStorage.setItem('mouse_gcs_role_permissions', JSON.stringify(merged));
-        return merged;
-      } catch {
-        return defaultRolePermissions;
-      }
-    }
-    return defaultRolePermissions;
-  });
+  const rolePermissions: RolePermissions = defaultRolePermissions;
 
   useEffect(() => {
     const handleSessionChange = (e: CustomEvent<Session>) => {
@@ -80,11 +58,6 @@ export function usePermissions() {
       if (e.key === 'mouse_gcs_session' && e.newValue) {
         try {
           setSession(JSON.parse(e.newValue));
-        } catch {}
-      }
-      if (e.key === 'mouse_gcs_role_permissions' && e.newValue) {
-        try {
-          setRolePermissions(JSON.parse(e.newValue));
         } catch {}
       }
     };
@@ -111,7 +84,7 @@ export function usePermissions() {
 
   const hasPermission = useCallback((permissionId: string): boolean => {
     if (!session.isLoggedIn || !session.user) {
-      return true;
+      return false;
     }
 
     const userRole = session.user.role;
@@ -129,12 +102,12 @@ export function usePermissions() {
   }, [hasPermission]);
 
   const isAdmin = useCallback((): boolean => {
-    if (!session.isLoggedIn || !session.user) return true;
+    if (!session.isLoggedIn || !session.user) return false;
     return session.user?.role === 'admin';
   }, [session]);
 
   const isOperator = useCallback((): boolean => {
-    if (!session.isLoggedIn || !session.user) return true;
+    if (!session.isLoggedIn || !session.user) return false;
     return session.user?.role === 'operator';
   }, [session]);
 
@@ -151,7 +124,7 @@ export function usePermissions() {
   }, [session]);
 
   const getUserPermissions = useCallback((): string[] => {
-    if (!session.user) return rolePermissions['admin'] || [];
+    if (!session.user) return [];
     return rolePermissions[session.user.role] || [];
   }, [session, rolePermissions]);
 

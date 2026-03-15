@@ -1,10 +1,11 @@
 import { Button } from "@/components/ui/button";
 import { Hand, ArrowUpCircle, ArrowDownCircle, Power, AlertOctagon, Navigation, Zap, Lock, Circle, Route } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
 import { apiRequest } from "@/lib/queryClient";
+import { dispatchBackendCommand } from "@/lib/commandService";
 
 interface BaseLocation {
   lat: number;
@@ -47,17 +48,30 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
     gamepadDevice: "none",
     joystickDeadzone: "5",
   });
+  const supportsTakeoff = true;
   const flightStartTime = useRef<Date | null>(null);
   const maxAltitudeRef = useRef<number>(0);
   const totalDistanceRef = useRef<number>(0);
   const lastPositionRef = useRef<{lat: number, lng: number} | null>(null);
   const gamepadArmLatchRef = useRef(false);
+  const gamepadBusyRef = useRef(false);
 
   // Get current drone ID from localStorage
   const getCurrentDroneId = () => {
     const saved = localStorage.getItem('mouse_selected_drone');
     return saved ? JSON.parse(saved)?.id : 'default';
   };
+
+  const dispatchCommand = useCallback(
+    async (commandType: string, payload: Record<string, unknown> = {}) => {
+      return dispatchBackendCommand({
+        commandType,
+        payload,
+        requireConnection: !["gripper_open", "gripper_close", "terminal", "terminal_command"].includes(commandType),
+      });
+    },
+    [],
+  );
 
   // Start flight session automatically on takeoff
   const startFlightSession = async () => {
@@ -204,11 +218,21 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
       if (!gp) return;
 
       const armButtonPressed = Boolean(gp.buttons?.[0]?.pressed);
-      if (armButtonPressed && !gamepadArmLatchRef.current && canArmDisarm) {
+      if (armButtonPressed && !gamepadArmLatchRef.current && canArmDisarm && !gamepadBusyRef.current) {
+        gamepadBusyRef.current = true;
         const newArmed = !isArmed;
-        setIsArmed(newArmed);
-        localStorage.setItem("mouse_drone_armed", JSON.stringify(newArmed));
-        window.dispatchEvent(new CustomEvent("arm-state-changed", { detail: { armed: newArmed, source: "gamepad" } }));
+        void dispatchCommand(newArmed ? "arm" : "disarm")
+          .then(() => {
+            setIsArmed(newArmed);
+            localStorage.setItem("mouse_drone_armed", JSON.stringify(newArmed));
+            window.dispatchEvent(new CustomEvent("arm-state-changed", { detail: { armed: newArmed, source: "gamepad" } }));
+          })
+          .catch((error) => {
+            toast.error(error instanceof Error ? error.message : "Gamepad arm/disarm failed");
+          })
+          .finally(() => {
+            gamepadBusyRef.current = false;
+          });
       }
       gamepadArmLatchRef.current = armButtonPressed;
 
@@ -220,25 +244,32 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
       const throttleAxis = applyDeadzone(gp.axes?.[3] ?? 0);
       if (!rollAxis && !pitchAxis && !yawAxis && !throttleAxis) return;
 
-      window.dispatchEvent(
-        new CustomEvent("flight-command", {
-          detail: {
-            command: "stabilize_adjust",
-            source: "gamepad",
-            corrections: {
-              roll: rollAxis * 2.2,
-              pitch: -pitchAxis * 2.2,
-              yaw: yawAxis * 2.6,
-              throttle: -throttleAxis * 0.8,
-              forward: -pitchAxis * 0.5,
-              lateral: rollAxis * 0.5,
-            },
-          },
+      const selectedDroneRaw = localStorage.getItem("mouse_selected_drone");
+      let connectionString = "";
+      if (selectedDroneRaw) {
+        try {
+          connectionString = String(JSON.parse(selectedDroneRaw)?.connectionString || "").trim();
+        } catch {
+          connectionString = "";
+        }
+      }
+      if (!connectionString) return;
+      void fetch("/api/mavlink/manual-control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          connectionString,
+          x: Math.round(rollAxis * 400),
+          y: Math.round(-pitchAxis * 400),
+          z: Math.round(500 + (-throttleAxis * 250)),
+          r: Math.round(yawAxis * 400),
+          buttons: 0,
+          durationMs: 200,
         }),
-      );
+      });
     }, 140);
     return () => window.clearInterval(timer);
-  }, [inputConfig, isArmed, canArmDisarm, canFlightControl]);
+  }, [inputConfig, isArmed, canArmDisarm, canFlightControl, dispatchCommand]);
 
   // Load custom widgets from localStorage
   useEffect(() => {
@@ -288,16 +319,20 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
 
   const executeWidgetCommand = (widget: CustomWidget) => {
     if (widget.command) {
-      toast.success(`Executing: ${widget.command}`);
-      // In real implementation, this would send command to backend
-      window.dispatchEvent(new CustomEvent('execute-command', { detail: { command: widget.command } }));
+      void dispatchCommand("terminal", { command: widget.command })
+        .then(() => {
+          toast.success(`Executed: ${widget.name}`);
+        })
+        .catch((error) => {
+          toast.error(error instanceof Error ? error.message : "Command execution failed");
+        });
     }
   };
 
   // Filter widgets for current page
   const pageWidgets = customWidgets.filter(w => w.targetPage === activeTab);
 
-  const handleReturnToBase = () => {
+  const handleReturnToBase = async () => {
     if (!canFlightControl) {
       toast.error("You don't have flight control permission");
       return;
@@ -310,10 +345,15 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
       toast.error("System must be armed to return to base");
       return;
     }
-    setIsReturning(true);
-    toast.success(`Returning to base: ${baseLocation.name} (${baseLocation.lat.toFixed(4)}, ${baseLocation.lng.toFixed(4)})`);
-    window.dispatchEvent(new CustomEvent('flight-command', { detail: { command: 'rtl', target: baseLocation } }));
-    setTimeout(() => setIsReturning(false), 3000);
+    try {
+      setIsReturning(true);
+      await dispatchCommand("rtl");
+      toast.success(`Returning to base: ${baseLocation.name} (${baseLocation.lat.toFixed(4)}, ${baseLocation.lng.toFixed(4)})`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to send RTL command");
+    } finally {
+      setIsReturning(false);
+    }
   };
 
   // Show restricted view for users without control permissions
@@ -353,15 +393,20 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
               : "bg-emerald-500/10 border-emerald-500 text-emerald-500 hover:bg-emerald-500/20 hover:text-emerald-500"
           )}
           disabled={!canArmDisarm}
-          onClick={() => {
+          onClick={async () => {
             if (!canArmDisarm) {
               toast.error("You don't have permission to arm/disarm");
               return;
             }
             const newArmed = !isArmed;
-            setIsArmed(newArmed);
-            localStorage.setItem('mouse_drone_armed', JSON.stringify(newArmed));
-            window.dispatchEvent(new CustomEvent('arm-state-changed', { detail: { armed: newArmed } }));
+            try {
+              await dispatchCommand(newArmed ? "arm" : "disarm");
+              setIsArmed(newArmed);
+              localStorage.setItem('mouse_drone_armed', JSON.stringify(newArmed));
+              window.dispatchEvent(new CustomEvent('arm-state-changed', { detail: { armed: newArmed } }));
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : "Arm/disarm command failed");
+            }
           }}
           data-testid="button-arm-toggle"
         >
@@ -380,15 +425,23 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
               "h-full flex flex-col gap-1 hover:bg-primary/20 hover:text-primary transition-colors p-2",
               !canFlightControl && "opacity-50 cursor-not-allowed"
             )}
-            disabled={!isArmed || !canFlightControl}
+            disabled={!isArmed || !canFlightControl || !supportsTakeoff}
             onClick={async () => {
               if (!canFlightControl) {
                 toast.error("You don't have flight control permission");
                 return;
               }
-              toast.success("Initiating takeoff sequence...");
-              window.dispatchEvent(new CustomEvent('flight-command', { detail: { command: 'takeoff' } }));
-              await startFlightSession();
+              if (!supportsTakeoff) {
+                toast.error("Takeoff command is disabled until a safe backend takeoff path is configured");
+                return;
+              }
+              try {
+                await dispatchCommand("takeoff");
+                toast.success("Initiating takeoff sequence...");
+                await startFlightSession();
+              } catch (error) {
+                toast.error(error instanceof Error ? error.message : "Takeoff failed");
+              }
             }}
             data-testid="button-takeoff"
           >
@@ -424,9 +477,13 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
                 toast.error("You don't have flight control permission");
                 return;
               }
-              toast.success("Initiating landing sequence...");
-              window.dispatchEvent(new CustomEvent('flight-command', { detail: { command: 'land' } }));
-              await endFlightSession();
+              try {
+                await dispatchCommand("land");
+                toast.success("Initiating landing sequence...");
+                await endFlightSession();
+              } catch (error) {
+                toast.error(error instanceof Error ? error.message : "Landing command failed");
+              }
             }}
             data-testid="button-land"
           >
@@ -442,16 +499,20 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
               !canFlightControl && "opacity-50 cursor-not-allowed"
             )}
             disabled={!canFlightControl}
-            onClick={() => {
+            onClick={async () => {
               if (!canFlightControl) {
                 toast.error("You don't have flight control permission");
                 return;
               }
-              toast.error("EMERGENCY STOP ACTIVATED - Motors killed!", { duration: 5000 });
-              window.dispatchEvent(new CustomEvent('flight-command', { detail: { command: 'abort' } }));
-              setIsArmed(false);
-              localStorage.setItem('mouse_drone_armed', JSON.stringify(false));
-              window.dispatchEvent(new CustomEvent('arm-state-changed', { detail: { armed: false } }));
+              try {
+                await dispatchCommand("abort");
+                toast.error("EMERGENCY STOP ACTIVATED - Motors killed!", { duration: 5000 });
+                setIsArmed(false);
+                localStorage.setItem('mouse_drone_armed', JSON.stringify(false));
+                window.dispatchEvent(new CustomEvent('arm-state-changed', { detail: { armed: false } }));
+              } catch (error) {
+                toast.error(error instanceof Error ? error.message : "Abort command failed");
+              }
             }}
             data-testid="button-abort"
           >
@@ -466,13 +527,17 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
               !canFlightControl && "opacity-50 cursor-not-allowed"
             )}
             disabled={!isArmed || !canFlightControl}
-            onClick={() => {
+            onClick={async () => {
               if (!canFlightControl) {
                 toast.error("You don't have flight control permission");
                 return;
               }
-              toast.info("Starting GPS-denied backtrace");
-              window.dispatchEvent(new CustomEvent('flight-command', { detail: { command: 'backtrace' } }));
+              try {
+                await dispatchCommand("rtl");
+                toast.info("Backtrace requested (mapped to RTL)");
+              } catch (error) {
+                toast.error(error instanceof Error ? error.message : "Backtrace command failed");
+              }
             }}
             data-testid="button-backtrace"
           >
@@ -501,28 +566,14 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
             
             setGripperLoading(true);
             const newState = !gripperOpen;
-            const action = newState ? 'open' : 'close';
+            const action = newState ? "gripper_open" : "gripper_close";
             
             try {
-              const res = await fetch('/api/servo/control', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action })
-              });
-              
-              if (res.ok) {
-                const data = await res.json();
-                setGripperOpen(newState);
-                toast.success(data.message || `Gripper ${action}ed`);
-                window.dispatchEvent(new CustomEvent('flight-command', { 
-                  detail: { command: 'gripper', action } 
-                }));
-              } else {
-                const err = await res.json();
-                toast.error(err.error || 'Gripper control failed');
-              }
+              await dispatchCommand(action);
+              setGripperOpen(newState);
+              toast.success(newState ? "Gripper opened" : "Gripper closed");
             } catch (e) {
-              toast.error('Gripper control failed - check connection');
+              toast.error(e instanceof Error ? e.message : "Gripper control failed");
             } finally {
               setGripperLoading(false);
             }

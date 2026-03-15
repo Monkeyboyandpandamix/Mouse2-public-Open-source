@@ -48,8 +48,8 @@ export function AutoStabilizationController() {
       }
     };
 
-    const onFlightCommand = (e: CustomEvent<{ command: string }>) => {
-      const command = e.detail?.command;
+    const onCommandAck = (e: CustomEvent<{ commandType?: string; command?: { type?: string } }>) => {
+      const command = String(e.detail?.commandType || e.detail?.command?.type || "").trim().toLowerCase();
       if (command === "takeoff" || command === "rtl") {
         holdAltitudeRef.current = telemetryRef.current.altitude ?? 20;
       }
@@ -77,14 +77,14 @@ export function AutoStabilizationController() {
     };
 
     window.addEventListener("arm-state-changed" as any, onArm);
-    window.addEventListener("flight-command" as any, onFlightCommand);
+    window.addEventListener("command-acked" as any, onCommandAck);
     window.addEventListener("telemetry-update" as any, onTelemetry);
     window.addEventListener("tracking-update" as any, onTracking);
     window.addEventListener("obstacle-update" as any, onObstacle);
 
     return () => {
       window.removeEventListener("arm-state-changed" as any, onArm);
-      window.removeEventListener("flight-command" as any, onFlightCommand);
+      window.removeEventListener("command-acked" as any, onCommandAck);
       window.removeEventListener("telemetry-update" as any, onTelemetry);
       window.removeEventListener("tracking-update" as any, onTracking);
       window.removeEventListener("obstacle-update" as any, onObstacle);
@@ -204,7 +204,7 @@ export function AutoStabilizationController() {
       }
 
       window.dispatchEvent(
-        new CustomEvent("flight-command", {
+        new CustomEvent("stabilizer-command", {
           detail: {
             command: "stabilize_adjust",
             source: "ai_stabilizer",

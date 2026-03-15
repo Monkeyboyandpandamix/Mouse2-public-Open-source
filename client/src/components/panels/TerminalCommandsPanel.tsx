@@ -28,9 +28,10 @@ import {
   Plus,
   Trash2
 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
+import { dispatchBackendCommand } from "@/lib/commandService";
 import { Lock } from "lucide-react";
 
 interface SystemCommand {
@@ -876,16 +877,29 @@ export function TerminalCommandsPanel() {
     toast.success("Command saved");
   };
 
-  const handleExecute = (cmd: SystemCommand) => {
-    const log = {
-      command: cmd.command,
-      timestamp: new Date().toISOString(),
-      status: 'executed'
-    };
-    setExecutionLog(prev => [log, ...prev].slice(0, 50));
-    setCommands(prev => prev.map(c => c.id === cmd.id ? { ...c, lastExecuted: log.timestamp } : c));
-    toast.success(`Executed: ${cmd.name}`);
-  };
+  const handleExecute = useCallback(async (cmd: SystemCommand) => {
+    const timestamp = new Date().toISOString();
+    setExecutionLog(prev => [{ command: cmd.command, timestamp, status: 'queued' }, ...prev].slice(0, 50));
+
+    try {
+      const command = await dispatchBackendCommand({
+        commandType: "terminal",
+        payload: { command: cmd.command },
+        timeoutMs: 15000,
+      });
+      setExecutionLog((prev) =>
+        [{ command: cmd.command, timestamp: new Date().toISOString(), status: String(command?.status || "acked") }, ...prev].slice(0, 50),
+      );
+
+      setCommands(prev => prev.map(c => c.id === cmd.id ? { ...c, lastExecuted: new Date().toISOString() } : c));
+      toast.success(`Executed: ${cmd.name}`);
+    } catch (error) {
+      setExecutionLog((prev) =>
+        [{ command: cmd.command, timestamp: new Date().toISOString(), status: "failed" }, ...prev].slice(0, 50),
+      );
+      toast.error(error instanceof Error ? error.message : "Command execution failed");
+    }
+  }, []);
 
   // Allow custom widget buttons to trigger terminal commands by command string.
   useEffect(() => {
@@ -909,7 +923,7 @@ export function TerminalCommandsPanel() {
 
     window.addEventListener('execute-command' as any, handleExternalExecute);
     return () => window.removeEventListener('execute-command' as any, handleExternalExecute);
-  }, [commands]);
+  }, [commands, handleExecute]);
 
   const handleCopy = (cmd: string) => {
     navigator.clipboard.writeText(cmd);

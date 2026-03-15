@@ -133,9 +133,9 @@ export function GpsDeniedNavigationController() {
       lastVioRef.current = e.detail;
     };
 
-    const onFlightCommand = (e: CustomEvent<{ command?: string }>) => {
+    const onNavCommand = (e: CustomEvent<{ command?: string }>) => {
       const cmd = e.detail?.command;
-      if (cmd === "backtrace" && breadcrumbsRef.current.length > 1) {
+      if ((cmd === "backtrace" || cmd === "backtrace_request") && breadcrumbsRef.current.length > 1) {
         backtraceIndexRef.current = breadcrumbsRef.current.length - 2;
         backtraceLastStepTsRef.current = 0;
       }
@@ -146,11 +146,11 @@ export function GpsDeniedNavigationController() {
 
     window.addEventListener("telemetry-update" as any, onTelemetry);
     window.addEventListener("visual-odometry-update" as any, onVisualOdom);
-    window.addEventListener("flight-command" as any, onFlightCommand);
+    window.addEventListener("ml-nav-command" as any, onNavCommand);
     return () => {
       window.removeEventListener("telemetry-update" as any, onTelemetry);
       window.removeEventListener("visual-odometry-update" as any, onVisualOdom);
-      window.removeEventListener("flight-command" as any, onFlightCommand);
+      window.removeEventListener("ml-nav-command" as any, onNavCommand);
     };
   }, []);
 
@@ -231,7 +231,7 @@ export function GpsDeniedNavigationController() {
         const target = breadcrumbsRef.current[idx];
         if (target) {
           window.dispatchEvent(
-            new CustomEvent("flight-command", {
+            new CustomEvent("ml-nav-guidance", {
               detail: {
                 command: "guided-waypoint",
                 source: "gps_denied_backtrace",

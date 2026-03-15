@@ -116,14 +116,14 @@ export function ARHudOverlay({ visible, gimbalPitch = -45, gimbalYaw = 0, detect
   }, [handleTelemetry]);
 
   useEffect(() => {
-    const handleFlightCmd = (e: Event) => {
-      const cmd = (e as CustomEvent).detail;
-      if (cmd?.command) {
-        setTelemetry(prev => ({ ...prev, flightMode: cmd.command.toUpperCase() }));
-      }
+    const handleCommandAck = (e: Event) => {
+      const detail = (e as CustomEvent).detail || {};
+      const cmd = String(detail.commandType || detail.command?.type || "").trim();
+      if (!cmd) return;
+      setTelemetry((prev) => ({ ...prev, flightMode: cmd.toUpperCase() }));
     };
-    window.addEventListener("flight-command", handleFlightCmd);
-    return () => window.removeEventListener("flight-command", handleFlightCmd);
+    window.addEventListener("command-acked", handleCommandAck);
+    return () => window.removeEventListener("command-acked", handleCommandAck);
   }, []);
 
   if (!visible) return null;
