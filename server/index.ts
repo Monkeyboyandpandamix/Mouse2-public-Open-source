@@ -25,7 +25,7 @@ app.use(
 app.use(express.urlencoded({ extended: false }));
 
 async function ensureRuntimeDependencies() {
-  const pythonExec = process.env.PYTHON_PATH ?? "/usr/bin/python3";
+  const pythonExec = process.env.PYTHON_PATH ?? "python3";
   const scriptPath = path.resolve(process.cwd(), "scripts", "runtime_bootstrap.py");
   await new Promise<void>((resolve) => {
     const proc = spawn(pythonExec, [scriptPath], {

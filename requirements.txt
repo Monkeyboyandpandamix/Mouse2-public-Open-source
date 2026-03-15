@@ -19,3 +19,6 @@ piexif
 #
 # Raspberry Pi 5: lgpio required for Blinka/GPIO (board module)
 # pip install lgpio
+piexif
+Pillow
+pymavlink
