@@ -722,11 +722,15 @@ export async function registerRoutes(
 
   const getEffectiveCloudConfig = async () => {
     const runtime = sanitizeCloudConfig(await readCloudRuntimeConfig());
+    const runningInCloud =
+      Boolean(process.env.K_SERVICE) ||
+      Boolean(process.env.GOOGLE_CLOUD_PROJECT) ||
+      String(process.env.PORT || "") === "8080";
     const hardcoded = {
       projectId: HARDCODED_FIREBASE_PROJECT.projectId || null,
       databaseURL: HARDCODED_FIREBASE_PROJECT.databaseURL || null,
       storageBucket: HARDCODED_FIREBASE_PROJECT.storageBucket || null,
-      serviceAccountPath: HARDCODED_FIREBASE_PROJECT.serviceAccountPath || null,
+      serviceAccountPath: runningInCloud ? null : (HARDCODED_FIREBASE_PROJECT.serviceAccountPath || null),
       serviceAccountJson: null,
       serviceAccountBase64: null,
     };
@@ -5904,6 +5908,7 @@ export async function registerRoutes(
 
   app.get("/api/cloud/config", async (_req, res) => {
     const effective = await getEffectiveCloudConfig();
+    const serviceAccountPathExists = Boolean(effective.serviceAccountPath && existsSync(effective.serviceAccountPath));
     res.json({
       success: true,
       projectId: effective.projectId || "",
@@ -5912,7 +5917,7 @@ export async function registerRoutes(
       serviceAccountPath: effective.serviceAccountPath || "",
       hasServiceAccountJson: Boolean(effective.serviceAccountJson),
       hasServiceAccountBase64: Boolean(effective.serviceAccountBase64),
-      hasServiceAccountPath: Boolean(effective.serviceAccountPath),
+      hasServiceAccountPath: serviceAccountPathExists,
       source: effective.source,
     });
   });
@@ -5965,6 +5970,7 @@ export async function registerRoutes(
 
   app.get("/api/cloud/status", async (_req, res) => {
     const effective = await getEffectiveCloudConfig();
+    const serviceAccountPathExists = Boolean(effective.serviceAccountPath && existsSync(effective.serviceAccountPath));
     res.json({
       enabled: cloudSyncEnabled(),
       projectId: effective.projectId || null,
@@ -5973,8 +5979,9 @@ export async function registerRoutes(
       hasServiceAccount: Boolean(
         effective.serviceAccountJson ||
         effective.serviceAccountBase64 ||
-        effective.serviceAccountPath
+        serviceAccountPathExists
       ),
+      serviceAccountPathExists,
       source: effective.source,
       lastDebugProbeAt: lastCloudHealthProbeAt,
       lastDebugProbeSuccess: lastCloudHealthProbe?.success ?? null,
@@ -6099,7 +6106,12 @@ export async function registerRoutes(
         const probe = await runCloudHealthProbe();
         lastCloudHealthProbe = probe;
         lastCloudHealthProbeAt = probe.checkedAt;
-        pushDebugEvent(probe.success ? "success" : (probe.degraded ? "warn" : "error"), "debug.system", "System debug probe completed", probe);
+        pushDebugEvent(
+          probe.success ? "success" : (probe.degraded ? "warn" : "error"),
+          "debug.system",
+          probe.success ? "System debug probe passed" : "System debug probe failed",
+          probe,
+        );
       }
 
       const levelCounts = debugEvents.reduce<Record<string, number>>((acc, evt) => {
@@ -6176,7 +6188,12 @@ export async function registerRoutes(
       const probe = await runCloudHealthProbe();
       lastCloudHealthProbe = probe;
       lastCloudHealthProbeAt = probe.checkedAt;
-      pushDebugEvent(probe.success ? "success" : (probe.degraded ? "warn" : "error"), "debug.system", "Manual system debug probe completed", probe);
+      pushDebugEvent(
+        probe.success ? "success" : (probe.degraded ? "warn" : "error"),
+        "debug.system",
+        probe.success ? "Manual system debug probe passed" : "Manual system debug probe failed",
+        probe,
+      );
       res.json({ success: true, probe });
     } catch (error: any) {
       pushDebugEvent("error", "debug.system", "Manual system debug probe failed", {

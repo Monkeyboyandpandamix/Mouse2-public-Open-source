@@ -35,11 +35,15 @@ function getConfigValue<K extends keyof RuntimeCloudConfig>(key: K, envKey: stri
   const v = runtime[key];
   if (typeof v === "string" && v.trim().length > 0) return v;
 
+  const runningInCloud =
+    Boolean(process.env.K_SERVICE) ||
+    Boolean(process.env.GOOGLE_CLOUD_PROJECT) ||
+    String(process.env.PORT || "") === "8080";
   const hardcodedMap: Partial<Record<keyof RuntimeCloudConfig, string | undefined>> = {
     projectId: HARDCODED_FIREBASE_PROJECT.projectId,
     databaseURL: HARDCODED_FIREBASE_PROJECT.databaseURL,
     storageBucket: HARDCODED_FIREBASE_PROJECT.storageBucket,
-    serviceAccountPath: HARDCODED_FIREBASE_PROJECT.serviceAccountPath,
+    serviceAccountPath: runningInCloud ? undefined : HARDCODED_FIREBASE_PROJECT.serviceAccountPath,
   };
   const fallback = hardcodedMap[key];
   return typeof fallback === "string" && fallback.trim().length > 0 ? fallback : undefined;

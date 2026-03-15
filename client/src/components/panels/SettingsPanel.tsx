@@ -833,6 +833,7 @@ function FullDebugManager() {
               {probe?.firestore?.ok ? "Connected" : "Error"}
             </p>
             <p className="text-xs text-muted-foreground">Latency: {probe?.firestore?.latencyMs ?? "-"} ms</p>
+            {probe?.firestore?.error && <p className="text-xs text-destructive">{probe.firestore.error}</p>}
           </div>
           <div className="p-3 rounded-lg bg-muted/30 space-y-1">
             <p className="text-xs text-muted-foreground">Realtime Database</p>
@@ -841,6 +842,7 @@ function FullDebugManager() {
               {probe?.realtimeDatabase?.ok ? "Connected" : "Error"}
             </p>
             <p className="text-xs text-muted-foreground">Latency: {probe?.realtimeDatabase?.latencyMs ?? "-"} ms</p>
+            {probe?.realtimeDatabase?.error && <p className="text-xs text-destructive">{probe.realtimeDatabase.error}</p>}
           </div>
           <div className="p-3 rounded-lg bg-muted/30 space-y-1">
             <p className="text-xs text-muted-foreground">Cloud Storage</p>
@@ -849,8 +851,14 @@ function FullDebugManager() {
               {probe?.storage?.ok ? "Connected" : "Error"}
             </p>
             <p className="text-xs text-muted-foreground">Latency: {probe?.storage?.latencyMs ?? "-"} ms</p>
+            {probe?.storage?.error && <p className="text-xs text-destructive">{probe.storage.error}</p>}
           </div>
         </div>
+        {probe?.error && (
+          <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-xs text-destructive">
+            {probe.error}
+          </div>
+        )}
 
         <div className="p-3 rounded-lg bg-muted/30 space-y-2">
           <p className="text-sm font-medium">Command Dispatch</p>
