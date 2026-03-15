@@ -1105,51 +1105,86 @@ export function VideoFeed() {
     setPanY(0);
   };
 
-  const sendGimbalCommand = useCallback(async (pitch: number, yaw: number) => {
+  const getActiveConnectionString = useCallback(() => {
+    const selectedDroneRaw = localStorage.getItem("mouse_selected_drone");
+    if (!selectedDroneRaw) return "";
     try {
-      await fetch('/api/mavlink/command', {
+      return String(JSON.parse(selectedDroneRaw)?.connectionString || "").trim();
+    } catch {
+      return "";
+    }
+  }, []);
+
+  const sendGimbalCommand = useCallback(async (
+    pitch: number,
+    yaw: number,
+    options?: { silent?: boolean },
+  ): Promise<boolean> => {
+    const clampedPitch = Math.max(-90, Math.min(30, pitch));
+    const clampedYaw = Math.max(-180, Math.min(180, yaw));
+    const connectionString = getActiveConnectionString();
+    if (!connectionString) {
+      if (!options?.silent) toast.error("No active drone connection configured");
+      return false;
+    }
+
+    try {
+      const response = await fetch('/api/mavlink/command', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          connectionString,
           command: 'gimbal_control',
-          params: { pitch: Math.max(-90, Math.min(30, pitch)), yaw: Math.max(-180, Math.min(180, yaw)) }
+          params: { pitch: clampedPitch, yaw: clampedYaw }
         }),
       });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || "Gimbal command failed");
+      }
       window.dispatchEvent(new CustomEvent('gimbal-update', {
-        detail: { pitch, yaw, timestamp: Date.now() }
+        detail: { pitch: clampedPitch, yaw: clampedYaw, timestamp: Date.now() }
       }));
-    } catch {}
-  }, []);
+      return true;
+    } catch (error: any) {
+      if (!options?.silent) {
+        toast.error(error?.message || "Gimbal command failed");
+      }
+      return false;
+    }
+  }, [getActiveConnectionString]);
 
-  const handleGimbalUp = useCallback(() => {
+  const handleGimbalUp = useCallback(async () => {
     const newPitch = Math.min(30, gimbalPitch + 10);
-    setGimbalPitch(newPitch);
-    sendGimbalCommand(newPitch, gimbalYaw);
+    const ok = await sendGimbalCommand(newPitch, gimbalYaw);
+    if (ok) setGimbalPitch(newPitch);
   }, [gimbalPitch, gimbalYaw, sendGimbalCommand]);
 
-  const handleGimbalDown = useCallback(() => {
+  const handleGimbalDown = useCallback(async () => {
     const newPitch = Math.max(-90, gimbalPitch - 10);
-    setGimbalPitch(newPitch);
-    sendGimbalCommand(newPitch, gimbalYaw);
+    const ok = await sendGimbalCommand(newPitch, gimbalYaw);
+    if (ok) setGimbalPitch(newPitch);
   }, [gimbalPitch, gimbalYaw, sendGimbalCommand]);
 
-  const handleGimbalLeft = useCallback(() => {
+  const handleGimbalLeft = useCallback(async () => {
     const newYaw = Math.max(-180, gimbalYaw - 15);
-    setGimbalYaw(newYaw);
-    sendGimbalCommand(gimbalPitch, newYaw);
+    const ok = await sendGimbalCommand(gimbalPitch, newYaw);
+    if (ok) setGimbalYaw(newYaw);
   }, [gimbalPitch, gimbalYaw, sendGimbalCommand]);
 
-  const handleGimbalRight = useCallback(() => {
+  const handleGimbalRight = useCallback(async () => {
     const newYaw = Math.min(180, gimbalYaw + 15);
-    setGimbalYaw(newYaw);
-    sendGimbalCommand(gimbalPitch, newYaw);
+    const ok = await sendGimbalCommand(gimbalPitch, newYaw);
+    if (ok) setGimbalYaw(newYaw);
   }, [gimbalPitch, gimbalYaw, sendGimbalCommand]);
 
-  const handleGimbalCenter = useCallback(() => {
-    setGimbalPitch(-45);
-    setGimbalYaw(0);
-    sendGimbalCommand(-45, 0);
-    toast.info("Gimbal centered (-45° pitch)");
+  const handleGimbalCenter = useCallback(async () => {
+    const ok = await sendGimbalCommand(-45, 0);
+    if (ok) {
+      setGimbalPitch(-45);
+      setGimbalYaw(0);
+      toast.info("Gimbal centered (-45° pitch)");
+    }
   }, [sendGimbalCommand]);
 
   const toggleAutoFollow = useCallback(() => {
@@ -1177,9 +1212,15 @@ export function VideoFeed() {
       const offsetY = (objCenterY - frameCenterY) / frameCenterY;
       const newYaw = Math.max(-180, Math.min(180, gimbalYaw + offsetX * 8));
       const newPitch = Math.max(-90, Math.min(30, gimbalPitch - offsetY * 5));
-      setGimbalYaw(newYaw);
-      setGimbalPitch(newPitch);
-      sendGimbalCommand(newPitch, newYaw);
+      void sendGimbalCommand(newPitch, newYaw, { silent: true }).then((ok) => {
+        if (!ok) {
+          setGimbalAutoFollow(false);
+          toast.error("Auto-follow stopped: gimbal command failed");
+          return;
+        }
+        setGimbalYaw(newYaw);
+        setGimbalPitch(newPitch);
+      });
       window.dispatchEvent(new CustomEvent('tracking-update', {
         detail: {
           trackingActive: true,

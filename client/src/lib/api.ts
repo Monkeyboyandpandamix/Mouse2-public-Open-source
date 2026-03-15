@@ -1,28 +1,13 @@
-import { queryClient } from "./queryClient";
+import { apiRequest as requestResponse } from "./queryClient";
 
 export async function apiRequest<T>(
   method: string,
   url: string,
-  data?: any
+  data?: any,
 ): Promise<T> {
-  const options: RequestInit = {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-    },
-  };
-
-  if (data) {
-    options.body = JSON.stringify(data);
-  }
-
-  const response = await fetch(url, options);
-
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
-  }
-
-  return response.json();
+  const response = await requestResponse(method, url, data);
+  if (response.status === 204) return undefined as T;
+  return (await response.json()) as T;
 }
 
 // Settings helpers

@@ -3,6 +3,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { AutoStabilizationController } from "@/components/controls/AutoStabilizationController";
 import { MLStabilizationEngine } from "@/components/controls/MLStabilizationEngine";
+import { StabilizationActuatorBridge } from "@/components/controls/StabilizationActuatorBridge";
 import { EmergencyProtocolController } from "@/components/controls/EmergencyProtocolController";
 import { GpsDeniedNavigationController } from "@/components/navigation/GpsDeniedNavigationController";
 import { MLNavigationEngine } from "@/components/navigation/MLNavigationEngine";
@@ -131,7 +132,7 @@ function CameraFeedView({ label, sublabel }: { label: string; sublabel: string; 
       <div className="absolute inset-0 flex flex-col">
         <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
         <div className="absolute top-1 left-2 text-[10px] font-mono text-green-400 bg-black/60 px-1.5 py-0.5 rounded">
-          {label} - LIVE
+          {label} - LOCAL PREVIEW
         </div>
         <button
           onClick={stopFeed}
@@ -148,10 +149,11 @@ function CameraFeedView({ label, sublabel }: { label: string; sublabel: string; 
     <div className="text-center text-muted-foreground">
       <p className="text-base sm:text-lg font-mono">{label}</p>
       <p className="text-[10px] sm:text-xs">{sublabel}</p>
+      <p className="text-[10px] sm:text-xs text-amber-300 mt-1">Browser local camera preview (not drone RTSP/WebRTC feed)</p>
       {error && <p className="text-[10px] text-red-400 mt-1">{error}</p>}
       <Button size="sm" variant="outline" className="mt-2" onClick={startFeed} data-testid={`button-start-feed-${label.toLowerCase().replace(/\s/g, "-")}`}>
         <Camera className="h-3 w-3 mr-1" />
-        Connect Camera
+        Connect Local Camera
       </Button>
     </div>
   );
@@ -204,10 +206,8 @@ export default function Home() {
 
   // Preview mode state (for skipping drone selection) - must be before conditional returns
   const [previewMode, setPreviewMode] = useState(false);
-  
-  // Onboard mode (running on Raspberry Pi) - must be before conditional returns
-  const [isOnboard, setIsOnboard] = useState(false);
-  const [runtimeConfigLoaded, setRuntimeConfigLoaded] = useState(false);
+  const isOnboard = deviceContext.isOnboard;
+  const runtimeConfigLoaded = deviceContext.runtimeConfigLoaded;
   const [mappingStatus, setMappingStatus] = useState<Mapping3DStatus>({
     active: true,
     framesCaptured: 0,
@@ -265,7 +265,7 @@ export default function Home() {
       const next = String(e.detail?.tabId || "").trim();
       if (!next) return;
       if (MOVED_TO_SETTINGS_TABS.has(next)) {
-        const target = next === "vehiclesetup" ? "modesetup" : next;
+        const target = next;
         localStorage.setItem("mouse_settings_advanced_target", target);
         window.dispatchEvent(new CustomEvent("settings-advanced-target", { detail: { target } }));
         setActiveTab("settings");
@@ -279,7 +279,7 @@ export default function Home() {
 
   useEffect(() => {
     if (MOVED_TO_SETTINGS_TABS.has(activeTab)) {
-      const target = activeTab === "vehiclesetup" ? "modesetup" : activeTab;
+      const target = activeTab;
       localStorage.setItem("mouse_settings_advanced_target", target);
       window.dispatchEvent(new CustomEvent("settings-advanced-target", { detail: { target } }));
       setActiveTab("settings");
@@ -301,57 +301,43 @@ export default function Home() {
     };
   }, [isLoggedIn]);
 
-  // Fetch runtime config to detect if running on Pi
   useEffect(() => {
-    fetch('/api/runtime-config')
-      .then(res => res.json())
-      .then(config => {
-        setIsOnboard(config.isOnboard);
-        setRuntimeConfigLoaded(true);
-        
-        // If running on Pi, auto-create and select local drone
-        if (config.isOnboard && !selectedDrone) {
-          const onboardDrone: Drone = {
-            id: "onboard-local",
-            name: "Local Drone",
-            callsign: "ONBOARD",
-            model: "M.O.U.S.E",
-            status: "offline",
-            connectionType: "mavlink",
-            connectionString: config.mavlinkDefaults?.connectionString || "/dev/ttyACM0",
-            latitude: 36.0957,
-            longitude: -79.4378,
-            altitude: 0,
-            heading: 0,
-            batteryPercent: 100,
-            signalStrength: 0,
-            gpsStatus: "no_fix",
-            currentMissionId: null,
-            currentWaypointIndex: null,
-            geofenceEnabled: false,
-            geofenceData: null,
-            motorCount: 4,
-            hasGripper: true,
-            hasCamera: true,
-            hasThermal: true,
-            hasLidar: true,
-            maxSpeed: 15,
-            maxAltitude: 120,
-            rtlAltitude: 50,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            lastSeen: null,
-          };
-          setSelectedDrone(onboardDrone);
-          localStorage.setItem("mouse_selected_drone", JSON.stringify(onboardDrone));
-          // Dispatch event so all components know a drone is selected
-          window.dispatchEvent(new CustomEvent("drone-selected", { detail: onboardDrone }));
-        }
-      })
-      .catch(() => {
-        setRuntimeConfigLoaded(true); // Continue even if fetch fails
-      });
-  }, []);
+    if (!runtimeConfigLoaded || !isOnboard || selectedDrone) return;
+    const onboardDrone: Drone = {
+      id: "onboard-local",
+      name: "Local Drone",
+      callsign: "ONBOARD",
+      model: "M.O.U.S.E",
+      status: "offline",
+      connectionType: "mavlink",
+      connectionString: "/dev/ttyACM0",
+      latitude: 36.0957,
+      longitude: -79.4378,
+      altitude: 0,
+      heading: 0,
+      batteryPercent: 100,
+      signalStrength: 0,
+      gpsStatus: "no_fix",
+      currentMissionId: null,
+      currentWaypointIndex: null,
+      geofenceEnabled: false,
+      geofenceData: null,
+      motorCount: 4,
+      hasGripper: true,
+      hasCamera: true,
+      hasThermal: true,
+      hasLidar: true,
+      maxSpeed: 15,
+      maxAltitude: 120,
+      rtlAltitude: 50,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      lastSeen: null,
+    };
+    setSelectedDrone(onboardDrone);
+    localStorage.setItem("mouse_selected_drone", JSON.stringify(onboardDrone));
+    window.dispatchEvent(new CustomEvent("drone-selected", { detail: onboardDrone }));
+  }, [runtimeConfigLoaded, isOnboard, selectedDrone]);
 
   const refreshMappingStatus = async () => {
     const res = await fetch("/api/mapping/3d/status");
@@ -523,6 +509,9 @@ export default function Home() {
         return (
           <div className="flex-1 relative bg-background p-3 sm:p-6 overflow-auto">
             <h2 className="text-xl sm:text-2xl font-bold mb-3 sm:mb-4">Camera Feeds & 3D Mapping</h2>
+            <p className="text-xs text-muted-foreground mb-3">
+              Feed tiles below are local browser previews unless a dedicated drone stream bridge is configured.
+            </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
               <div className="bg-black rounded-lg border-2 border-primary/50 aspect-video flex items-center justify-center relative overflow-hidden">
                 <CameraFeedView label="GIMBAL CAM" sublabel="2K HD (2560x1440)" borderColor="border-primary/50" />
@@ -691,6 +680,7 @@ export default function Home() {
     <div className="flex flex-col h-screen w-full bg-background overflow-hidden relative">
       <AutoStabilizationController />
       <MLStabilizationEngine />
+      <StabilizationActuatorBridge />
       <EmergencyProtocolController />
       <GpsDeniedNavigationController />
       <MLNavigationEngine />

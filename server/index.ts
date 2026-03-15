@@ -117,6 +117,42 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
+const SENSITIVE_LOG_KEY_RE = /pass(word)?|secret|token|auth|cookie|session|credential|api[-_]?key/i;
+
+function sanitizeLogPayload(value: unknown, depth = 0): unknown {
+  if (value == null) return value;
+  if (depth > 4) return "[truncated]";
+
+  if (Array.isArray(value)) {
+    if (value.length > 20) {
+      return [
+        ...value.slice(0, 20).map((item) => sanitizeLogPayload(item, depth + 1)),
+        `[+${value.length - 20} more]`,
+      ];
+    }
+    return value.map((item) => sanitizeLogPayload(item, depth + 1));
+  }
+
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, raw] of entries) {
+      if (SENSITIVE_LOG_KEY_RE.test(key)) {
+        sanitized[key] = "[redacted]";
+        continue;
+      }
+      sanitized[key] = sanitizeLogPayload(raw, depth + 1);
+    }
+    return sanitized;
+  }
+
+  if (typeof value === "string" && value.length > 500) {
+    return `${value.slice(0, 500)}...[truncated]`;
+  }
+
+  return value;
+}
+
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -132,8 +168,15 @@ app.use((req, res, next) => {
     const duration = Date.now() - start;
     if (path.startsWith("/api")) {
       let logLine = `${req.method} ${path} ${res.statusCode} in ${duration}ms`;
-      if (capturedJsonResponse) {
-        logLine += ` :: ${JSON.stringify(capturedJsonResponse)}`;
+      const shouldLogResponseBody =
+        process.env.NODE_ENV !== "production" &&
+        capturedJsonResponse &&
+        path !== "/api/auth/login" &&
+        path !== "/api/auth/session";
+      if (shouldLogResponseBody) {
+        const sanitized = sanitizeLogPayload(capturedJsonResponse);
+        const rendered = JSON.stringify(sanitized);
+        logLine += ` :: ${rendered.length > 1500 ? `${rendered.slice(0, 1500)}...[truncated]` : rendered}`;
       }
 
       log(logLine);

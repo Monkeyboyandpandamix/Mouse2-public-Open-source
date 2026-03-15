@@ -84,6 +84,7 @@ export function SpeakerPanel() {
   const [isListeningFromDrone, setIsListeningFromDrone] = useState(false);
   const [droneMicStatus, setDroneMicStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const micStreamRef = useRef<MediaStream | null>(null);
+  const lastRealtimeUpdateRef = useRef(0);
 
   const applyAudioState = (state: AudioStatusResponse["state"]) => {
     setAudioDevice(state.deviceType);
@@ -180,8 +181,10 @@ export function SpeakerPanel() {
 
   useEffect(() => {
     const poll = window.setInterval(() => {
+      const realtimeIsFresh = Date.now() - lastRealtimeUpdateRef.current < 15_000;
+      if (realtimeIsFresh) return;
       loadAudioStatus().catch(() => {});
-    }, 3000);
+    }, 10_000);
     return () => window.clearInterval(poll);
   }, []);
 
@@ -189,6 +192,7 @@ export function SpeakerPanel() {
     const onOutput = (event: Event) => {
       const custom = event as CustomEvent<any>;
       if (custom.detail && typeof custom.detail === "object") {
+        lastRealtimeUpdateRef.current = Date.now();
         setAudioDevice(custom.detail.deviceType || "gpio");
         setVolume([Number(custom.detail.volume ?? 80)]);
       }
@@ -196,12 +200,14 @@ export function SpeakerPanel() {
     const onLive = (event: Event) => {
       const custom = event as CustomEvent<any>;
       if (custom.detail && typeof custom.detail === "object") {
+        lastRealtimeUpdateRef.current = Date.now();
         setIsRecording(Boolean(custom.detail.active));
       }
     };
     const onDroneMic = (event: Event) => {
       const custom = event as CustomEvent<any>;
       if (custom.detail && typeof custom.detail === "object") {
+        lastRealtimeUpdateRef.current = Date.now();
         setDroneMicEnabled(Boolean(custom.detail.enabled));
         setIsListeningFromDrone(Boolean(custom.detail.listening));
         setDroneMicVolume([Number(custom.detail.volume ?? 70)]);

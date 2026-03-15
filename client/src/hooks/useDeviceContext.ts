@@ -17,6 +17,7 @@ export interface DeviceContextState {
   isOnboard: boolean;
   isController: boolean;
   deviceRole: string;
+  runtimeConfigLoaded: boolean;
   connectedDroneId: string | null;
   connectedDroneName: string | null;
   peripherals: PeripheralMapping;
@@ -61,6 +62,7 @@ export function useDeviceContext(): DeviceContextState & {
 } {
   const [environment, setEnvironmentState] = useState<DeviceEnvironment>("ground_controller");
   const [isOnboard, setIsOnboard] = useState(false);
+  const [runtimeConfigLoaded, setRuntimeConfigLoaded] = useState(false);
   const [connectedDroneId, setConnectedDroneId] = useState<string | null>(null);
   const [connectedDroneName, setConnectedDroneName] = useState<string | null>(null);
   const [peripherals, setPeripherals] = useState<PeripheralMapping>(DEFAULT_GROUND_PERIPHERALS);
@@ -110,7 +112,10 @@ export function useDeviceContext(): DeviceContextState & {
           setPeripherals(DEFAULT_GROUND_PERIPHERALS);
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        setRuntimeConfigLoaded(true);
+      });
   }, []);
 
   useEffect(() => {
@@ -143,7 +148,7 @@ export function useDeviceContext(): DeviceContextState & {
     const checkLatency = async () => {
       try {
         const start = Date.now();
-        const res = await fetch("/api/runtime-config", { method: "GET" });
+        const res = await fetch("/api/health", { method: "GET" });
         if (res.ok) {
           const ms = Date.now() - start;
           setLatencyMs(ms);
@@ -190,6 +195,7 @@ export function useDeviceContext(): DeviceContextState & {
     isOnboard,
     isController: environment === "ground_controller",
     deviceRole: isOnboard ? "ONBOARD" : "GROUND",
+    runtimeConfigLoaded,
     connectedDroneId,
     connectedDroneName,
     peripherals,

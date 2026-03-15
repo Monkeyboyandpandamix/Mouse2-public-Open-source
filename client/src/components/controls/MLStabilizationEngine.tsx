@@ -989,7 +989,8 @@ export function MLStabilizationEngine() {
         predictorRef.current.train();
       }
 
-      window.dispatchEvent(new CustomEvent("stabilizer-command", {
+      // Publish computed corrections as guidance proposals only.
+      window.dispatchEvent(new CustomEvent("stabilizer-proposal", {
         detail: {
           command: "stabilize_adjust",
           source: "ml_stabilizer",

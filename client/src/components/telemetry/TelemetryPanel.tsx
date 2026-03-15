@@ -212,21 +212,6 @@ export function TelemetryPanel() {
         setFlightMode("rtl");
       }
     };
-    const handleStabilizerCommand = (e: CustomEvent<{ command?: string; corrections?: any }>) => {
-      const { command, corrections } = e.detail || {};
-      if (command !== "stabilize_adjust" || !corrections) return;
-      setAttitude((prev) => ({
-        pitch: prev.pitch + (corrections.pitch || 0),
-        roll: prev.roll + (corrections.roll || 0),
-        yaw: prev.yaw + (corrections.yaw || 0),
-      }));
-      setAltitude((prev) => Math.max(0, prev + (corrections.throttle || 0)));
-      setGroundSpeed((prev) => Math.max(0, prev + (corrections.forward || 0)));
-      setHeading((prev) => {
-        const next = prev + (corrections.yaw || 0);
-        return ((next % 360) + 360) % 360;
-      });
-    };
     const handleSensorUpdate = (e: CustomEvent<any>) => {
       const d = e.detail || {};
       setSensorHealth((prev) => ({
@@ -256,7 +241,6 @@ export function TelemetryPanel() {
     window.addEventListener('arm-state-changed' as any, handleArmStateChange);
     window.addEventListener('command-acked' as any, handleCommandAck);
     window.addEventListener('ml-nav-guidance' as any, handleNavGuidance);
-    window.addEventListener('stabilizer-command' as any, handleStabilizerCommand);
     window.addEventListener('sensor-update' as any, handleSensorUpdate);
     window.addEventListener('motor-telemetry-update' as any, handleMotorTelemetry);
     return () => {
@@ -264,7 +248,6 @@ export function TelemetryPanel() {
       window.removeEventListener('arm-state-changed' as any, handleArmStateChange);
       window.removeEventListener('command-acked' as any, handleCommandAck);
       window.removeEventListener('ml-nav-guidance' as any, handleNavGuidance);
-      window.removeEventListener('stabilizer-command' as any, handleStabilizerCommand);
       window.removeEventListener('sensor-update' as any, handleSensorUpdate);
       window.removeEventListener('motor-telemetry-update' as any, handleMotorTelemetry);
     };

@@ -20,6 +20,7 @@ import { MavlinkToolsPanel } from "@/components/panels/MavlinkToolsPanel";
 import { RtkNtripPanel } from "@/components/panels/RtkNtripPanel";
 import { PluginToolchainPanel } from "@/components/panels/PluginToolchainPanel";
 import { MissionPlannerParityPanel } from "@/components/panels/MissionPlannerParityPanel";
+import { VehicleSetupPanel } from "@/components/panels/VehicleSetupPanel";
 import {
   getDefaultSerialPort,
   getDefaultUsbCamera,
@@ -40,7 +41,7 @@ interface FirmwareCatalogEntry {
   updatedAt?: string;
 }
 
-const ADVANCED_SETTINGS_TABS = new Set(["modesetup", "mavtools", "rtk", "plugins", "mp-parity"]);
+const ADVANCED_SETTINGS_TABS = new Set(["modesetup", "vehiclesetup", "mavtools", "rtk", "plugins", "mp-parity"]);
 
 // Google Account Manager Component for standalone deployments
 function GoogleAccountManager() {
@@ -2590,6 +2591,13 @@ export function SettingsPanel() {
                   </Button>
                   <Button
                     size="sm"
+                    variant={activeAdvancedSetup === "vehiclesetup" ? "default" : "outline"}
+                    onClick={() => setActiveAdvancedSetup("vehiclesetup")}
+                  >
+                    Vehicle Setup
+                  </Button>
+                  <Button
+                    size="sm"
                     variant={activeAdvancedSetup === "rtk" ? "default" : "outline"}
                     onClick={() => setActiveAdvancedSetup("rtk")}
                   >
@@ -2612,6 +2620,7 @@ export function SettingsPanel() {
                 </div>
                 <div className="rounded-lg border border-border bg-card overflow-hidden min-h-[620px]">
                   {activeAdvancedSetup === "modesetup" && <FlightModeMappingPanel />}
+                  {activeAdvancedSetup === "vehiclesetup" && <VehicleSetupPanel />}
                   {activeAdvancedSetup === "mavtools" && <MavlinkToolsPanel />}
                   {activeAdvancedSetup === "rtk" && <RtkNtripPanel />}
                   {activeAdvancedSetup === "plugins" && <PluginToolchainPanel />}

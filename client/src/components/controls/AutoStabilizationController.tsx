@@ -203,8 +203,9 @@ export function AutoStabilizationController() {
         lateralCorrection = clamp((obstacle.avoidanceLateral ?? 0) * 2.5, -3, 3);
       }
 
+      // Publish guidance proposals only; actuator control remains backend-authoritative.
       window.dispatchEvent(
-        new CustomEvent("stabilizer-command", {
+        new CustomEvent("stabilizer-proposal", {
           detail: {
             command: "stabilize_adjust",
             source: "ai_stabilizer",

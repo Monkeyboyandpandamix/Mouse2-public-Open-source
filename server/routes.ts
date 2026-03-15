@@ -138,9 +138,13 @@ interface MissionRunRecord {
   commandIds: string[];
   expectedCompletionAt?: string | null;
   completedAt?: string | null;
-  completionSource?: "timeout_estimate" | "explicit_signal";
+  completionSource?: "fc_progress" | "explicit_signal";
+  waypointCount?: number | null;
+  currentWaypointIndex?: number | null;
+  progressUpdatedAt?: string | null;
 }
 const missionRuns = new Map<string, MissionRunRecord>();
+const missionRunProgressMonitors = new Map<string, NodeJS.Timeout>();
 interface AutomationRunRecord {
   id: string;
   scriptId: string;
@@ -213,6 +217,7 @@ const calibrationState: Record<string, { status: "idle" | "running" | "completed
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const CLOUD_RUNTIME_CONFIG_FILE = path.join(DATA_DIR, "cloud_runtime_config.json");
 const RTK_PROFILE_FILE = path.join(DATA_DIR, "rtk_profiles.json");
+const RUNTIME_STATE_FILE = path.join(DATA_DIR, "runtime_state.json");
 const PLUGINS_DIR = path.resolve(process.cwd(), "plugins");
 const PLUGIN_STATE_FILE = path.join(DATA_DIR, "plugin_state.json");
 const FIRMWARE_CATALOG_FILE = path.join(DATA_DIR, "firmware_catalog.json");
@@ -330,6 +335,129 @@ async function writeFirmwareCatalog(entries: any[]) {
   await writeFile(FIRMWARE_CATALOG_FILE, JSON.stringify(entries, null, 2), "utf-8");
 }
 
+interface PersistedRuntimeState {
+  version: number;
+  savedAt: string;
+  activeSessions: Record<string, ServerSession>;
+  missionRuns: MissionRunRecord[];
+}
+
+let runtimeStateFlushTimer: NodeJS.Timeout | null = null;
+
+const persistRuntimeState = async () => {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    const payload: PersistedRuntimeState = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      activeSessions: Object.fromEntries(activeSessions.entries()),
+      missionRuns: Array.from(missionRuns.values()),
+    };
+    await writeFile(RUNTIME_STATE_FILE, JSON.stringify(payload, null, 2), "utf-8");
+  } catch (error) {
+    console.warn("[runtime-state] failed to persist runtime state:", (error as any)?.message || String(error));
+  }
+};
+
+const scheduleRuntimeStatePersist = () => {
+  if (runtimeStateFlushTimer) {
+    clearTimeout(runtimeStateFlushTimer);
+  }
+  runtimeStateFlushTimer = setTimeout(() => {
+    runtimeStateFlushTimer = null;
+    void persistRuntimeState();
+  }, 250);
+};
+
+const setActiveSession = (token: string, session: ServerSession) => {
+  activeSessions.set(token, session);
+  scheduleRuntimeStatePersist();
+};
+
+const deleteActiveSession = (token: string) => {
+  const removed = activeSessions.delete(token);
+  if (removed) {
+    scheduleRuntimeStatePersist();
+  }
+  return removed;
+};
+
+const setMissionRunRecord = (runId: string, run: MissionRunRecord) => {
+  missionRuns.set(runId, run);
+  scheduleRuntimeStatePersist();
+};
+
+const stopMissionRunProgressMonitor = (runId: string) => {
+  const existing = missionRunProgressMonitors.get(runId);
+  if (existing) {
+    clearInterval(existing);
+    missionRunProgressMonitors.delete(runId);
+  }
+};
+
+const stopAllMissionRunProgressMonitors = () => {
+  Array.from(missionRunProgressMonitors.values()).forEach((timer) => {
+    clearInterval(timer);
+  });
+  missionRunProgressMonitors.clear();
+};
+
+const loadRuntimeState = async () => {
+  try {
+    if (!existsSync(RUNTIME_STATE_FILE)) return;
+    const raw = await readFile(RUNTIME_STATE_FILE, "utf-8");
+    const parsed = JSON.parse(raw) as Partial<PersistedRuntimeState>;
+    const sessions = parsed?.activeSessions && typeof parsed.activeSessions === "object" ? parsed.activeSessions : {};
+    const runs = Array.isArray(parsed?.missionRuns) ? parsed.missionRuns : [];
+
+    const now = Date.now();
+    for (const [token, session] of Object.entries(sessions)) {
+      const createdAt = Number((session as any)?.createdAt || 0);
+      if (!token || !session || !createdAt) continue;
+      if (now - createdAt > 24 * 60 * 60 * 1000) continue;
+      activeSessions.set(token, {
+        userId: String((session as any).userId || ""),
+        role: String((session as any).role || "viewer"),
+        name: String((session as any).name || "User"),
+        createdAt,
+      });
+    }
+
+    const restartedAt = new Date().toISOString();
+    for (const run of runs) {
+      if (!run || typeof run !== "object") continue;
+      const runId = String((run as any).id || "").trim();
+      if (!runId) continue;
+      const normalized: MissionRunRecord = {
+        id: runId,
+        missionId: String((run as any).missionId || ""),
+        status: (run as any).status || "failed",
+        error: (run as any).error ?? null,
+        createdAt: String((run as any).createdAt || restartedAt),
+        updatedAt: String((run as any).updatedAt || restartedAt),
+        connectionString: String((run as any).connectionString || ""),
+        commandIds: Array.isArray((run as any).commandIds) ? (run as any).commandIds.map((id: any) => String(id)) : [],
+        expectedCompletionAt: (run as any).expectedCompletionAt ?? null,
+        completedAt: (run as any).completedAt ?? null,
+        completionSource: (run as any).completionSource,
+        waypointCount: Number.isFinite(Number((run as any).waypointCount)) ? Number((run as any).waypointCount) : null,
+        currentWaypointIndex: Number.isFinite(Number((run as any).currentWaypointIndex)) ? Number((run as any).currentWaypointIndex) : null,
+        progressUpdatedAt: (run as any).progressUpdatedAt ?? null,
+      };
+
+      if (["uploading", "arming", "starting", "running", "queued"].includes(normalized.status)) {
+        normalized.status = "failed";
+        normalized.error = normalized.error || "Mission run interrupted by server restart";
+        normalized.updatedAt = restartedAt;
+      }
+
+      missionRuns.set(runId, normalized);
+    }
+  } catch (error) {
+    console.warn("[runtime-state] failed to load runtime state:", (error as any)?.message || String(error));
+  }
+};
+
 // Generate a cryptographically secure random token
 function generateSessionToken(): string {
   return randomBytes(32).toString('hex'); // 64 hex chars, 256 bits of entropy
@@ -342,7 +470,7 @@ function validateSession(token: string | undefined): ServerSession | null {
   if (!session) return null;
   // Session expires after 24 hours
   if (Date.now() - session.createdAt > 24 * 60 * 60 * 1000) {
-    activeSessions.delete(token);
+    deleteActiveSession(token);
     return null;
   }
   return session;
@@ -740,6 +868,7 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  await loadRuntimeState();
   
   // WebSocket server for real-time telemetry streaming
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
@@ -1362,7 +1491,7 @@ export async function registerRoutes(
     if (type === "mission_start") return { type: "set_mode", payload: { mode: "AUTO" } };
     if (type === "mission_stop") return { type: "set_mode", payload: { mode: "LAND" } };
     if (type === "abort") return { type: "disarm", payload: {} };
-    if (type === "backtrace") return { type: "set_mode", payload: { mode: "RTL" } };
+    if (type === "backtrace") return { type: "backtrace", payload };
     if (type === "takeoff") {
       const altitude = Number(payload.altitude ?? payload.targetAltitude ?? 20);
       return { type: "takeoff", payload: { altitude: Number.isFinite(altitude) ? altitude : 20 } };
@@ -1418,6 +1547,89 @@ export async function registerRoutes(
 
     if (!connectionString) {
       return { ok: false, acknowledged: false, error: "connectionString is required" };
+    }
+
+    if (type === "backtrace") {
+      const download = await runMissionDownloadBridge(connectionString);
+      if (!download.ok) {
+        return {
+          ok: false,
+          acknowledged: false,
+          error: download.error || "Backtrace failed: could not read mission from flight controller",
+        };
+      }
+
+      const fcWaypoints = Array.isArray(download.data?.waypoints) ? download.data.waypoints : [];
+      const reversible = fcWaypoints.filter((wp: any) => {
+        const lat = Number(wp?.lat);
+        const lng = Number(wp?.lng);
+        const alt = Number(wp?.altitude ?? wp?.alt);
+        return Number.isFinite(lat) && Number.isFinite(lng) && Number.isFinite(alt);
+      });
+      if (reversible.length < 2) {
+        return {
+          ok: false,
+          acknowledged: false,
+          error: "Backtrace requires at least 2 valid waypoints on the flight controller mission",
+        };
+      }
+
+      const reversed = reversible
+        .slice()
+        .reverse()
+        .map((wp: any, idx: number) => {
+          const action = String(wp?.action || "flythrough").toLowerCase();
+          const unsafeStartAction = action === "rtl" || action === "land" || action === "takeoff";
+          return {
+            order: idx + 1,
+            lat: Number(wp.lat),
+            lng: Number(wp.lng),
+            altitude: Number(wp.altitude ?? wp.alt ?? 30),
+            action: unsafeStartAction && idx === 0 ? "flythrough" : action,
+            actionParams: wp?.actionParams && typeof wp.actionParams === "object" ? wp.actionParams : {},
+            current: idx === 0 ? 1 : 0,
+            autocontinue: 1,
+          };
+        });
+
+      const upload = await runMissionUploadBridge(connectionString, reversed);
+      if (!upload.ok) {
+        return {
+          ok: false,
+          acknowledged: false,
+          error: upload.error || "Backtrace failed: could not upload reversed mission",
+        };
+      }
+
+      const modeSet = await runMavlinkVehicleControl([
+        "action",
+        "--connection",
+        connectionString,
+        "--action",
+        "set_mode",
+        "--mode",
+        "AUTO",
+        "--timeout",
+        "10",
+      ]);
+      if (!modeSet.ok || modeSet.data?.ack == null) {
+        return {
+          ok: false,
+          acknowledged: false,
+          error: modeSet.error || modeSet.data?.error || "Backtrace uploaded but AUTO mode start was not acknowledged",
+          result: modeSet.data,
+        };
+      }
+
+      return {
+        ok: true,
+        acknowledged: true,
+        result: {
+          ack: modeSet.data?.ack,
+          downloadedItems: fcWaypoints.length,
+          uploadedItems: reversed.length,
+        },
+      };
     }
 
     const mavAction =
@@ -1499,6 +1711,92 @@ export async function registerRoutes(
         }
       });
     });
+  };
+
+  const runMissionDownloadBridge = async (connectionString: string) => {
+    return await new Promise<{ ok: boolean; data?: any; error?: string }>((resolve) => {
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_mission.py"),
+        "download",
+        "--connection",
+        connectionString,
+        "--timeout",
+        "14",
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) return resolve({ ok: true, data: parsed });
+          return resolve({ ok: false, error: parsed?.error || err || "Mission download failed" });
+        } catch {
+          return resolve({ ok: false, error: err || "Invalid mission bridge response" });
+        }
+      });
+    });
+  };
+
+  const markMissionRunCompleted = async (
+    run: MissionRunRecord,
+    source: "fc_progress" | "explicit_signal",
+    session?: ServerSession | null,
+  ) => {
+    stopMissionRunProgressMonitor(run.id);
+    run.status = "completed";
+    run.error = null;
+    run.completedAt = new Date().toISOString();
+    run.completionSource = source;
+    run.updatedAt = run.completedAt;
+    setMissionRunRecord(run.id, run);
+    broadcast("mission_execution_update", run);
+    await appendCloudDocument("mission_runs", run, { session: session || null }).catch(() => {});
+  };
+
+  const refreshMissionRunProgressFromFlightController = async (run: MissionRunRecord) => {
+    if (run.status !== "running") return;
+    const fcMission = await runMissionDownloadBridge(run.connectionString);
+    if (!fcMission.ok) {
+      pushDebugEvent("warn", "mission.progress", "Mission progress poll failed", {
+        runId: run.id,
+        missionId: run.missionId,
+        error: fcMission.error || "Mission download bridge failed",
+      });
+      return;
+    }
+
+    const waypoints = Array.isArray(fcMission.data?.waypoints) ? fcMission.data.waypoints : [];
+    const waypointCount = waypoints.length;
+    const currentIndex = waypoints.findIndex((wp: any) => Number(wp?.current) === 1);
+    run.waypointCount = waypointCount;
+    run.currentWaypointIndex = currentIndex >= 0 ? currentIndex : null;
+    run.progressUpdatedAt = new Date().toISOString();
+    run.updatedAt = run.progressUpdatedAt;
+    setMissionRunRecord(run.id, run);
+    broadcast("mission_execution_update", run);
+
+    if (waypointCount > 0 && currentIndex >= waypointCount - 1) {
+      await markMissionRunCompleted(run, "fc_progress", null);
+    }
+  };
+
+  const startMissionRunProgressMonitor = (runId: string) => {
+    stopMissionRunProgressMonitor(runId);
+    const timer = setInterval(() => {
+      const activeRun = missionRuns.get(runId);
+      if (!activeRun) {
+        stopMissionRunProgressMonitor(runId);
+        return;
+      }
+      if (activeRun.status !== "running") {
+        stopMissionRunProgressMonitor(runId);
+        return;
+      }
+      void refreshMissionRunProgressFromFlightController(activeRun);
+    }, 4000);
+    missionRunProgressMonitors.set(runId, timer);
   };
 
   interface AudioSystemState {
@@ -3570,7 +3868,7 @@ export async function registerRoutes(
         completedAt: null,
         completionSource: undefined,
       };
-      missionRuns.set(runId, run);
+      setMissionRunRecord(runId, run);
       broadcast("mission_execution_update", run);
 
       const uploadResult = await runMissionUploadBridge(
@@ -3588,7 +3886,7 @@ export async function registerRoutes(
         run.status = "failed";
         run.error = uploadResult.error || "Mission upload failed";
         run.updatedAt = new Date().toISOString();
-        missionRuns.set(runId, run);
+        setMissionRunRecord(runId, run);
         broadcast("mission_execution_update", run);
         return res.status(500).json({ success: false, run });
       }
@@ -3596,7 +3894,7 @@ export async function registerRoutes(
       if (armBeforeStart) {
         run.status = "arming";
         run.updatedAt = new Date().toISOString();
-        missionRuns.set(runId, run);
+        setMissionRunRecord(runId, run);
         broadcast("mission_execution_update", run);
         const armRecord = await commandService.dispatchAndWait(
           {
@@ -3612,7 +3910,7 @@ export async function registerRoutes(
           run.status = "failed";
           run.error = armRecord.error || "Failed to arm before mission start";
           run.updatedAt = new Date().toISOString();
-          missionRuns.set(runId, run);
+          setMissionRunRecord(runId, run);
           broadcast("mission_execution_update", run);
           return res.status(500).json({ success: false, run, armCommand: armRecord });
         }
@@ -3620,7 +3918,7 @@ export async function registerRoutes(
 
       run.status = "starting";
       run.updatedAt = new Date().toISOString();
-      missionRuns.set(runId, run);
+      setMissionRunRecord(runId, run);
       broadcast("mission_execution_update", run);
       const startRecord = await commandService.dispatchAndWait(
         {
@@ -3636,28 +3934,20 @@ export async function registerRoutes(
         run.status = "failed";
         run.error = startRecord.error || "Failed to start mission";
         run.updatedAt = new Date().toISOString();
-        missionRuns.set(runId, run);
+        setMissionRunRecord(runId, run);
         broadcast("mission_execution_update", run);
         return res.status(500).json({ success: false, run, startCommand: startRecord });
       }
 
       run.status = "running";
       run.updatedAt = new Date().toISOString();
-      const estimatedDurationSec = estimateMissionDurationSec(waypoints);
-      run.expectedCompletionAt = new Date(Date.now() + estimatedDurationSec * 1000).toISOString();
-      missionRuns.set(runId, run);
+      run.expectedCompletionAt = new Date(Date.now() + estimateMissionDurationSec(waypoints) * 1000).toISOString();
+      run.waypointCount = waypoints.length;
+      run.currentWaypointIndex = null;
+      run.progressUpdatedAt = null;
+      setMissionRunRecord(runId, run);
       broadcast("mission_execution_update", run);
-      setTimeout(() => {
-        const activeRun = missionRuns.get(runId);
-        if (!activeRun || activeRun.status !== "running") return;
-        activeRun.status = "completed";
-        activeRun.completedAt = new Date().toISOString();
-        activeRun.completionSource = "timeout_estimate";
-        activeRun.updatedAt = activeRun.completedAt;
-        missionRuns.set(runId, activeRun);
-        broadcast("mission_execution_update", activeRun);
-        void appendCloudDocument("mission_runs", activeRun, { session }).catch(() => {});
-      }, estimatedDurationSec * 1000);
+      startMissionRunProgressMonitor(runId);
       void appendCloudDocument("mission_runs", run, { session }).catch(() => {});
       return res.json({ success: true, run });
     } catch (error: any) {
@@ -3691,7 +3981,8 @@ export async function registerRoutes(
       run.status = stopRecord.status === "acked" ? "stopped" : "failed";
       run.error = stopRecord.status === "acked" ? null : stopRecord.error || "Failed to stop mission";
       run.updatedAt = new Date().toISOString();
-      missionRuns.set(run.id, run);
+      stopMissionRunProgressMonitor(run.id);
+      setMissionRunRecord(run.id, run);
       broadcast("mission_execution_update", run);
       return res.json({ success: stopRecord.status === "acked", run, stopCommand: stopRecord });
     } catch (error: any) {
@@ -3708,13 +3999,7 @@ export async function registerRoutes(
       if (run.status !== "running") {
         return res.status(409).json({ success: false, error: `Mission run is in '${run.status}' state` });
       }
-      run.status = "completed";
-      run.completedAt = new Date().toISOString();
-      run.completionSource = "explicit_signal";
-      run.updatedAt = run.completedAt;
-      missionRuns.set(run.id, run);
-      broadcast("mission_execution_update", run);
-      void appendCloudDocument("mission_runs", run, { session }).catch(() => {});
+      await markMissionRunCompleted(run, "explicit_signal", session);
       return res.json({ success: true, run });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || "Mission completion update failed" });
@@ -5507,7 +5792,7 @@ export async function registerRoutes(
       }
 
       const sessionToken = generateSessionToken();
-      activeSessions.set(sessionToken, {
+      setActiveSession(sessionToken, {
         userId: authenticated.id,
         role: authenticated.role,
         name: authenticated.fullName || authenticated.username,
@@ -5564,7 +5849,7 @@ export async function registerRoutes(
       const sessionToken = req.headers['x-session-token'] as string;
       const session = validateSession(sessionToken);
       if (sessionToken) {
-        activeSessions.delete(sessionToken);
+        deleteActiveSession(sessionToken);
       }
       if (session) {
         void appendCloudDocument("operator_actions", {
@@ -6375,11 +6660,11 @@ export async function registerRoutes(
       res.status(400).json({ error: result.error });
     } else {
       const now = Date.now();
-      for (const [state, meta] of oauthStateStore.entries()) {
+      oauthStateStore.forEach((meta, state) => {
         if (now - meta.createdAt > 10 * 60 * 1000) {
           oauthStateStore.delete(state);
         }
-      }
+      });
       oauthStateStore.set(result.state, { createdAt: now, userId: session.userId });
       res.json(result);
     }
@@ -7303,7 +7588,7 @@ export async function registerRoutes(
         const filepath = path.join(dataDir, filename);
         if (!fs.existsSync(filepath)) return 0;
         try {
-          const items = JSON.parse(fs.readFileSync(filepath, "utf-8"));
+          const items = JSON.parse(await readFile(filepath, "utf-8"));
           if (!Array.isArray(items)) return 0;
           for (const item of items) {
             const docId = item[idField] || `${collection}-${items.indexOf(item)}`;
@@ -8132,6 +8417,87 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/stabilization/actuate", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      if (!connectionString) {
+        return res.status(400).json({ success: false, error: "connectionString is required" });
+      }
+
+      const corrections = req.body?.corrections && typeof req.body.corrections === "object" ? req.body.corrections : {};
+      const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+      const toNum = (value: unknown, fallback = 0) => {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : fallback;
+      };
+
+      const roll = toNum((corrections as any).roll, 0);
+      const pitch = toNum((corrections as any).pitch, 0);
+      const yaw = toNum((corrections as any).yaw, 0);
+      const throttle = toNum((corrections as any).throttle, 0);
+      const forward = toNum((corrections as any).forward, 0);
+      const lateral = toNum((corrections as any).lateral, 0);
+
+      const x = Math.round(clamp((forward * 140) + (pitch * 45), -1000, 1000));
+      const y = Math.round(clamp((lateral * 140) + (roll * 45), -1000, 1000));
+      const r = Math.round(clamp(yaw * 55, -1000, 1000));
+      const z = Math.round(clamp(500 + throttle * 65, 0, 1000));
+      const durationMs = Math.round(clamp(toNum(req.body?.durationMs, 220), 120, 1200));
+
+      const result = await runMavlinkVehicleControl([
+        "manual",
+        "--connection",
+        connectionString,
+        "--x",
+        String(x),
+        "--y",
+        String(y),
+        "--z",
+        String(z),
+        "--r",
+        String(r),
+        "--buttons",
+        "0",
+        "--duration-ms",
+        String(durationMs),
+        "--timeout",
+        "6",
+      ]);
+
+      if (!result.ok) {
+        return res.status(500).json({
+          success: false,
+          error: result.error || "Stabilization actuator dispatch failed",
+          result: result.data || null,
+        });
+      }
+
+      const nowIso = new Date().toISOString();
+      pushDebugEvent("info", "stabilization.actuate", "Stabilization actuator command dispatched", {
+        connectionString,
+        source: String(req.body?.source || "unknown"),
+        x,
+        y,
+        z,
+        r,
+        durationMs,
+      });
+
+      res.json({
+        success: true,
+        command: {
+          connectionString,
+          source: String(req.body?.source || "unknown"),
+          sentAt: nowIso,
+          manualControl: { x, y, z, r, durationMs },
+        },
+        result: result.data,
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to actuate stabilization controls" });
+    }
+  });
+
   app.post("/api/stabilization/compute", async (req, res) => {
     try {
       const { targetAltitude, targetAttitude, cameraFeatures } = req.body;
@@ -8173,6 +8539,11 @@ export async function registerRoutes(
     } catch (error) {
       res.status(500).json({ error: "Failed to update quad params" });
     }
+  });
+
+  httpServer.once("close", () => {
+    stopAllMissionRunProgressMonitors();
+    void persistRuntimeState();
   });
 
   return httpServer;
