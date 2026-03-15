@@ -10,24 +10,27 @@ A comprehensive ground control station for autonomous drone control with Orange 
 
 1. [Overview](#overview)
 2. [Key Features](#key-features)
-3. [System Requirements](#system-requirements)
-4. [Quick Start](#quick-start)
-5. [Installation Without Replit](#installation-without-replit)
-6. [Environment Variables & API Keys](#environment-variables--api-keys)
-7. [Third-Party Services](#third-party-services)
-8. [Security Features](#security-features)
-9. [User Management](#user-management)
-10. [Operating Instructions](#operating-instructions)
-11. [Flight Controls Reference](#flight-controls-reference)
-12. [Map Controls Reference](#map-controls-reference)
-13. [Settings Configuration](#settings-configuration)
-14. [Hardware Configuration](#hardware-configuration)
-15. [Project Structure](#project-structure)
-16. [Troubleshooting & Common Errors](#troubleshooting--common-errors)
-17. [Dependency Issues](#dependency-issues)
-18. [Firebase Cloud Sync](#firebase-cloud-sync)
-19. [Web Deployment (Firebase App Hosting)](#web-deployment-firebase-app-hosting)
-20. [New Cloud/Audio APIs](#new-cloudaudio-apis)
+3. [Application Capabilities (Current)](#application-capabilities-current)
+4. [Complete Function Index (All)](#complete-function-index-all)
+5. [System Requirements](#system-requirements)
+6. [Quick Start](#quick-start)
+7. [Installation Without Replit](#installation-without-replit)
+8. [Environment Variables & API Keys](#environment-variables--api-keys)
+9. [Third-Party Services](#third-party-services)
+10. [Security Features](#security-features)
+11. [User Management](#user-management)
+12. [Operating Instructions](#operating-instructions)
+13. [Flight Controls Reference](#flight-controls-reference)
+14. [Map Controls Reference](#map-controls-reference)
+15. [Settings Configuration](#settings-configuration)
+16. [Hardware Configuration](#hardware-configuration)
+17. [Project Structure](#project-structure)
+18. [Troubleshooting & Common Errors](#troubleshooting--common-errors)
+19. [Dependency Issues](#dependency-issues)
+20. [Firebase Cloud Sync](#firebase-cloud-sync)
+21. [Web Deployment (Firebase App Hosting)](#web-deployment-firebase-app-hosting)
+22. [Redeploy Web App (Latest)](#redeploy-web-app-latest)
+23. [New Cloud/Audio APIs](#new-cloudaudio-apis)
 
 ---
 
@@ -68,6 +71,327 @@ The system operates in **offline-first mode** using local JSON storage with opti
 - **Offline-First**: All data stored locally in JSON files
 - **No Database Required**: Works without PostgreSQL or any database
 - **Optional Cloud Sync**: Automatic backup to Google Drive/Sheets
+
+---
+
+## Application Capabilities (Current)
+
+### Flight and Mission Operations
+- Mission create/edit/delete with waypoint sequencing and bulk utilities
+- Manual waypoint insertion from map click, coordinate input, or destination search
+- Mission upload/download/validate/diff with MAVLink bridge
+- Flight path optimization with apply-back into mission plans
+- Geofence management and no-fly/restricted airspace checks with override workflow
+
+### Maps, Airspace, and Situational Awareness
+- Real-time map with drone/operator location, heading, trails, and mission path display
+- FAA regulatory GeoJSON overlays with per-layer toggles and color coding
+- Configurable airspace display radius (default 30 miles, adjustable in Settings)
+- No-fly zone legend and restricted airspace visualization overlays
+- Multi-drone map presence for operational awareness
+
+### Control, Telemetry, and Safety
+- Arm/disarm and vehicle mode actions via control deck + MAVLink endpoints
+- Live telemetry panels (attitude, heading, altitude, speed, battery, motor/sensor feeds)
+- Emergency workflows and stabilization/navigation assist modules
+- Health/diagnostic streaming and flight/session logging
+
+### Hardware and Integration
+- MAVLink tooling (params, calibration, rally/fence/mission workflows)
+- RTK/NTRIP profile management and reconnect/start/stop flows
+- Swarm operations (group actions, sync action, formation planning helpers)
+- Plugin toolchain panel and runtime plugin state support
+
+### Camera, Media, and Tracking
+- Video feed operations and capture metadata logging
+- AI object tracking panel (person/vehicle/animal/aircraft/package classes)
+- Media asset lifecycle tracking with cloud/offline sync status fields
+
+### Communications
+- Team messaging with direct-message visibility filtering
+- Audio controls for TTS/buzzer/live stream/drone mic session bridge
+- Operator action telemetry (login/logout/audio session actions) for admin visibility
+
+### Data, Cloud, and Offline Behavior
+- Offline-first local storage for core operations
+- Firebase cloud sync for missions, drones, telemetry, logs, media metadata, and messages
+- Realtime cloud awareness endpoint for cross-operator views
+- Admin dashboard cloud endpoint for fleet-wide audit visibility
+- Offline media staging and automatic retry to cloud when connectivity returns
+
+### UX and Deployment
+- Role-gated UI panels with server-side permission checks on critical API writes/actions
+- App Hosting deployment support for web operators
+- Electron desktop runtime for integrated local server + UI operation
+
+---
+
+## Complete Function Index (All)
+
+This section is the exhaustive functional inventory of the current app surface.
+
+### Frontend Modules and Panels (Loaded in `client/src/pages/home.tsx`)
+- `MapInterface`
+- `VideoFeed`
+- `ControlDeck`
+- `TelemetryPanel`
+- `MissionPlanningPanel`
+- `FlightPathOptimizerPanel`
+- `TrackingPanel`
+- `SpeakerPanel`
+- `FlightLogsPanel`
+- `FlightLogbookPanel`
+- `BME688Panel`
+- `AutomationPanel`
+- `TerminalCommandsPanel`
+- `FlightControllerParamsPanel`
+- `CalibrationPanel`
+- `SwarmOpsPanel`
+- `GeofencingPanel`
+- `StabilizationPanel`
+- `GpsDeniedNavPanel`
+- `DroneSelectionPanel`
+- `UserAccessPanel`
+- `GUIConfigPanel`
+- `SettingsPanel`
+
+### Sidebar/Route-Level Functional Areas
+- `map`
+- `mission`
+- `optimizer`
+- `tracking`
+- `payload`
+- `feeds`
+- `logs`
+- `logbook`
+- `environment`
+- `scripts`
+- `terminal`
+- `fcparams`
+- `calibration`
+- `swarm`
+- `users`
+- `geofence`
+- `guiconfig`
+- `settings`
+- `stabilization`
+- `gpsnav`
+
+### Runtime/Hardware Script Capabilities (`/scripts`)
+- `runtime_bootstrap.py`
+- `mavlink_vehicle_control.py`
+- `mavlink_mission.py`
+- `mavlink_params.py`
+- `mavlink_calibration.py`
+- `mavlink_fence.py`
+- `mavlink_rally.py`
+- `mavlink_firmware.py`
+- `mavlink_dataflash.py`
+- `mavlink_inspector.py`
+- `mavlink_geotag.py`
+- `servo_control.py`
+- `bme688_monitor.py`
+- `setup-gpio-access.sh`
+- `build-standalone.sh`
+- `build-standalone.ps1`
+
+### Complete Backend API Function List (`server/routes.ts`)
+
+```text
+delete /api/backlog/:id
+delete /api/backlog/clear
+delete /api/drive/files/:fileId
+delete /api/drones/:id
+delete /api/firmware/catalog/:id
+delete /api/flight-logs/:id
+delete /api/flight-sessions/:id
+delete /api/google/accounts/:id
+delete /api/mavlink/rtk/profiles/:id
+delete /api/media/:id
+delete /api/messages/:id
+delete /api/missions/:id
+delete /api/waypoints/:id
+get /api/airspace/restricted
+get /api/airspace/sources
+get /api/airspace/static-restricted
+get /api/airspace/tfr
+get /api/audio/drone-mic
+get /api/audio/live/status
+get /api/audio/output/devices
+get /api/audio/session
+get /api/audio/status
+get /api/backlog
+get /api/backup/google-sheets/status
+get /api/bme688/debug
+get /api/bme688/read
+get /api/bme688/status
+get /api/camera-settings
+get /api/chat-users
+get /api/cloud/admin-dashboard
+get /api/cloud/awareness
+get /api/cloud/status
+get /api/drive/files
+get /api/drive/status
+get /api/drones
+get /api/drones/:id
+get /api/firmware/catalog
+get /api/firmware/status
+get /api/flight-logs/recent
+get /api/flight-sessions
+get /api/flight-sessions/:id
+get /api/flight-sessions/:id/logs
+get /api/flight-sessions/active
+get /api/geocode
+get /api/google/accounts
+get /api/google/auth-url
+get /api/google/callback
+get /api/google/configured
+get /api/google/status
+get /api/health
+get /api/integrations/verify
+get /api/mapping/3d/model/latest
+get /api/mapping/3d/status
+get /api/mavlink/airframe/profiles
+get /api/mavlink/calibration/status
+get /api/mavlink/dataflash/file/:name
+get /api/mavlink/dataflash/list
+get /api/mavlink/fence/download
+get /api/mavlink/gps-inject/status
+get /api/mavlink/inspector/live
+get /api/mavlink/inspector/snapshot
+get /api/mavlink/mission/download
+get /api/mavlink/mode-mapping
+get /api/mavlink/optional-hardware/profiles
+get /api/mavlink/params
+get /api/mavlink/params/:name
+get /api/mavlink/params/export
+get /api/mavlink/radio-sik/modem-profiles
+get /api/mavlink/radio-sik/status
+get /api/mavlink/rally/download
+get /api/mavlink/rtk/profiles
+get /api/mavlink/rtk/profiles/export
+get /api/mavlink/rtk/status
+get /api/mavlink/serial-passthrough/status
+get /api/media
+get /api/media/:id
+get /api/messages
+get /api/messages/history
+get /api/missions
+get /api/missions/:id
+get /api/missions/:missionId/waypoints
+get /api/motor-telemetry/recent
+get /api/plugins
+get /api/reverse-geocode
+get /api/runtime-config
+get /api/sensor-data/:sensorType
+get /api/servo/status
+get /api/settings/:category
+get /api/stabilization/frame-geometries
+get /api/stabilization/params
+get /api/stabilization/status
+patch /api/backlog/:id/synced
+patch /api/camera-settings
+patch /api/drones/:id
+patch /api/drones/:id/location
+patch /api/flight-sessions/:id
+patch /api/mavlink/params/:name
+patch /api/media/:id
+patch /api/messages/:id
+patch /api/missions/:id
+patch /api/waypoints/:id
+post /api/airspace/authorization/validate
+post /api/audio/buzzer
+post /api/audio/drone-mic
+post /api/audio/live/start
+post /api/audio/live/stop
+post /api/audio/output/select
+post /api/audio/session/join
+post /api/audio/session/leave
+post /api/audio/tts
+post /api/auth/login
+post /api/auth/logout
+post /api/backlog
+post /api/backlog/sync
+post /api/backup/google-sheets
+post /api/backup/gui-config
+post /api/cloud/media/sync-pending
+post /api/cloud/media/upload
+post /api/cloud/sync-all
+post /api/cloud/test
+post /api/connections/test
+post /api/drive/upload
+post /api/drones
+post /api/firmware/catalog
+post /api/firmware/catalog/install
+post /api/firmware/flash
+post /api/firmware/recover-bootloader
+post /api/flight-logs
+post /api/flight-sessions/end
+post /api/flight-sessions/start
+post /api/google/switch
+post /api/mapping/3d/frame
+post /api/mapping/3d/reconstruct
+post /api/mapping/3d/reset
+post /api/mavlink/airframe/apply
+post /api/mavlink/airframe/reconfigure
+post /api/mavlink/calibration/cancel
+post /api/mavlink/calibration/start
+post /api/mavlink/command
+post /api/mavlink/dataflash/analyze
+post /api/mavlink/dataflash/download
+post /api/mavlink/dataflash/replay
+post /api/mavlink/fence/upload
+post /api/mavlink/geotag/run
+post /api/mavlink/gps-inject/start
+post /api/mavlink/gps-inject/stop
+post /api/mavlink/manual-control
+post /api/mavlink/mission/diff
+post /api/mavlink/mission/upload
+post /api/mavlink/mission/validate
+post /api/mavlink/mode-mapping/apply
+post /api/mavlink/optional-hardware/apply
+post /api/mavlink/params/compare
+post /api/mavlink/params/import
+post /api/mavlink/radio-sik/apply
+post /api/mavlink/radio-sik/apply-verify
+post /api/mavlink/radio-sik/modem-apply-profile
+post /api/mavlink/radio-sik/modem-query
+post /api/mavlink/rally/upload
+post /api/mavlink/rtk/profiles
+post /api/mavlink/rtk/profiles/import
+post /api/mavlink/rtk/reconnect
+post /api/mavlink/rtk/start
+post /api/mavlink/rtk/stop
+post /api/mavlink/serial-passthrough/start
+post /api/mavlink/serial-passthrough/stop
+post /api/mavlink/swarm/action
+post /api/mavlink/swarm/formation-mission
+post /api/mavlink/swarm/formation-plan
+post /api/mavlink/swarm/sync-action
+post /api/mavlink/vehicle/action
+post /api/media
+post /api/messages
+post /api/messages/sync
+post /api/missions
+post /api/motor-telemetry
+post /api/plugins/:id/enable
+post /api/plugins/:id/run-tool
+post /api/plugins/sdk/create-template
+post /api/plugins/sdk/package
+post /api/plugins/sdk/validate
+post /api/sensor-data
+post /api/servo/control
+post /api/settings
+post /api/stabilization/compute
+post /api/stabilization/environment
+post /api/stabilization/motors
+post /api/stabilization/params
+post /api/stabilization/payload
+post /api/stabilization/sensors
+post /api/sync/google
+post /api/telemetry/record
+post /api/waypoints
+```
 
 ---
 
@@ -1009,6 +1333,24 @@ This command:
 For full setup details, also see:
 - `FIREBASE_SETUP.md`
 - `WEB_DEPLOY.md`
+
+---
+
+## Redeploy Web App (Latest)
+
+Use this command from the project root to deploy the latest web app build to Firebase App Hosting:
+
+```bash
+npm run deploy:apphosting
+```
+
+Equivalent command:
+
+```bash
+npm run deploy:web
+```
+
+Both commands build first and then deploy App Hosting using the current Firebase project configuration.
 
 ---
 
