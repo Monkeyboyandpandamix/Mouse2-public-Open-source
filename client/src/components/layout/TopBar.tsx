@@ -37,6 +37,7 @@ import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Drone, UserMessage, MessageRecipient, UserGroup } from "@shared/schema";
+import { dispatchBackendCommand } from "@/lib/commandService";
 
 interface UserSession {
   user: { id: string; username: string; role: string } | null;
@@ -72,6 +73,7 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
   const [time, setTime] = useState(new Date());
   const [manualOverride, setManualOverride] = useState(false);
   const [manualReady, setManualReady] = useState(true);
+  const [emergencyBusy, setEmergencyBusy] = useState(false);
   const [session, setSession] = useState<UserSession>(() => {
     const saved = localStorage.getItem('mouse_gcs_session');
     return saved ? JSON.parse(saved) : { user: null, isLoggedIn: false };
@@ -546,6 +548,25 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     window.dispatchEvent(new CustomEvent('show-drone-selection'));
     toast.info("Select a different drone");
   };
+
+  const handleEmergencyLand = async () => {
+    if (emergencyBusy) return;
+    if (!confirm("EMERGENCY LANDING: This will immediately command LAND. Continue?")) {
+      return;
+    }
+    setEmergencyBusy(true);
+    try {
+      await dispatchBackendCommand({
+        commandType: "land",
+        timeoutMs: 20000,
+      });
+      toast.error("EMERGENCY LAND COMMAND ACKNOWLEDGED", { duration: 5000 });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Emergency LAND command failed");
+    } finally {
+      setEmergencyBusy(false);
+    }
+  };
   
   // Real diagnostics from WebSocket - defaults to disconnected state
   const [diagnostics, setDiagnostics] = useState<SystemDiagnostics>({
@@ -815,11 +836,8 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           variant="destructive" 
           size="sm" 
           className="gap-1 font-bold animate-pulse hover:animate-none px-2 h-7 text-[10px] sm:text-xs shrink-0"
-          onClick={() => {
-            if (confirm("EMERGENCY LANDING: This will find a safe clearing and land immediately. Continue?")) {
-              toast.error("EMERGENCY LANDING INITIATED - Finding safe landing zone...", { duration: 5000 });
-            }
-          }}
+          onClick={handleEmergencyLand}
+          disabled={emergencyBusy}
           data-testid="button-emergency-land"
         >
           <ChevronDown className="h-3 w-3" />

@@ -989,23 +989,38 @@ export function MissionPlanningPanel() {
 
   useEffect(() => {
     if (!activeRunId) return;
+    let pollFailures = 0;
     const timer = window.setInterval(async () => {
       try {
         const response = await fetch(`/api/missions/runs/${activeRunId}`);
         const data = await response.json().catch(() => ({}));
-        if (!response.ok || !data?.run) return;
+        if (!response.ok || !data?.run) {
+          pollFailures += 1;
+          if (pollFailures >= 3) {
+            toast.error("Mission status polling failed repeatedly");
+            pollFailures = 0;
+          }
+          return;
+        }
+        pollFailures = 0;
         const status = String(data.run.status || "");
-        if (status === "failed" || status === "stopped") {
+        if (status === "failed" || status === "stopped" || status === "completed") {
           setIsExecuting(false);
           setActiveRunId(null);
           if (status === "failed") {
             toast.error(data.run.error || "Mission execution failed");
+          } else if (status === "completed") {
+            toast.success("Mission completed");
           } else {
             toast.info("Mission stopped");
           }
         }
       } catch {
-        // polling errors are non-fatal
+        pollFailures += 1;
+        if (pollFailures >= 3) {
+          toast.error("Mission status polling failed repeatedly");
+          pollFailures = 0;
+        }
       }
     }, 2000);
 

@@ -130,12 +130,15 @@ const offlineSyncIdempotency = new OfflineSyncIdempotencyStore();
 interface MissionRunRecord {
   id: string;
   missionId: string;
-  status: "queued" | "uploading" | "arming" | "starting" | "running" | "stopped" | "failed";
+  status: "queued" | "uploading" | "arming" | "starting" | "running" | "completed" | "stopped" | "failed";
   error: string | null;
   createdAt: string;
   updatedAt: string;
   connectionString: string;
   commandIds: string[];
+  expectedCompletionAt?: string | null;
+  completedAt?: string | null;
+  completionSource?: "timeout_estimate" | "explicit_signal";
 }
 const missionRuns = new Map<string, MissionRunRecord>();
 interface AutomationRunRecord {
@@ -157,6 +160,7 @@ interface AutomationRunRecord {
   };
 }
 const automationRuns = new Map<string, AutomationRunRecord>();
+const oauthStateStore = new Map<string, { createdAt: number; userId: string | null }>();
 const airspaceCache = new Map<string, { expiresAt: number; payload: any }>();
 const staticAirspaceCache = new Map<string, any>();
 let serialPassthroughProcess: any = null;
@@ -586,6 +590,152 @@ function normalizeRestrictedZonesFromProvider(raw: any): AirspaceZone[] {
   return zones;
 }
 
+function toRadians(deg: number) {
+  return (deg * Math.PI) / 180;
+}
+
+function haversineDistanceMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const earthRadiusM = 6371000;
+  const dLat = toRadians(b.lat - a.lat);
+  const dLng = toRadians(b.lng - a.lng);
+  const lat1 = toRadians(a.lat);
+  const lat2 = toRadians(b.lat);
+  const h =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.sin(dLng / 2) * Math.sin(dLng / 2) * Math.cos(lat1) * Math.cos(lat2);
+  return earthRadiusM * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function pointInPolygon(
+  point: { lat: number; lng: number },
+  polygon: Array<{ lat: number; lng: number }>,
+) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].lng;
+    const yi = polygon[i].lat;
+    const xj = polygon[j].lng;
+    const yj = polygon[j].lat;
+    const intersects =
+      yi > point.lat !== yj > point.lat &&
+      point.lng < ((xj - xi) * (point.lat - yi)) / (yj - yi + Number.EPSILON) + xi;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function orientation(a: { lat: number; lng: number }, b: { lat: number; lng: number }, c: { lat: number; lng: number }) {
+  const value = (b.lng - a.lng) * (c.lat - b.lat) - (b.lat - a.lat) * (c.lng - b.lng);
+  if (Math.abs(value) < 1e-12) return 0;
+  return value > 0 ? 1 : 2;
+}
+
+function onSegment(a: { lat: number; lng: number }, b: { lat: number; lng: number }, c: { lat: number; lng: number }) {
+  return (
+    Math.min(a.lng, c.lng) <= b.lng &&
+    b.lng <= Math.max(a.lng, c.lng) &&
+    Math.min(a.lat, c.lat) <= b.lat &&
+    b.lat <= Math.max(a.lat, c.lat)
+  );
+}
+
+function segmentsIntersect(
+  p1: { lat: number; lng: number },
+  q1: { lat: number; lng: number },
+  p2: { lat: number; lng: number },
+  q2: { lat: number; lng: number },
+) {
+  const o1 = orientation(p1, q1, p2);
+  const o2 = orientation(p1, q1, q2);
+  const o3 = orientation(p2, q2, p1);
+  const o4 = orientation(p2, q2, q1);
+
+  if (o1 !== o2 && o3 !== o4) return true;
+  if (o1 === 0 && onSegment(p1, p2, q1)) return true;
+  if (o2 === 0 && onSegment(p1, q2, q1)) return true;
+  if (o3 === 0 && onSegment(p2, p1, q2)) return true;
+  if (o4 === 0 && onSegment(p2, q1, q2)) return true;
+  return false;
+}
+
+function segmentIntersectsPolygon(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+  polygon: Array<{ lat: number; lng: number }>,
+) {
+  if (pointInPolygon(a, polygon) || pointInPolygon(b, polygon)) return true;
+  for (let i = 0; i < polygon.length; i++) {
+    const p1 = polygon[i];
+    const p2 = polygon[(i + 1) % polygon.length];
+    if (segmentsIntersect(a, b, p1, p2)) return true;
+  }
+  return false;
+}
+
+function segmentIntersectsCircle(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+  center: { lat: number; lng: number },
+  radiusMeters: number,
+) {
+  const earthRadiusM = 6371000;
+  const toLocal = (p: { lat: number; lng: number }) => ({
+    x: toRadians(p.lng - center.lng) * earthRadiusM * Math.cos(toRadians(center.lat)),
+    y: toRadians(p.lat - center.lat) * earthRadiusM,
+  });
+
+  const ap = toLocal(a);
+  const bp = toLocal(b);
+  const abx = bp.x - ap.x;
+  const aby = bp.y - ap.y;
+  const ab2 = abx * abx + aby * aby;
+  if (ab2 === 0) {
+    const d2 = ap.x * ap.x + ap.y * ap.y;
+    return d2 <= radiusMeters * radiusMeters;
+  }
+  const t = Math.max(0, Math.min(1, ((-ap.x) * abx + (-ap.y) * aby) / ab2));
+  const closestX = ap.x + t * abx;
+  const closestY = ap.y + t * aby;
+  const d2 = closestX * closestX + closestY * closestY;
+  return d2 <= radiusMeters * radiusMeters;
+}
+
+function missionSegmentsIntersectZones(
+  waypoints: Array<{ latitude: number; longitude: number }>,
+  zones: AirspaceZone[],
+) {
+  const blockers: AirspaceZone[] = [];
+  if (waypoints.length < 2 || zones.length === 0) return blockers;
+
+  const segments = waypoints.slice(0, -1).map((wp, i) => ({
+    a: { lat: Number(wp.latitude), lng: Number(wp.longitude) },
+    b: { lat: Number(waypoints[i + 1].latitude), lng: Number(waypoints[i + 1].longitude) },
+  }));
+
+  for (const zone of zones) {
+    const points = Array.isArray(zone.points) ? zone.points : [];
+    const zoneEnabled = zone.enabled !== false;
+    if (!zoneEnabled) continue;
+
+    const intersects = segments.some((segment) => {
+      if (zone.type === "circle" && zone.center && Number.isFinite(Number(zone.radius))) {
+        return segmentIntersectsCircle(segment.a, segment.b, zone.center, Number(zone.radius || 0));
+      }
+      if ((zone.type === "polygon" || zone.type === "custom") && points.length >= 3) {
+        return segmentIntersectsPolygon(segment.a, segment.b, points);
+      }
+      if (points.length >= 3) {
+        return segmentIntersectsPolygon(segment.a, segment.b, points);
+      }
+      return false;
+    });
+
+    if (intersects) blockers.push(zone);
+  }
+
+  return blockers;
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -598,8 +748,46 @@ export async function registerRoutes(
   interface ClientInfo {
     ws: WebSocket;
     userId: string | null;
+    session: ServerSession | null;
+    authenticated: boolean;
+    authDeadlineTimer: NodeJS.Timeout | null;
   }
   const clients = new Map<WebSocket, ClientInfo>();
+
+  const wsEventPermission = (type: string): PermissionId | null => {
+    const normalized = String(type || "").trim().toLowerCase();
+    if (!normalized) return null;
+    if (normalized.startsWith("debug")) return "system_settings";
+    if (
+      normalized === "telemetry" ||
+      normalized === "telemetry_recorded" ||
+      normalized === "sensor_data" ||
+      normalized === "motor_telemetry" ||
+      normalized === "adsb" ||
+      normalized === "adsb_update" ||
+      normalized === "drone_telemetry" ||
+      normalized === "cloud_telemetry"
+    ) {
+      return "view_telemetry";
+    }
+    if (
+      normalized.includes("airspace") ||
+      normalized.includes("map") ||
+      normalized.includes("mission_execution") ||
+      normalized === "mission_updated"
+    ) {
+      return "view_map";
+    }
+    if (normalized.startsWith("audio_")) return "broadcast_audio";
+    return null;
+  };
+
+  const canReceiveWsEvent = (clientInfo: ClientInfo, type: string) => {
+    if (!clientInfo.authenticated || !clientInfo.session) return false;
+    const requiredPermission = wsEventPermission(type);
+    if (!requiredPermission) return true;
+    return hasServerPermission(clientInfo.session, requiredPermission);
+  };
 
   type DebugEventLevel = "info" | "warn" | "error" | "success";
   interface DebugEvent {
@@ -638,7 +826,7 @@ export async function registerRoutes(
 
     const payload = JSON.stringify({ type: "debug_event", data: event });
     clients.forEach((clientInfo) => {
-      if (clientInfo.ws.readyState === WebSocket.OPEN) {
+      if (clientInfo.ws.readyState === WebSocket.OPEN && canReceiveWsEvent(clientInfo, "debug_event")) {
         clientInfo.ws.send(payload);
       }
     });
@@ -818,10 +1006,19 @@ export async function registerRoutes(
   };
   
   wss.on("connection", (ws) => {
-    // Initially, user is not authenticated
-    const clientInfo: ClientInfo = { ws, userId: null };
+    // Deny-by-default: clients must complete auth handshake before receiving protected events.
+    const clientInfo: ClientInfo = { ws, userId: null, session: null, authenticated: false, authDeadlineTimer: null };
     clients.set(ws, clientInfo);
     console.log("WebSocket client connected");
+
+    clientInfo.authDeadlineTimer = setTimeout(() => {
+      if (!clientInfo.authenticated && ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(JSON.stringify({ type: "auth_required", data: { error: "Authentication required" } }));
+        } catch {}
+        ws.close(1008, "Authentication required");
+      }
+    }, 8000);
     
     // Handle incoming messages to register user ID
     ws.on("message", (data) => {
@@ -832,10 +1029,27 @@ export async function registerRoutes(
           const session = validateSession(msg.sessionToken);
           if (session) {
             clientInfo.userId = session.userId;
+            clientInfo.session = session;
+            clientInfo.authenticated = true;
+            if (clientInfo.authDeadlineTimer) {
+              clearTimeout(clientInfo.authDeadlineTimer);
+              clientInfo.authDeadlineTimer = null;
+            }
+            ws.send(JSON.stringify({
+              type: "auth_ok",
+              data: { userId: session.userId, role: session.role, name: session.name },
+            }));
             console.log(`WebSocket client authenticated as user: ${session.userId} (${session.name})`);
           } else {
             console.log("WebSocket auth failed: invalid or expired session token");
+            ws.send(JSON.stringify({ type: "auth_failed", data: { error: "Invalid or expired session token" } }));
           }
+          return;
+        }
+
+        if (!clientInfo.authenticated) {
+          ws.send(JSON.stringify({ type: "auth_required", data: { error: "Authenticate before sending commands" } }));
+          return;
         }
       } catch (e) {
         // Ignore parse errors
@@ -843,6 +1057,10 @@ export async function registerRoutes(
     });
     
     ws.on("close", () => {
+      if (clientInfo.authDeadlineTimer) {
+        clearTimeout(clientInfo.authDeadlineTimer);
+        clientInfo.authDeadlineTimer = null;
+      }
       clients.delete(ws);
       console.log("WebSocket client disconnected");
     });
@@ -852,7 +1070,7 @@ export async function registerRoutes(
   const broadcast = (type: string, data: any) => {
     const message = JSON.stringify({ type, data });
     clients.forEach((clientInfo) => {
-      if (clientInfo.ws.readyState === WebSocket.OPEN) {
+      if (clientInfo.ws.readyState === WebSocket.OPEN && canReceiveWsEvent(clientInfo, type)) {
         clientInfo.ws.send(message);
       }
     });
@@ -864,6 +1082,7 @@ export async function registerRoutes(
     const message = JSON.stringify({ type, data });
     clients.forEach((clientInfo) => {
       if (clientInfo.ws.readyState === WebSocket.OPEN && 
+          clientInfo.authenticated &&
           clientInfo.userId && 
           userIds.includes(clientInfo.userId)) {
         clientInfo.ws.send(message);
@@ -1900,43 +2119,89 @@ export async function registerRoutes(
       if (command === "gimbal_control") {
         const pitch = Math.max(-90, Math.min(30, Number(params?.pitch ?? -45)));
         const yaw = Math.max(-180, Math.min(180, Number(params?.yaw ?? 0)));
-        const connectionString = String(req.query.connectionString || process.env.MAVLINK_CONNECTION || "").trim();
+        const connectionString = String(
+          req.body?.connectionString || req.query.connectionString || process.env.MAVLINK_CONNECTION || "",
+        ).trim();
 
-        if (connectionString) {
-          const py = spawn(PYTHON_EXEC, [
-            path.join(SCRIPTS_DIR, "mavlink_vehicle_control.py"),
-            "--connection", connectionString,
-            "--gimbal-pitch", String(pitch),
-            "--gimbal-yaw", String(yaw),
-          ]);
-          let stdout = "", stderr = "";
-          py.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
-          py.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
-          await new Promise<void>((resolve) => py.on("close", () => resolve()));
-          pushDebugEvent("success", "mavlink.command", "Gimbal command pushed to MAVLink bridge", {
+        if (!connectionString) {
+          pushDebugEvent("warn", "mavlink.command", "Gimbal command rejected without MAVLink connection", {
             command,
-            hardware: true,
+            hardware: false,
+            pitch,
+            yaw,
+          });
+          return res.status(400).json({
+            success: false,
+            error: "connectionString is required for gimbal control",
+            hardware: false,
+            command,
+            pitch,
+            yaw,
+          });
+        }
+
+        const bridgeResult = await runMavlinkVehicleControl([
+          "action",
+          "--connection",
+          connectionString,
+          "--action",
+          "gimbal",
+          "--pitch",
+          String(pitch),
+          "--yaw",
+          String(yaw),
+          "--timeout",
+          "10",
+        ]);
+        if (!bridgeResult.ok || bridgeResult.data?.success !== true) {
+          const errorMessage = bridgeResult.error || bridgeResult.data?.error || "Gimbal command failed";
+          pushDebugEvent("error", "mavlink.command", "Gimbal command failed", {
+            command,
             connectionString,
             pitch,
             yaw,
-            stderr: stderr.trim() || null,
+            error: errorMessage,
           });
-          return res.json({ success: true, command, pitch, yaw, output: stdout.trim(), hardware: true });
+          return res.status(500).json({
+            success: false,
+            error: errorMessage,
+            hardware: true,
+            command,
+            pitch,
+            yaw,
+          });
         }
-
-        pushDebugEvent("warn", "mavlink.command", "Gimbal command rejected without MAVLink connection", {
+        if (bridgeResult.data?.ack == null) {
+          pushDebugEvent("warn", "mavlink.command", "Gimbal command missing ACK", {
+            command,
+            connectionString,
+            pitch,
+            yaw,
+          });
+          return res.status(502).json({
+            success: false,
+            error: "Gimbal command did not receive FC ACK",
+            hardware: true,
+            command,
+            pitch,
+            yaw,
+          });
+        }
+        pushDebugEvent("success", "mavlink.command", "Gimbal command acknowledged", {
           command,
-          hardware: false,
+          hardware: true,
+          connectionString,
           pitch,
           yaw,
+          ack: bridgeResult.data?.ack,
         });
-        return res.status(503).json({
-          success: false,
-          error: "MAVLink connection is required for gimbal control",
-          hardware: false,
+        return res.json({
+          success: true,
           command,
           pitch,
           yaw,
+          ack: bridgeResult.data?.ack,
+          hardware: true,
         });
       }
 
@@ -3125,6 +3390,87 @@ export async function registerRoutes(
     return res.json({ success: true, command });
   });
 
+  const isAirspaceAuthorizationCodeValid = (rawCode: string) => {
+    const code = String(rawCode || "").trim();
+    if (!code) return false;
+    const configuredCodes = String(process.env.AIRSPACE_AUTH_CODES || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (configuredCodes.length === 0) return false;
+    return configuredCodes.includes(code);
+  };
+
+  const loadMissionStaticRestrictionZones = async (includePartTime: boolean) => {
+    const files: Array<{ key: string; file: string; label: string }> = [
+      {
+        key: "national",
+        file: "National_Security_UAS_Flight_Restrictions.geojson",
+        label: "National Security Restriction",
+      },
+      {
+        key: "pending",
+        file: "Pending_National_Security_UAS_Flight_Restrictions.geojson",
+        label: "Pending Security Restriction",
+      },
+    ];
+    if (includePartTime) {
+      files.push({
+        key: "part_time",
+        file: "Part_Time_National_Security_UAS_Flight_Restrictions.geojson",
+        label: "Part-Time Security Restriction",
+      });
+    }
+
+    const zones: AirspaceZone[] = [];
+    for (const entry of files) {
+      let cached = staticAirspaceCache.get(entry.key);
+      if (!cached) {
+        const fullPath = path.resolve(process.cwd(), "client", "public", "airspace", entry.file);
+        const raw = JSON.parse(await readFile(fullPath, "utf-8"));
+        cached = normalizeStaticGeoJsonToZones(raw, entry.label);
+        staticAirspaceCache.set(entry.key, cached);
+      }
+      zones.push(...(cached as AirspaceZone[]));
+    }
+    return zones;
+  };
+
+  const fetchMissionLiveRestrictionZones = async (bbox: { minLng: number; minLat: number; maxLng: number; maxLat: number }) => {
+    const apiKey = process.env.OPENAIP_API_KEY;
+    if (!apiKey) return [] as AirspaceZone[];
+    const apiBase = (process.env.OPENAIP_BASE_URL || "https://api.core.openaip.net/api").replace(/\/+$/, "");
+    const providerUrl = new URL(`${apiBase}/airspaces`);
+    providerUrl.searchParams.set("bbox", `${bbox.minLng},${bbox.minLat},${bbox.maxLng},${bbox.maxLat}`);
+    providerUrl.searchParams.set("limit", "250");
+    const providerResp = await fetch(providerUrl.toString(), {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "MOUSE-GCS/1.0 (Ground Control Station)",
+        "x-openaip-api-key": apiKey,
+        apiKey,
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!providerResp.ok) return [] as AirspaceZone[];
+    const raw = await providerResp.json();
+    return normalizeRestrictedZonesFromProvider(raw);
+  };
+
+  const estimateMissionDurationSec = (wps: Array<{ latitude: number; longitude: number; altitude: number }>) => {
+    if (wps.length < 2) return 90;
+    let totalDistance = 0;
+    for (let i = 0; i < wps.length - 1; i++) {
+      totalDistance += haversineDistanceMeters(
+        { lat: Number(wps[i].latitude), lng: Number(wps[i].longitude) },
+        { lat: Number(wps[i + 1].latitude), lng: Number(wps[i + 1].longitude) },
+      );
+    }
+    const cruiseMps = 8;
+    const segmentPenaltySec = wps.length * 8;
+    return Math.max(60, Math.min(4 * 60 * 60, Math.round(totalDistance / cruiseMps + segmentPenaltySec)));
+  };
+
   app.post("/api/missions/:id/execute", async (req: any, res) => {
     try {
       const session = req.serverSession as ServerSession | undefined;
@@ -3158,6 +3504,58 @@ export async function registerRoutes(
         return res.status(400).json({ success: false, error: "Mission validation failed", validationErrors });
       }
 
+      const routePolicy = req.body?.routePolicy && typeof req.body.routePolicy === "object" ? req.body.routePolicy : {};
+      const overrideNoFlyRestrictions = routePolicy.overrideNoFlyRestrictions === true;
+      const partTimeRestrictionsActive = routePolicy.partTimeRestrictionsActive === true;
+      const authorizationCode = String(routePolicy.authorizationCode || "").trim();
+      const hasEmergencyOverridePermission = hasServerPermission(session, "emergency_override");
+
+      const routeBbox = waypoints.reduce(
+        (acc, wp) => ({
+          minLat: Math.min(acc.minLat, Number(wp.latitude)),
+          minLng: Math.min(acc.minLng, Number(wp.longitude)),
+          maxLat: Math.max(acc.maxLat, Number(wp.latitude)),
+          maxLng: Math.max(acc.maxLng, Number(wp.longitude)),
+        }),
+        {
+          minLat: Number.POSITIVE_INFINITY,
+          minLng: Number.POSITIVE_INFINITY,
+          maxLat: Number.NEGATIVE_INFINITY,
+          maxLng: Number.NEGATIVE_INFINITY,
+        },
+      );
+      const expandedBbox = {
+        minLng: routeBbox.minLng - 0.01,
+        minLat: routeBbox.minLat - 0.01,
+        maxLng: routeBbox.maxLng + 0.01,
+        maxLat: routeBbox.maxLat + 0.01,
+      };
+
+      const staticZones = await loadMissionStaticRestrictionZones(partTimeRestrictionsActive);
+      const liveZones = await fetchMissionLiveRestrictionZones(expandedBbox);
+      const effectiveRestrictedZones = [...staticZones, ...liveZones];
+      const blockers = missionSegmentsIntersectZones(waypoints, effectiveRestrictedZones);
+      if (blockers.length > 0 && !overrideNoFlyRestrictions) {
+        return res.status(409).json({
+          success: false,
+          error: "Mission route intersects restricted/no-fly airspace",
+          blockedBy: blockers.slice(0, 10).map((z) => ({ id: z.id, name: z.name, type: z.type })),
+          routePolicyRequired: {
+            overrideNoFlyRestrictions: true,
+          },
+        });
+      }
+
+      if (blockers.length > 0 && overrideNoFlyRestrictions && !hasEmergencyOverridePermission) {
+        const codeValid = isAirspaceAuthorizationCodeValid(authorizationCode);
+        if (!codeValid) {
+          return res.status(403).json({
+            success: false,
+            error: "Restricted-airspace override requires valid authorization code or emergency override permission",
+          });
+        }
+      }
+
       const runId = `${Date.now()}-${randomBytes(4).toString("hex")}`;
       const run: MissionRunRecord = {
         id: runId,
@@ -3168,6 +3566,9 @@ export async function registerRoutes(
         updatedAt: new Date().toISOString(),
         connectionString,
         commandIds: [],
+        expectedCompletionAt: null,
+        completedAt: null,
+        completionSource: undefined,
       };
       missionRuns.set(runId, run);
       broadcast("mission_execution_update", run);
@@ -3242,8 +3643,21 @@ export async function registerRoutes(
 
       run.status = "running";
       run.updatedAt = new Date().toISOString();
+      const estimatedDurationSec = estimateMissionDurationSec(waypoints);
+      run.expectedCompletionAt = new Date(Date.now() + estimatedDurationSec * 1000).toISOString();
       missionRuns.set(runId, run);
       broadcast("mission_execution_update", run);
+      setTimeout(() => {
+        const activeRun = missionRuns.get(runId);
+        if (!activeRun || activeRun.status !== "running") return;
+        activeRun.status = "completed";
+        activeRun.completedAt = new Date().toISOString();
+        activeRun.completionSource = "timeout_estimate";
+        activeRun.updatedAt = activeRun.completedAt;
+        missionRuns.set(runId, activeRun);
+        broadcast("mission_execution_update", activeRun);
+        void appendCloudDocument("mission_runs", activeRun, { session }).catch(() => {});
+      }, estimatedDurationSec * 1000);
       void appendCloudDocument("mission_runs", run, { session }).catch(() => {});
       return res.json({ success: true, run });
     } catch (error: any) {
@@ -3282,6 +3696,28 @@ export async function registerRoutes(
       return res.json({ success: stopRecord.status === "acked", run, stopCommand: stopRecord });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || "Mission stop failed" });
+    }
+  });
+
+  app.post("/api/missions/runs/:runId/complete", async (req: any, res) => {
+    try {
+      const session = req.serverSession as ServerSession | undefined;
+      if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+      const run = missionRuns.get(String(req.params.runId || "").trim());
+      if (!run) return res.status(404).json({ success: false, error: "Mission run not found" });
+      if (run.status !== "running") {
+        return res.status(409).json({ success: false, error: `Mission run is in '${run.status}' state` });
+      }
+      run.status = "completed";
+      run.completedAt = new Date().toISOString();
+      run.completionSource = "explicit_signal";
+      run.updatedAt = run.completedAt;
+      missionRuns.set(run.id, run);
+      broadcast("mission_execution_update", run);
+      void appendCloudDocument("mission_runs", run, { session }).catch(() => {});
+      return res.json({ success: true, run });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || "Mission completion update failed" });
     }
   });
 
@@ -5930,18 +6366,39 @@ export async function registerRoutes(
   });
 
   app.get("/api/google/auth-url", (req, res) => {
+    const session = requestSession(req);
+    if (!session) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
     const result = getAuthUrl();
     if ('error' in result) {
       res.status(400).json({ error: result.error });
     } else {
+      const now = Date.now();
+      for (const [state, meta] of oauthStateStore.entries()) {
+        if (now - meta.createdAt > 10 * 60 * 1000) {
+          oauthStateStore.delete(state);
+        }
+      }
+      oauthStateStore.set(result.state, { createdAt: now, userId: session.userId });
       res.json(result);
     }
   });
 
   app.get("/api/google/callback", async (req, res) => {
     const code = req.query.code as string;
+    const state = String(req.query.state || "").trim();
     if (!code) {
       return res.status(400).send('Authorization code missing');
+    }
+    if (!state) {
+      return res.status(400).send('OAuth state missing');
+    }
+    const stateMeta = oauthStateStore.get(state);
+    const stateValid = Boolean(stateMeta && Date.now() - stateMeta.createdAt <= 10 * 60 * 1000);
+    oauthStateStore.delete(state);
+    if (!stateValid) {
+      return res.status(400).send('Invalid or expired OAuth state');
     }
     
     const result = await handleOAuthCallback(code);

@@ -117,11 +117,39 @@ def cmd_action(args):
                 0,
                 altitude,
             )
+        elif action == "gimbal":
+            pitch = float(args.pitch if args.pitch is not None else -45.0)
+            yaw = float(args.yaw if args.yaw is not None else 0.0)
+            mav.mav.command_long_send(
+                mav.target_system,
+                mav.target_component,
+                mavutil.mavlink.MAV_CMD_DO_MOUNT_CONTROL,
+                0,
+                pitch,
+                0,
+                yaw,
+                0,
+                0,
+                0,
+                mavutil.mavlink.MAV_MOUNT_MODE_MAVLINK_TARGETING,
+            )
         else:
-            raise RuntimeError("action must be arm|disarm|set_mode|reboot|takeoff")
+            raise RuntimeError("action must be arm|disarm|set_mode|reboot|takeoff|gimbal")
 
         ack = wait_command_ack(mav, args.timeout)
-        print(json.dumps({"success": True, "action": action, "mode": args.mode, "altitude": args.altitude, "ack": ack}))
+        print(
+            json.dumps(
+                {
+                    "success": True,
+                    "action": action,
+                    "mode": args.mode,
+                    "altitude": args.altitude,
+                    "pitch": args.pitch,
+                    "yaw": args.yaw,
+                    "ack": ack,
+                }
+            )
+        )
     except Exception as e:
         print(json.dumps({"success": False, "error": str(e)}))
         sys.exit(1)
@@ -174,6 +202,8 @@ def main():
     a.add_argument("--action", required=True)
     a.add_argument("--mode", required=False)
     a.add_argument("--altitude", type=float, required=False)
+    a.add_argument("--pitch", type=float, required=False)
+    a.add_argument("--yaw", type=float, required=False)
     a.add_argument("--timeout", type=float, default=8.0)
     a.set_defaults(fn=cmd_action)
 
