@@ -1353,13 +1353,23 @@ npm run deploy:web
 Both commands build first and deploy backend `web-mouse` using:
 
 ```bash
-npx firebase-tools deploy --only apphosting:web-mouse
+firebase apphosting:rollouts:create web-mouse --git-branch main --force
 ```
 
 If your backend ID is different:
 
 ```bash
 FIREBASE_APPHOSTING_BACKEND=<your-backend-id> npm run deploy:apphosting:custom
+```
+
+Important: Firebase App Hosting deploys from your connected GitHub repository state.
+If new features/components are missing on the hosted site, commit and push first:
+
+```bash
+git add -A
+git commit -m "Deploy latest MOUSE updates"
+git push origin main
+npm run deploy:apphosting
 ```
 
 ---
