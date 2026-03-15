@@ -12,6 +12,18 @@ interface ErrorBoundaryState {
   message: string;
 }
 
+const IGNORABLE_ERRORS = [
+  "_leaflet_pos",
+  "_leaflet_id",
+  "Map container",
+  "ResizeObserver loop",
+];
+
+function isIgnorableError(error: Error | string): boolean {
+  const msg = typeof error === "string" ? error : error?.message || "";
+  return IGNORABLE_ERRORS.some((pattern) => msg.includes(pattern));
+}
+
 class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
   constructor(props: { children: ReactNode }) {
     super(props);
@@ -19,10 +31,14 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
   }
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    if (isIgnorableError(error)) {
+      return { hasError: false, message: "" };
+    }
     return { hasError: true, message: error?.message || "Unknown application error" };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
+    if (isIgnorableError(error)) return;
     console.error("App runtime error:", error, info);
   }
 

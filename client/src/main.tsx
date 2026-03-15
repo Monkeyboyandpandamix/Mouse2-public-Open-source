@@ -24,6 +24,31 @@ window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
   });
 };
 
+window.addEventListener("error", (event) => {
+  const msg = event.message || "";
+  if (
+    msg.includes("_leaflet_pos") ||
+    msg.includes("_leaflet_id") ||
+    msg.includes("Map container") ||
+    msg.includes("ResizeObserver loop")
+  ) {
+    event.preventDefault();
+    return;
+  }
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  const msg = String(event.reason?.message || event.reason || "");
+  if (
+    msg.includes("_leaflet_pos") ||
+    msg.includes("_leaflet_id") ||
+    msg.includes("ResizeObserver loop")
+  ) {
+    event.preventDefault();
+    return;
+  }
+});
+
 // Initialize Firebase early so real-time sync features can attach listeners when enabled.
 getFirebaseApp();
 void getFirebaseAnalyticsSafe();
