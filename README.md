@@ -26,7 +26,7 @@ A comprehensive ground control station for autonomous drone control with Orange 
 16. [Troubleshooting & Common Errors](#troubleshooting--common-errors)
 17. [Dependency Issues](#dependency-issues)
 18. [Firebase Cloud Sync](#firebase-cloud-sync)
-19. [Web Deployment (Firebase Hosting)](#web-deployment-firebase-hosting)
+19. [Web Deployment (Firebase App Hosting)](#web-deployment-firebase-app-hosting)
 20. [New Cloud/Audio APIs](#new-cloudaudio-apis)
 
 ---
@@ -976,7 +976,7 @@ The app now supports centralized Firebase synchronization for cross-operator vis
 
 ---
 
-## Web Deployment (Firebase Hosting)
+## Web Deployment (Firebase App Hosting)
 
 ### Prerequisites
 1. Firebase project configured (this project uses `mouse-ee60c`).
@@ -986,22 +986,18 @@ The app now supports centralized Firebase synchronization for cross-operator vis
    firebase login
    firebase use --add
    ```
-3. Backend deployed as Cloud Run service named `mouse-api` (used by Hosting rewrite for `/api/**`).
+3. App Hosting backend created in Firebase project (`mouse-ee60c`).
 
 ### Deploy Web App
 ```bash
-npm run deploy:web
+npm run deploy:apphosting
 ```
 
 This command:
 1. builds the frontend (`npm run build`)
-2. deploys `dist/public` to Firebase Hosting
+2. deploys to Firebase App Hosting
 
-### Hosting Routing
-- `/api/**` -> Cloud Run service `mouse-api` (`us-central1`)
-- `/**` -> `index.html` (SPA fallback)
-
-### Required Backend Env on Cloud Run
+### Required Backend Env on App Hosting
 - `FIREBASE_PROJECT_ID`
 - `FIREBASE_DATABASE_URL`
 - `FIREBASE_STORAGE_BUCKET`
@@ -1048,7 +1044,7 @@ These work with existing audio endpoints:
 - **v1.4** - Mission execution and comprehensive terminal commands
 - **v1.5** - Team communication with direct messaging
 - **v1.6** - Standalone deployment support and custom roles
-- **v1.7** - Firebase cloud sync, offline media failover, web deployment to Firebase Hosting, operator audio bridge session APIs
+- **v1.7** - Firebase cloud sync, offline media failover, web deployment to Firebase App Hosting, operator audio bridge session APIs
 
 ---
 

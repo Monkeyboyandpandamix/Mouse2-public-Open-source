@@ -158,6 +158,9 @@ function createWindow() {
   const preloadPath = app.isPackaged
     ? path.join(process.resourcesPath, 'app', 'electron', 'preload.cjs')
     : path.join(__dirname, 'preload.cjs');
+  const windowIconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'app', 'electron', 'icon.png')
+    : path.join(__dirname, 'icon.png');
     
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -172,7 +175,8 @@ function createWindow() {
     },
     autoHideMenuBar: true,
     backgroundColor: '#1a1a2e',
-    show: false
+    show: false,
+    icon: windowIconPath
   });
 
   const url = `http://127.0.0.1:${PORT}`;
@@ -226,6 +230,7 @@ app.whenReady().then(async () => {
     resizable: false,
     center: true,
     backgroundColor: '#1a1a2e',
+    icon: path.join(__dirname, 'icon.png'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true

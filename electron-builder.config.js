@@ -27,7 +27,7 @@ module.exports = {
         arch: ['x64']
       }
     ],
-    icon: 'electron/icon.ico',
+    icon: 'electron/icon.png',
     artifactName: '${productName}-${version}-Windows.${ext}'
   },
   mac: {
@@ -37,7 +37,7 @@ module.exports = {
         arch: ['x64', 'arm64']
       }
     ],
-    icon: 'electron/icon.icns',
+    icon: 'electron/icon.png',
     category: 'public.app-category.utilities',
     artifactName: '${productName}-${version}-Mac.${ext}'
   },

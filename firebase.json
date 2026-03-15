@@ -8,13 +8,6 @@
     ],
     "rewrites": [
       {
-        "source": "/api/**",
-        "run": {
-          "serviceId": "mouse-api",
-          "region": "us-central1"
-        }
-      },
-      {
         "source": "**",
         "destination": "/index.html"
       }

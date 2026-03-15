@@ -10,6 +10,12 @@ import * as crypto from 'crypto';
 const DATA_DIR = './data';
 const AUTH_FILE = path.join(DATA_DIR, 'google_auth.json');
 
+// OAuth 2.0 client credentials (for installed/desktop app flow)
+// Users can set these via environment variables for their own Google Cloud project
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/google/callback';
+
 // Encryption key derived from environment - REQUIRED for secure operation
 // Falls back to REPL_ID for development in Replit environment
 function getEncryptionKey(): Buffer {
@@ -85,12 +91,6 @@ interface AuthStore {
   activeAccountId: string | null;
   accounts: StoredGoogleAccount[];
 }
-
-// OAuth 2.0 client credentials (for installed/desktop app flow)
-// Users can set these via environment variables for their own Google Cloud project
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
-const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/google/callback';
 
 const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',

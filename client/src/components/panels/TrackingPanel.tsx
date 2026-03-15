@@ -15,7 +15,7 @@ import * as cocoSsd from "@tensorflow-models/coco-ssd";
 
 interface DetectedObject {
   id: string;
-  type: "person" | "vehicle" | "unknown";
+  type: "person" | "vehicle" | "animal" | "aircraft" | "package" | "unknown";
   label: string;
   confidence: number;
   x: number;
@@ -31,7 +31,7 @@ interface DetectedObject {
 
 interface TrackedObject {
   id: string;
-  type: "person" | "vehicle" | "unknown";
+  type: "person" | "vehicle" | "animal" | "aircraft" | "package" | "unknown";
   label: string;
   x: number;
   y: number;

@@ -5,6 +5,8 @@ import { Label } from "@/components/ui/label";
 import { ChevronDown, ChevronUp, GripVertical } from "lucide-react";
 
 const DEFAULT_RADIUS_MILES = 30;
+const PANEL_MARGIN = 8;
+const PANEL_SAFE_TOP = 72;
 
 type FeatureCollection = {
   type: "FeatureCollection";
@@ -26,7 +28,7 @@ const LAYERS: LayerConfig[] = [
     label: "FAA UAS Facility Map",
     file: "/airspace/FAA_UAS_FacilityMap_Data.geojson",
     color: "#22c55e",
-    defaultOn: false,
+    defaultOn: true,
     maxBytes: 500 * 1024 * 1024,
   },
   {
@@ -122,6 +124,15 @@ export function RegulatoryGeoJsonOverlay({
   dronePosition = null,
   operatorPosition = null,
 }: RegulatoryGeoJsonOverlayProps) {
+  const clampPanelPosition = useCallback((x: number, y: number, panelWidth = 288, panelHeight = 200) => {
+    const maxX = Math.max(PANEL_MARGIN, window.innerWidth - panelWidth - PANEL_MARGIN);
+    const maxY = Math.max(PANEL_SAFE_TOP, window.innerHeight - panelHeight - PANEL_MARGIN);
+    return {
+      x: Math.max(PANEL_MARGIN, Math.min(x, maxX)),
+      y: Math.max(PANEL_SAFE_TOP, Math.min(y, maxY)),
+    };
+  }, []);
+
   const [enabled, setEnabled] = useState<Record<string, boolean>>(
     () => Object.fromEntries(LAYERS.map((l) => [l.id, l.defaultOn])),
   );
@@ -138,12 +149,19 @@ export function RegulatoryGeoJsonOverlay({
       const saved = localStorage.getItem("mouse_faa_panel_pos");
       if (saved) {
         const parsed = JSON.parse(saved);
-        const maxX = Math.max(0, window.innerWidth - 300);
-        const maxY = Math.max(0, window.innerHeight - 200);
-        return { x: Math.max(0, Math.min(parsed.x, maxX)), y: Math.max(0, Math.min(parsed.y, maxY)) };
+        const x = Number(parsed?.x);
+        const y = Number(parsed?.y);
+        if (Number.isFinite(x) && Number.isFinite(y)) {
+          const maxX = Math.max(PANEL_MARGIN, window.innerWidth - 300);
+          const maxY = Math.max(PANEL_SAFE_TOP, window.innerHeight - 200);
+          return {
+            x: Math.max(PANEL_MARGIN, Math.min(x, maxX)),
+            y: Math.max(PANEL_SAFE_TOP, Math.min(y, maxY)),
+          };
+        }
       }
-      return { x: 16, y: 16 };
-    } catch { return { x: 16, y: 16 }; }
+      return { x: 16, y: PANEL_SAFE_TOP };
+    } catch { return { x: 16, y: PANEL_SAFE_TOP }; }
   });
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
@@ -153,6 +171,25 @@ export function RegulatoryGeoJsonOverlay({
   useEffect(() => {
     localStorage.setItem("mouse_faa_panel_pos", JSON.stringify(panelPos));
   }, [panelPos]);
+
+  useEffect(() => {
+    const panelW = panelRef.current?.offsetWidth || (collapsed ? 120 : 288);
+    const panelH = panelRef.current?.offsetHeight || 200;
+    const next = clampPanelPosition(panelPos.x, panelPos.y, panelW, panelH);
+    if (next.x !== panelPos.x || next.y !== panelPos.y) {
+      setPanelPos(next);
+    }
+  }, [panelPos.x, panelPos.y, collapsed, clampPanelPosition]);
+
+  useEffect(() => {
+    const onResize = () => {
+      const panelW = panelRef.current?.offsetWidth || (collapsed ? 120 : 288);
+      const panelH = panelRef.current?.offsetHeight || 200;
+      setPanelPos((prev) => clampPanelPosition(prev.x, prev.y, panelW, panelH));
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [collapsed, clampPanelPosition]);
 
   const handleDragStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -166,10 +203,12 @@ export function RegulatoryGeoJsonOverlay({
     const onMove = (e: MouseEvent) => {
       const panelW = panelRef.current?.offsetWidth || 288;
       const panelH = panelRef.current?.offsetHeight || 200;
-      setPanelPos({
-        x: Math.max(0, Math.min(window.innerWidth - panelW, e.clientX - dragStartRef.current.x)),
-        y: Math.max(0, Math.min(window.innerHeight - panelH, e.clientY - dragStartRef.current.y)),
-      });
+      setPanelPos(clampPanelPosition(
+        e.clientX - dragStartRef.current.x,
+        e.clientY - dragStartRef.current.y,
+        panelW,
+        panelH,
+      ));
     };
     const onUp = () => setIsDragging(false);
     document.addEventListener("mousemove", onMove);
@@ -314,7 +353,7 @@ export function RegulatoryGeoJsonOverlay({
             <button
               className="cursor-grab active:cursor-grabbing p-0.5 text-muted-foreground hover:text-foreground"
               onMouseDown={handleDragStart}
-              onDoubleClick={() => { setPanelPos({ x: 16, y: 80 }); localStorage.removeItem("mouse_faa_panel_pos"); }}
+              onDoubleClick={() => { setPanelPos({ x: 16, y: PANEL_SAFE_TOP }); localStorage.removeItem("mouse_faa_panel_pos"); }}
               title="Drag to move, double-click to reset position"
               data-testid="faa-panel-drag"
             >

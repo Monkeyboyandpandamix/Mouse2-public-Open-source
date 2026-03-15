@@ -6,14 +6,15 @@
   "scripts": {
     "dev:client": "vite dev --port 5000",
     "dev": "tsx server/index.ts",
-    "build": "tsx script/build.ts",
+    "build": "npm run check && tsx script/build.ts",
     "start": "node dist/index.cjs",
     "start:linux": "bash ./start-linux.sh",
     "start:macos": "bash ./start-macos.sh",
     "start:pi": "bash ./start-pi-onboard.sh",
     "start:windows": "start-windows.bat",
     "check": "tsc",
-    "deploy:web": "npm run build && npx firebase-tools deploy --only hosting"
+    "deploy:web": "npm run build && npx firebase-tools deploy --only apphosting",
+    "deploy:apphosting": "npm run build && npx firebase-tools deploy --only apphosting"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
