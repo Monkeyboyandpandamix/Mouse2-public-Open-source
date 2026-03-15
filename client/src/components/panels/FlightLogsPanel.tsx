@@ -45,6 +45,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { MapErrorBoundary } from "@/components/map/MapErrorBoundary";
 import { useNoFlyZones } from "@/hooks/useNoFlyZones";
 import { NoFlyZoneOverlay } from "@/components/map/NoFlyZoneOverlay";
 import { NoFlyZoneLegend } from "@/components/map/NoFlyZoneLegend";
@@ -683,6 +684,7 @@ export function FlightLogsPanel() {
             </DialogDescription>
           </DialogHeader>
           <div className="h-96 rounded-lg overflow-hidden border relative">
+            <MapErrorBoundary>
             <MapContainer
               center={mapCenter}
               zoom={15}
@@ -716,6 +718,7 @@ export function FlightLogsPanel() {
                 </>
               )}
             </MapContainer>
+            </MapErrorBoundary>
             <NoFlyZoneLegend className="absolute bottom-2 left-2 z-[400]" />
           </div>
           <div className="grid grid-cols-4 gap-4 mt-2">

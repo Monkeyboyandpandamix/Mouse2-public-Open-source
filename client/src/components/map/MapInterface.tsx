@@ -2,10 +2,12 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, Circle, Polygon, useM
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { useEffect, useState, useCallback, type MouseEvent } from "react";
+import { MapErrorBoundary } from "@/components/map/MapErrorBoundary";
 
 // Default location - Burlington, NC
 const DEFAULT_LAT = 36.0957;
 const DEFAULT_LNG = -79.4378;
+
 import { Search, Map as MapIcon, Layers, ZoomIn, ZoomOut, RotateCcw, Crosshair, Plane, Battery, Signal, Radio, User } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -562,6 +564,7 @@ export function MapInterface() {
 
   return (
     <div className="w-full h-full relative z-0 bg-background group">
+      <MapErrorBoundary>
       <MapContainer 
         center={position} 
         zoom={18} 
@@ -874,6 +877,7 @@ export function MapInterface() {
           </>
         )}
       </MapContainer>
+      </MapErrorBoundary>
 
       {/* Search Bar Overlay */}
       <div className="absolute top-4 left-4 z-[400] w-72">

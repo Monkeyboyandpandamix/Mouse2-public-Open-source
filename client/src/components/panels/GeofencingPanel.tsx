@@ -31,6 +31,7 @@ import { Lock } from "lucide-react";
 import { MapContainer, TileLayer, Circle as LeafletCircle, Polygon, Marker, useMapEvents, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { MapErrorBoundary } from "@/components/map/MapErrorBoundary";
 import { NoFlyZoneLegend } from "@/components/map/NoFlyZoneLegend";
 
 interface GeofenceZone {
@@ -436,6 +437,7 @@ export function GeofencingPanel() {
     <div className="h-full flex overflow-hidden bg-background">
       {/* Left - Map */}
       <div className="flex-1 relative">
+        <MapErrorBoundary>
         <MapContainer
           center={[mapCenter.lat, mapCenter.lng]}
           zoom={14}
@@ -530,6 +532,7 @@ export function GeofencingPanel() {
             />
           )}
         </MapContainer>
+        </MapErrorBoundary>
 
         {/* Map overlay instructions */}
         {isDrawing && (

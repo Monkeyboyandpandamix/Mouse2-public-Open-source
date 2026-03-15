@@ -51,6 +51,7 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { MapContainer, TileLayer, Polyline, Marker, Popup, CircleMarker } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { MapErrorBoundary } from "@/components/map/MapErrorBoundary";
 import { FLIGHT_CATEGORIES } from "@shared/schema";
 import { useNoFlyZones } from "@/hooks/useNoFlyZones";
 import { NoFlyZoneOverlay } from "@/components/map/NoFlyZoneOverlay";
@@ -807,6 +808,7 @@ export function FlightLogbookPanel() {
           ) : (
             <>
               <div className="h-80 rounded-lg overflow-hidden border relative">
+                <MapErrorBoundary>
                 <MapContainer
                   center={mapCenter}
                   zoom={15}
@@ -857,6 +859,7 @@ export function FlightLogbookPanel() {
                     </Marker>
                   )}
                 </MapContainer>
+                </MapErrorBoundary>
                 <NoFlyZoneLegend className="absolute bottom-2 left-2 z-[400]" />
               </div>
 

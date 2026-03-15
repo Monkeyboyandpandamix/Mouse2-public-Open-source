@@ -2,6 +2,7 @@ import { MapContainer, TileLayer, Marker, Polyline, Circle, useMapEvents, useMap
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import { useEffect, useState, useCallback } from "react";
+import { MapErrorBoundary } from "@/components/map/MapErrorBoundary";
 import { ZoomIn, ZoomOut, MapPin, Layers, Map as MapIcon, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
@@ -167,6 +168,7 @@ export function MissionMap({ waypoints, homePosition, onMapClick, clickEnabled =
 
   return (
     <div className="w-full h-full relative z-0 bg-background">
+      <MapErrorBoundary>
       <MapContainer 
         center={defaultPosition} 
         zoom={16} 
@@ -211,6 +213,7 @@ export function MissionMap({ waypoints, homePosition, onMapClick, clickEnabled =
           />
         )}
       </MapContainer>
+      </MapErrorBoundary>
 
       {showClickHint && clickEnabled && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[400] bg-primary text-primary-foreground px-4 py-2 rounded-full text-sm font-medium flex items-center gap-2 shadow-lg animate-pulse">

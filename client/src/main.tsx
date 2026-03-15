@@ -3,6 +3,53 @@ import App from "./App";
 import "./index.css";
 import { getFirebaseApp, getFirebaseAnalyticsSafe } from "@/lib/firebase";
 
+const SUPPRESSED_PATTERNS = [
+  "_leaflet_pos",
+  "_leaflet_id",
+  "Map container",
+  "ResizeObserver loop",
+  "leaflet",
+  "getPosition",
+  "_getMapPanePos",
+];
+
+function isSuppressedError(msg: string): boolean {
+  return SUPPRESSED_PATTERNS.some((p) => msg.includes(p));
+}
+
+window.onerror = (message, _source, _lineno, _colno, _error) => {
+  if (isSuppressedError(String(message))) {
+    return true;
+  }
+  return false;
+};
+
+window.onunhandledrejection = (event: PromiseRejectionEvent) => {
+  const msg = String(event.reason?.message || event.reason || "");
+  if (isSuppressedError(msg)) {
+    event.preventDefault();
+    return;
+  }
+};
+
+window.addEventListener("error", (event) => {
+  const msg = String(event.message || event.error?.message || "");
+  if (isSuppressedError(msg)) {
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    return;
+  }
+}, true);
+
+window.addEventListener("unhandledrejection", (event) => {
+  const msg = String(event.reason?.message || event.reason || "");
+  if (isSuppressedError(msg)) {
+    event.stopImmediatePropagation();
+    event.preventDefault();
+    return;
+  }
+}, true);
+
 const originalFetch = window.fetch.bind(window);
 window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
   const token = localStorage.getItem("mouse_gcs_session_token");
@@ -23,31 +70,6 @@ window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
     headers,
   });
 };
-
-window.addEventListener("error", (event) => {
-  const msg = event.message || "";
-  if (
-    msg.includes("_leaflet_pos") ||
-    msg.includes("_leaflet_id") ||
-    msg.includes("Map container") ||
-    msg.includes("ResizeObserver loop")
-  ) {
-    event.preventDefault();
-    return;
-  }
-});
-
-window.addEventListener("unhandledrejection", (event) => {
-  const msg = String(event.reason?.message || event.reason || "");
-  if (
-    msg.includes("_leaflet_pos") ||
-    msg.includes("_leaflet_id") ||
-    msg.includes("ResizeObserver loop")
-  ) {
-    event.preventDefault();
-    return;
-  }
-});
 
 // Initialize Firebase early so real-time sync features can attach listeners when enabled.
 getFirebaseApp();
