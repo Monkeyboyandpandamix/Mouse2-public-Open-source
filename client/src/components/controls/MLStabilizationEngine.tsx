@@ -79,6 +79,33 @@ interface PIDState {
   integralMax: number;
 }
 
+type FrameType = "quad_x" | "quad_plus" | "quad_h" | "hex_x" | "hex_plus" | "octo_x" | "octo_plus" | "octo_v" | "y6" | "y4" | "tri" | "coax_quad";
+
+interface FrameArchProfile {
+  motorCount: number;
+  rollGainScale: number;
+  pitchGainScale: number;
+  yawGainScale: number;
+  thrustGainScale: number;
+  inertiaScale: { x: number; y: number; z: number };
+  redundancyLevel: number;
+}
+
+const FRAME_ARCH_PROFILES: Record<FrameType, FrameArchProfile> = {
+  quad_x: { motorCount: 4, rollGainScale: 1.0, pitchGainScale: 1.0, yawGainScale: 1.0, thrustGainScale: 1.0, inertiaScale: { x: 1.0, y: 1.0, z: 1.0 }, redundancyLevel: 0 },
+  quad_plus: { motorCount: 4, rollGainScale: 1.0, pitchGainScale: 1.0, yawGainScale: 1.0, thrustGainScale: 1.0, inertiaScale: { x: 1.0, y: 1.0, z: 1.0 }, redundancyLevel: 0 },
+  quad_h: { motorCount: 4, rollGainScale: 1.0, pitchGainScale: 0.9, yawGainScale: 1.0, thrustGainScale: 1.0, inertiaScale: { x: 1.0, y: 1.3, z: 1.1 }, redundancyLevel: 0 },
+  hex_x: { motorCount: 6, rollGainScale: 0.85, pitchGainScale: 0.85, yawGainScale: 0.9, thrustGainScale: 0.9, inertiaScale: { x: 1.4, y: 1.4, z: 1.8 }, redundancyLevel: 1 },
+  hex_plus: { motorCount: 6, rollGainScale: 0.85, pitchGainScale: 0.85, yawGainScale: 0.9, thrustGainScale: 0.9, inertiaScale: { x: 1.4, y: 1.4, z: 1.8 }, redundancyLevel: 1 },
+  octo_x: { motorCount: 8, rollGainScale: 0.75, pitchGainScale: 0.75, yawGainScale: 0.8, thrustGainScale: 0.85, inertiaScale: { x: 1.8, y: 1.8, z: 2.5 }, redundancyLevel: 2 },
+  octo_plus: { motorCount: 8, rollGainScale: 0.75, pitchGainScale: 0.75, yawGainScale: 0.8, thrustGainScale: 0.85, inertiaScale: { x: 1.8, y: 1.8, z: 2.5 }, redundancyLevel: 2 },
+  octo_v: { motorCount: 8, rollGainScale: 0.78, pitchGainScale: 0.72, yawGainScale: 0.8, thrustGainScale: 0.85, inertiaScale: { x: 1.7, y: 2.0, z: 2.4 }, redundancyLevel: 2 },
+  y6: { motorCount: 6, rollGainScale: 0.9, pitchGainScale: 0.88, yawGainScale: 0.85, thrustGainScale: 0.92, inertiaScale: { x: 1.3, y: 1.3, z: 1.6 }, redundancyLevel: 1 },
+  y4: { motorCount: 4, rollGainScale: 1.0, pitchGainScale: 0.95, yawGainScale: 0.85, thrustGainScale: 0.95, inertiaScale: { x: 1.0, y: 1.1, z: 1.1 }, redundancyLevel: 0 },
+  tri: { motorCount: 3, rollGainScale: 1.1, pitchGainScale: 1.1, yawGainScale: 0.7, thrustGainScale: 1.05, inertiaScale: { x: 0.9, y: 0.9, z: 0.85 }, redundancyLevel: 0 },
+  coax_quad: { motorCount: 8, rollGainScale: 0.82, pitchGainScale: 0.82, yawGainScale: 0.85, thrustGainScale: 0.88, inertiaScale: { x: 1.2, y: 1.2, z: 1.6 }, redundancyLevel: 2 },
+};
+
 interface StabilizationConfig {
   enabled: boolean;
   mlAssistEnabled: boolean;
@@ -95,6 +122,7 @@ interface StabilizationConfig {
   targetHoverAltitude: number;
   payloadMass: number;
   vehicleMass: number;
+  frameType: FrameType;
 }
 
 const DEFAULT_CONFIG: StabilizationConfig = {
@@ -113,6 +141,7 @@ const DEFAULT_CONFIG: StabilizationConfig = {
   targetHoverAltitude: 20,
   payloadMass: 0,
   vehicleMass: 2.5,
+  frameType: "quad_x",
 };
 
 const GRAVITY = 9.80665;
@@ -898,22 +927,32 @@ export function MLStabilizationEngine() {
         mlConfidence = predictorRef.current.getConfidence();
       }
 
+      const frameProfile = FRAME_ARCH_PROFILES[cfg.frameType] ?? FRAME_ARCH_PROFILES.quad_x;
+
       const disturbanceScale = 1 + windEst.gustLevel * 0.6 + payloadComp.payloadShiftEstimate * 0.5;
       const adaptiveKp = cfg.adaptiveGainsEnabled ? 0.22 * disturbanceScale * weatherAdapt.stabilityFactor : 0.22;
       const adaptiveKi = cfg.adaptiveGainsEnabled ? 0.06 * disturbanceScale : 0.06;
       const adaptiveKd = cfg.adaptiveGainsEnabled ? 0.12 * disturbanceScale * weatherAdapt.stabilityFactor : 0.12;
 
+      const rollKp = adaptiveKp * frameProfile.rollGainScale;
+      const rollKi = adaptiveKi * frameProfile.rollGainScale;
+      const rollKd = adaptiveKd * frameProfile.rollGainScale;
+      const pitchKp = adaptiveKp * frameProfile.pitchGainScale;
+      const pitchKi = adaptiveKi * frameProfile.pitchGainScale;
+      const pitchKd = adaptiveKd * frameProfile.pitchGainScale;
+      const thrustScale = frameProfile.thrustGainScale;
+
       const rollError = -attitude.roll + payloadComp.rollCompensation;
       const pitchError = -attitude.pitch + payloadComp.pitchCompensation;
       const altError = holdAlt - currentAlt;
 
-      const rollCorr = computePID(pidRollRef.current, rollError, adaptiveKp, adaptiveKi, adaptiveKd, dt);
-      const pitchCorr = computePID(pidPitchRef.current, pitchError, adaptiveKp, adaptiveKi, adaptiveKd, dt);
-      const altCorr = computePID(pidAltRef.current, altError, adaptiveKp * 0.55, adaptiveKi * 1.1, adaptiveKd * 0.65, dt);
+      const rollCorr = computePID(pidRollRef.current, rollError, rollKp, rollKi, rollKd, dt);
+      const pitchCorr = computePID(pidPitchRef.current, pitchError, pitchKp, pitchKi, pitchKd, dt);
+      const altCorr = computePID(pidAltRef.current, altError, adaptiveKp * 0.55 * thrustScale, adaptiveKi * 1.1 * thrustScale, adaptiveKd * 0.65 * thrustScale, dt);
 
       const windYawCorr = cfg.windCompensationEnabled
         ? clamp(-Math.atan2(windEst.y, windEst.x + 0.001) * 2, -8, 8) : 0;
-      const yawCorr = computePID(pidYawRef.current, windYawCorr, 0.15, 0.03, 0.08, dt);
+      const yawCorr = computePID(pidYawRef.current, windYawCorr, 0.15 * frameProfile.yawGainScale, 0.03 * frameProfile.yawGainScale, 0.08 * frameProfile.yawGainScale, dt);
 
       const mlRollAdj = mlConfidence * (mlPrediction[0] ?? 0) * 0.15;
       const mlPitchAdj = mlConfidence * (mlPrediction[1] ?? 0) * 0.15;
@@ -1035,6 +1074,17 @@ export function MLStabilizationEngine() {
             kp: Math.round(adaptiveKp * 1000) / 1000,
             ki: Math.round(adaptiveKi * 1000) / 1000,
             kd: Math.round(adaptiveKd * 1000) / 1000,
+          },
+
+          frameType: cfg.frameType,
+          frameProfile: {
+            label: (cfg.frameType ?? "quad_x").replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
+            motorCount: frameProfile.motorCount,
+            redundancyLevel: frameProfile.redundancyLevel,
+            rollGainScale: frameProfile.rollGainScale,
+            pitchGainScale: frameProfile.pitchGainScale,
+            yawGainScale: frameProfile.yawGainScale,
+            thrustGainScale: frameProfile.thrustGainScale,
           },
         },
       }));

@@ -7,6 +7,7 @@ import { Slider } from "@/components/ui/slider";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Brain,
   Wind,
@@ -26,6 +27,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   CircleDot,
+  Hexagon,
+  ShieldCheck,
 } from "lucide-react";
 
 interface MLStabilizationStatus {
@@ -56,6 +59,8 @@ interface MLStabilizationStatus {
   payloadCompensation: { thrustComp: number; rollComp: number; pitchComp: number; shiftEstimate: number; releaseDetected: boolean };
   corrections: { roll: number; pitch: number; yaw: number; throttle: number; forward: number; lateral: number };
   adaptiveGains: { kp: number; ki: number; kd: number };
+  frameType?: string;
+  frameProfile?: { label: string; motorCount: number; redundancyLevel: number; rollGainScale: number; pitchGainScale: number; yawGainScale: number; thrustGainScale: number };
 }
 
 interface StabilizationConfig {
@@ -74,6 +79,7 @@ interface StabilizationConfig {
   targetHoverAltitude: number;
   payloadMass: number;
   vehicleMass: number;
+  frameType: string;
 }
 
 const DEFAULT_CONFIG: StabilizationConfig = {
@@ -92,7 +98,23 @@ const DEFAULT_CONFIG: StabilizationConfig = {
   targetHoverAltitude: 20,
   payloadMass: 0,
   vehicleMass: 2.5,
+  frameType: "quad_x",
 };
+
+const FRAME_OPTIONS = [
+  { value: "quad_x", label: "Quadcopter X", motors: 4 },
+  { value: "quad_plus", label: "Quadcopter +", motors: 4 },
+  { value: "quad_h", label: "Quadcopter H", motors: 4 },
+  { value: "hex_x", label: "Hexacopter X", motors: 6 },
+  { value: "hex_plus", label: "Hexacopter +", motors: 6 },
+  { value: "octo_x", label: "Octocopter X", motors: 8 },
+  { value: "octo_plus", label: "Octocopter +", motors: 8 },
+  { value: "octo_v", label: "Octocopter V", motors: 8 },
+  { value: "y6", label: "Y6 (Coaxial Tri)", motors: 6 },
+  { value: "y4", label: "Y4 Copter", motors: 4 },
+  { value: "tri", label: "Tricopter", motors: 3 },
+  { value: "coax_quad", label: "Coaxial Quad", motors: 8 },
+];
 
 function StatusDot({ status }: { status: "active" | "standby" | "warning" | "error" }) {
   const colors = {
@@ -540,6 +562,62 @@ export function StabilizationPanel() {
                       data-testid="slider-hover-alt"
                     />
                   </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="p-3 pb-1">
+                  <CardTitle className="text-xs flex items-center gap-1.5">
+                    <Hexagon className="h-3.5 w-3.5 text-violet-500" />
+                    Frame Architecture
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-3 pt-0 space-y-3">
+                  <div>
+                    <Label className="text-[10px] text-muted-foreground mb-1 block">Frame Type</Label>
+                    <Select
+                      value={config.frameType}
+                      onValueChange={(v) => updateConfig({ frameType: v })}
+                      data-testid="select-frame-type"
+                    >
+                      <SelectTrigger className="h-8 text-xs" data-testid="select-frame-trigger">
+                        <SelectValue placeholder="Select frame type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {FRAME_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value} data-testid={`select-frame-${opt.value}`}>
+                            <span className="flex items-center gap-2">
+                              {opt.label}
+                              <span className="text-muted-foreground text-[10px]">({opt.motors}M)</span>
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {status?.frameProfile && (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <div className="bg-muted/50 rounded px-2 py-1">
+                        <div className="text-[9px] text-muted-foreground">Motors</div>
+                        <div className="text-xs font-mono font-semibold" data-testid="text-motor-count">{status.frameProfile.motorCount}</div>
+                      </div>
+                      <div className="bg-muted/50 rounded px-2 py-1">
+                        <div className="text-[9px] text-muted-foreground">Redundancy</div>
+                        <div className="text-xs font-mono font-semibold flex items-center gap-1" data-testid="text-redundancy">
+                          {status.frameProfile.redundancyLevel > 0 && <ShieldCheck className="h-3 w-3 text-emerald-500" />}
+                          {status.frameProfile.redundancyLevel === 0 ? "None" : status.frameProfile.redundancyLevel === 1 ? "Single" : "Dual"}
+                        </div>
+                      </div>
+                      <div className="bg-muted/50 rounded px-2 py-1">
+                        <div className="text-[9px] text-muted-foreground">Roll/Pitch Scale</div>
+                        <div className="text-xs font-mono">{status.frameProfile.rollGainScale.toFixed(2)} / {status.frameProfile.pitchGainScale.toFixed(2)}</div>
+                      </div>
+                      <div className="bg-muted/50 rounded px-2 py-1">
+                        <div className="text-[9px] text-muted-foreground">Yaw/Thrust Scale</div>
+                        <div className="text-xs font-mono">{status.frameProfile.yawGainScale.toFixed(2)} / {status.frameProfile.thrustGainScale.toFixed(2)}</div>
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 

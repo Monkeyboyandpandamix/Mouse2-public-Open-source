@@ -6,10 +6,11 @@ import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { Volume2, Mic, Play, Square, MessageSquare, Plus, Trash2, Check, Radio, Loader2, Usb, Bell, Speaker, Lock } from "lucide-react";
+import { Volume2, Mic, Play, Square, MessageSquare, Plus, Trash2, Check, Radio, Loader2, Usb, Bell, Speaker, Lock, Monitor, Cpu, ArrowRight } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useDeviceContext, type DeviceEnvironment } from "@/hooks/useDeviceContext";
 
 type AudioDevice = 'gpio' | 'usb' | 'buzzer';
 
@@ -53,6 +54,9 @@ interface AudioStatusResponse {
 export function SpeakerPanel() {
   const { hasPermission } = usePermissions();
   const canBroadcast = hasPermission('broadcast_audio');
+  const deviceCtx = useDeviceContext();
+  const isControllerMode = deviceCtx.isController;
+  const micRoutedToDrone = isControllerMode && deviceCtx.peripherals.microphone === "drone_speaker";
   const [isRecording, setIsRecording] = useState(false);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [isPreviewing, setIsPreviewing] = useState(false);
@@ -541,6 +545,35 @@ export function SpeakerPanel() {
         <h2 className="text-2xl font-bold tracking-tight font-sans">Audio Broadcast System</h2>
         <p className="text-muted-foreground">Speak through the drone's onboard speaker</p>
       </div>
+
+      <Card className={`border ${isControllerMode ? "border-blue-500/50 bg-blue-500/5" : "border-emerald-500/50 bg-emerald-500/5"}`}>
+        <CardContent className="p-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              {isControllerMode ? <Monitor className="h-4 w-4 text-blue-500" /> : <Cpu className="h-4 w-4 text-emerald-500" />}
+              <div>
+                <p className="text-xs font-semibold" data-testid="text-device-env">
+                  {isControllerMode ? "Ground Controller Mode" : "Drone Onboard Mode"}
+                </p>
+                <p className="text-[10px] text-muted-foreground">
+                  {micRoutedToDrone
+                    ? "Microphone auto-routes to drone speaker"
+                    : isControllerMode
+                    ? "Mic routing: local preview"
+                    : "Audio plays locally on drone hardware"}
+                </p>
+              </div>
+            </div>
+            {micRoutedToDrone && (
+              <Badge className="bg-blue-500 text-[10px]" data-testid="badge-mic-routed">
+                <Mic className="h-3 w-3 mr-1" />
+                <ArrowRight className="h-3 w-3 mr-1" />
+                <Speaker className="h-3 w-3" />
+              </Badge>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
       <Card className="border-2 border-primary/50">
         <CardHeader>

@@ -5,6 +5,9 @@ import { AutoStabilizationController } from "@/components/controls/AutoStabiliza
 import { MLStabilizationEngine } from "@/components/controls/MLStabilizationEngine";
 import { EmergencyProtocolController } from "@/components/controls/EmergencyProtocolController";
 import { GpsDeniedNavigationController } from "@/components/navigation/GpsDeniedNavigationController";
+import { MLNavigationEngine } from "@/components/navigation/MLNavigationEngine";
+import { DeviceContextBanner } from "@/components/layout/DeviceContextBanner";
+import { useDeviceContext } from "@/hooks/useDeviceContext";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, X, Eye, ArrowLeft, Cpu, Camera, Video } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -59,6 +62,7 @@ const SwarmOpsPanel = lazyWithRetry(() => import("@/components/panels/SwarmOpsPa
 const GeofencingPanel = lazyWithRetry(() => import("@/components/panels/GeofencingPanel").then(m => ({ default: m.GeofencingPanel })), "geofence");
 const GUIConfigPanel = lazyWithRetry(() => import("@/components/panels/GUIConfigPanel").then(m => ({ default: m.GUIConfigPanel })), "guiconfig");
 const StabilizationPanel = lazyWithRetry(() => import("@/components/panels/StabilizationPanel").then(m => ({ default: m.StabilizationPanel })), "stabilization");
+const GpsDeniedNavPanel = lazyWithRetry(() => import("@/components/panels/GpsDeniedNavPanel").then(m => ({ default: m.GpsDeniedNavPanel })), "gpsnav");
 
 function PanelFallback() {
   return (
@@ -169,6 +173,7 @@ const MOVED_TO_SETTINGS_TABS = new Set(["modesetup", "mavtools", "rtk", "plugins
 export default function Home() {
   const [activeTab, setActiveTab] = useState("map");
   const [systemErrors, setSystemErrors] = useState<SystemError[]>([]);
+  const deviceContext = useDeviceContext();
   
   // Global session state - check if user is logged in
   const [isLoggedIn, setIsLoggedIn] = useState(() => {
@@ -666,6 +671,12 @@ export default function Home() {
             <StabilizationPanel />
           </div>
         );
+      case "gpsnav":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <GpsDeniedNavPanel />
+          </div>
+        );
       default:
         return (
           <div className="flex-1 relative">
@@ -682,6 +693,7 @@ export default function Home() {
       <MLStabilizationEngine />
       <EmergencyProtocolController />
       <GpsDeniedNavigationController />
+      <MLNavigationEngine />
       {/* Background Grid Pattern */}
       <div className="absolute inset-0 bg-grid-pattern opacity-20 pointer-events-none z-0" />
 
@@ -749,6 +761,24 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      <DeviceContextBanner
+        environment={deviceContext.environment}
+        isOnboard={deviceContext.isOnboard}
+        networkStatus={deviceContext.networkStatus}
+        latencyMs={deviceContext.latencyMs}
+        connectedDroneName={deviceContext.connectedDroneName}
+        peripheralMappings={{
+          microphone: deviceContext.peripherals.microphone,
+          camera: deviceContext.peripherals.camera,
+          speaker: deviceContext.peripherals.speaker,
+        }}
+        onToggleEnvironment={() => {
+          deviceContext.setEnvironment(
+            deviceContext.environment === "ground_controller" ? "drone_onboard" : "ground_controller"
+          );
+        }}
+      />
 
       <TopBar onSettingsClick={() => setActiveTab("settings")} />
 

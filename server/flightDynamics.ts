@@ -108,6 +108,158 @@ export interface MLModelWeights {
   };
 }
 
+export type FrameType = "quad_x" | "quad_plus" | "quad_h" | "hex_x" | "hex_plus" | "octo_x" | "octo_plus" | "octo_v" | "y6" | "y4" | "tri" | "coax_quad";
+
+export interface FrameGeometry {
+  frameType: FrameType;
+  label: string;
+  motorCount: number;
+  motorAngles: number[];
+  motorDirections: number[];
+  yawFactors: number[];
+  rollFactors: number[];
+  pitchFactors: number[];
+  thrustFactors: number[];
+  defaultArmLength: number;
+  defaultMass: number;
+  description: string;
+}
+
+export const FRAME_GEOMETRIES: Record<FrameType, FrameGeometry> = {
+  quad_x: {
+    frameType: "quad_x", label: "Quadcopter X", motorCount: 4,
+    motorAngles: [45, 135, 225, 315],
+    motorDirections: [1, -1, 1, -1],
+    yawFactors: [1, -1, 1, -1],
+    rollFactors: [0.707, -0.707, -0.707, 0.707],
+    pitchFactors: [0.707, 0.707, -0.707, -0.707],
+    thrustFactors: [1, 1, 1, 1],
+    defaultArmLength: 0.25, defaultMass: 2.5,
+    description: "Standard X configuration quadcopter",
+  },
+  quad_plus: {
+    frameType: "quad_plus", label: "Quadcopter +", motorCount: 4,
+    motorAngles: [0, 90, 180, 270],
+    motorDirections: [1, -1, 1, -1],
+    yawFactors: [1, -1, 1, -1],
+    rollFactors: [0, -1, 0, 1],
+    pitchFactors: [1, 0, -1, 0],
+    thrustFactors: [1, 1, 1, 1],
+    defaultArmLength: 0.25, defaultMass: 2.5,
+    description: "Plus configuration quadcopter",
+  },
+  quad_h: {
+    frameType: "quad_h", label: "Quadcopter H", motorCount: 4,
+    motorAngles: [45, 135, 225, 315],
+    motorDirections: [1, -1, 1, -1],
+    yawFactors: [1, -1, 1, -1],
+    rollFactors: [0.707, -0.707, -0.707, 0.707],
+    pitchFactors: [0.5, 0.5, -0.5, -0.5],
+    thrustFactors: [1, 1, 1, 1],
+    defaultArmLength: 0.3, defaultMass: 3.0,
+    description: "H-frame quadcopter with elongated body",
+  },
+  hex_x: {
+    frameType: "hex_x", label: "Hexacopter X", motorCount: 6,
+    motorAngles: [30, 90, 150, 210, 270, 330],
+    motorDirections: [1, -1, 1, -1, 1, -1],
+    yawFactors: [1, -1, 1, -1, 1, -1],
+    rollFactors: [0.5, 1, 0.5, -0.5, -1, -0.5],
+    pitchFactors: [0.866, 0, -0.866, -0.866, 0, 0.866],
+    thrustFactors: [1, 1, 1, 1, 1, 1],
+    defaultArmLength: 0.35, defaultMass: 4.0,
+    description: "X configuration hexacopter — motor redundancy for safety",
+  },
+  hex_plus: {
+    frameType: "hex_plus", label: "Hexacopter +", motorCount: 6,
+    motorAngles: [0, 60, 120, 180, 240, 300],
+    motorDirections: [1, -1, 1, -1, 1, -1],
+    yawFactors: [1, -1, 1, -1, 1, -1],
+    rollFactors: [0, 0.866, 0.866, 0, -0.866, -0.866],
+    pitchFactors: [1, 0.5, -0.5, -1, -0.5, 0.5],
+    thrustFactors: [1, 1, 1, 1, 1, 1],
+    defaultArmLength: 0.35, defaultMass: 4.0,
+    description: "Plus configuration hexacopter",
+  },
+  octo_x: {
+    frameType: "octo_x", label: "Octocopter X", motorCount: 8,
+    motorAngles: [22.5, 67.5, 112.5, 157.5, 202.5, 247.5, 292.5, 337.5],
+    motorDirections: [1, -1, 1, -1, 1, -1, 1, -1],
+    yawFactors: [1, -1, 1, -1, 1, -1, 1, -1],
+    rollFactors: [0.383, 0.924, 0.924, 0.383, -0.383, -0.924, -0.924, -0.383],
+    pitchFactors: [0.924, 0.383, -0.383, -0.924, -0.924, -0.383, 0.383, 0.924],
+    thrustFactors: [1, 1, 1, 1, 1, 1, 1, 1],
+    defaultArmLength: 0.4, defaultMass: 6.0,
+    description: "X configuration octocopter — heavy lift with redundancy",
+  },
+  octo_plus: {
+    frameType: "octo_plus", label: "Octocopter +", motorCount: 8,
+    motorAngles: [0, 45, 90, 135, 180, 225, 270, 315],
+    motorDirections: [1, -1, 1, -1, 1, -1, 1, -1],
+    yawFactors: [1, -1, 1, -1, 1, -1, 1, -1],
+    rollFactors: [0, 0.707, 1, 0.707, 0, -0.707, -1, -0.707],
+    pitchFactors: [1, 0.707, 0, -0.707, -1, -0.707, 0, 0.707],
+    thrustFactors: [1, 1, 1, 1, 1, 1, 1, 1],
+    defaultArmLength: 0.4, defaultMass: 6.0,
+    description: "Plus configuration octocopter",
+  },
+  octo_v: {
+    frameType: "octo_v", label: "Octocopter V", motorCount: 8,
+    motorAngles: [15, 45, 135, 165, 195, 225, 315, 345],
+    motorDirections: [1, -1, 1, -1, 1, -1, 1, -1],
+    yawFactors: [1, -1, 1, -1, 1, -1, 1, -1],
+    rollFactors: [0.259, 0.707, 0.707, 0.259, -0.259, -0.707, -0.707, -0.259],
+    pitchFactors: [0.966, 0.707, -0.707, -0.966, -0.966, -0.707, 0.707, 0.966],
+    thrustFactors: [1, 1, 1, 1, 1, 1, 1, 1],
+    defaultArmLength: 0.4, defaultMass: 6.5,
+    description: "V-layout octocopter for improved forward flight",
+  },
+  y6: {
+    frameType: "y6", label: "Y6 (Coaxial Tri)", motorCount: 6,
+    motorAngles: [0, 0, 120, 120, 240, 240],
+    motorDirections: [1, -1, 1, -1, 1, -1],
+    yawFactors: [1, -1, 1, -1, 1, -1],
+    rollFactors: [0, 0, 0.866, 0.866, -0.866, -0.866],
+    pitchFactors: [1, 1, -0.5, -0.5, -0.5, -0.5],
+    thrustFactors: [1, 0.9, 1, 0.9, 1, 0.9],
+    defaultArmLength: 0.35, defaultMass: 3.5,
+    description: "Y6 coaxial — 3 arms, 6 motors, compact with redundancy",
+  },
+  y4: {
+    frameType: "y4", label: "Y4 Copter", motorCount: 4,
+    motorAngles: [30, 330, 180, 180],
+    motorDirections: [1, -1, 1, -1],
+    yawFactors: [0, 0, 1, -1],
+    rollFactors: [0.5, -0.5, 0, 0],
+    pitchFactors: [0.866, 0.866, -1, -1],
+    thrustFactors: [1, 1, 0.8, 0.8],
+    defaultArmLength: 0.3, defaultMass: 2.0,
+    description: "Y4 tricopter-style with rear coaxial pair",
+  },
+  tri: {
+    frameType: "tri", label: "Tricopter", motorCount: 3,
+    motorAngles: [0, 120, 240],
+    motorDirections: [1, 1, 1],
+    yawFactors: [0, 0, 0],
+    rollFactors: [0, 0.866, -0.866],
+    pitchFactors: [1, -0.5, -0.5],
+    thrustFactors: [1, 1, 1],
+    defaultArmLength: 0.35, defaultMass: 1.8,
+    description: "Tricopter — uses servo-tilting rear motor for yaw",
+  },
+  coax_quad: {
+    frameType: "coax_quad", label: "Coaxial Quad", motorCount: 8,
+    motorAngles: [45, 45, 135, 135, 225, 225, 315, 315],
+    motorDirections: [1, -1, -1, 1, 1, -1, -1, 1],
+    yawFactors: [1, -1, -1, 1, 1, -1, -1, 1],
+    rollFactors: [0.707, 0.707, -0.707, -0.707, -0.707, -0.707, 0.707, 0.707],
+    pitchFactors: [0.707, 0.707, 0.707, 0.707, -0.707, -0.707, -0.707, -0.707],
+    thrustFactors: [1, 0.9, 1, 0.9, 1, 0.9, 1, 0.9],
+    defaultArmLength: 0.25, defaultMass: 4.5,
+    description: "Coaxial quad — 4 arms, 8 motors stacked for compactness",
+  },
+};
+
 const DEFAULT_QUAD_PARAMS: QuadrotorParams = {
   mass: 2.5,
   armLength: 0.25,
@@ -529,22 +681,33 @@ class QuadrotorDynamics {
     }, 0);
   }
 
-  computeTorques(motorRpms: number[]): { x: number; y: number; z: number } {
+  computeTorques(motorRpms: number[], frameGeometry?: FrameGeometry): { x: number; y: number; z: number } {
     const L = this.params.armLength;
     const thrusts = motorRpms.map(rpm => {
       const omega = (rpm * 2 * Math.PI) / 60;
       return this.params.thrustCoeff * omega * omega;
     });
-
-    while (thrusts.length < 4) thrusts.push(0);
-
-    const tauX = L * (thrusts[1] - thrusts[3]);
-    const tauY = L * (thrusts[0] - thrusts[2]);
     const reactiveTorques = motorRpms.map(rpm => {
       const omega = (rpm * 2 * Math.PI) / 60;
       return this.params.torqueCoeff * omega * omega;
     });
+
+    if (frameGeometry && frameGeometry.motorCount === thrusts.length) {
+      let tauX = 0, tauY = 0, tauZ = 0;
+      for (let i = 0; i < frameGeometry.motorCount; i++) {
+        const thrust = thrusts[i] ?? 0;
+        const reactive = reactiveTorques[i] ?? 0;
+        tauX += L * (frameGeometry.rollFactors[i] ?? 0) * thrust;
+        tauY += L * (frameGeometry.pitchFactors[i] ?? 0) * thrust;
+        tauZ += (frameGeometry.yawFactors[i] ?? 0) * reactive;
+      }
+      return { x: tauX, y: tauY, z: tauZ };
+    }
+
+    while (thrusts.length < 4) thrusts.push(0);
     while (reactiveTorques.length < 4) reactiveTorques.push(0);
+    const tauX = L * (thrusts[1] - thrusts[3]);
+    const tauY = L * (thrusts[0] - thrusts[2]);
     const tauZ = reactiveTorques[0] - reactiveTorques[1] + reactiveTorques[2] - reactiveTorques[3];
 
     return { x: tauX, y: tauY, z: tauZ };

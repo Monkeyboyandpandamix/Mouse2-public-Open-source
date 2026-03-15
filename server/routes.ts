@@ -2272,6 +2272,11 @@ export async function registerRoutes(
     res.json({ success: true, profiles: copterAirframeProfiles });
   });
 
+  app.get("/api/stabilization/frame-geometries", async (_req, res) => {
+    const { FRAME_GEOMETRIES } = await import("./flightDynamics");
+    res.json({ success: true, geometries: FRAME_GEOMETRIES });
+  });
+
   app.post("/api/mavlink/airframe/apply", async (req, res) => {
     try {
       const connectionString = String(req.body?.connectionString || "").trim();
