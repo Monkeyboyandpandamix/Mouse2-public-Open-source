@@ -22,14 +22,84 @@ export interface AuthenticatedUser {
   enabled: boolean;
 }
 
+export interface AuthUserAdminView extends AuthenticatedUser {
+  createdAt: string;
+  lastLogin: string | null;
+}
+
 const DATA_DIR = path.resolve(process.cwd(), "data");
 const AUTH_USERS_FILE = path.join(DATA_DIR, "auth_users.json");
 
-const DEFAULT_USERS = [
-  { id: "1", username: "admin", fullName: "System Administrator", role: "admin", password: "admin123" },
-  { id: "2", username: "operator1", fullName: "Flight Operator", role: "operator", password: "operator123" },
-  { id: "3", username: "viewer1", fullName: "Mission Observer", role: "viewer", password: "viewer123" },
-] as const;
+const BOOTSTRAP_ROLE_VALUES = new Set(["admin", "operator", "viewer"]);
+
+function buildDefaultBootstrapUsers() {
+  const generated: string[] = [];
+  const resolvePassword = (envKey: string, username: string) => {
+    const fromEnv = String(process.env[envKey] || "").trim();
+    if (fromEnv.length >= 8) return fromEnv;
+    const random = randomBytes(12).toString("hex");
+    generated.push(`${username}:${random}`);
+    return random;
+  };
+
+  const users = [
+    {
+      id: "1",
+      username: "admin",
+      fullName: "System Administrator",
+      role: "admin",
+      password: resolvePassword("DEFAULT_ADMIN_PASSWORD", "admin"),
+    },
+    {
+      id: "2",
+      username: "operator1",
+      fullName: "Flight Operator",
+      role: "operator",
+      password: resolvePassword("DEFAULT_OPERATOR_PASSWORD", "operator1"),
+    },
+    {
+      id: "3",
+      username: "viewer1",
+      fullName: "Mission Observer",
+      role: "viewer",
+      password: resolvePassword("DEFAULT_VIEWER_PASSWORD", "viewer1"),
+    },
+  ] as const;
+
+  return { users, generated };
+}
+
+function readBootstrapUsersFromEnv() {
+  const fromJson = String(process.env.AUTH_BOOTSTRAP_USERS_JSON || "").trim();
+  if (fromJson) {
+    try {
+      const parsed = JSON.parse(fromJson);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((entry: any, idx: number) => ({
+            id: String(entry.id || `${Date.now()}-${idx + 1}`),
+            username: sanitizeUsername(entry.username),
+            fullName: String(entry.fullName || entry.username || "").trim(),
+            role: BOOTSTRAP_ROLE_VALUES.has(String(entry.role || "").toLowerCase())
+              ? String(entry.role || "").toLowerCase()
+              : "viewer",
+            password: String(entry.password || ""),
+          }))
+          .filter((entry) => entry.username && entry.password.length >= 8);
+      }
+    } catch {
+      return [];
+    }
+  }
+
+  const username = sanitizeUsername(process.env.AUTH_BOOTSTRAP_USERNAME || "");
+  const password = String(process.env.AUTH_BOOTSTRAP_PASSWORD || "");
+  if (!username || password.length < 8) return [];
+  const fullName = String(process.env.AUTH_BOOTSTRAP_FULL_NAME || username).trim();
+  const roleRaw = String(process.env.AUTH_BOOTSTRAP_ROLE || "admin").toLowerCase();
+  const role = BOOTSTRAP_ROLE_VALUES.has(roleRaw) ? roleRaw : "admin";
+  return [{ id: "1", username, fullName, role, password }];
+}
 
 const normalizeRole = (role: unknown) => {
   const value = String(role || "viewer").toLowerCase();
@@ -57,7 +127,19 @@ function ensureAuthUserFile() {
 
   mkdirSync(DATA_DIR, { recursive: true });
   const now = new Date().toISOString();
-  const users: AuthUserRecord[] = DEFAULT_USERS.map((user) => {
+  const explicitBootstrapUsers = readBootstrapUsersFromEnv();
+  const { users: defaultBootstrapUsers, generated } = buildDefaultBootstrapUsers();
+  const bootstrapUsers = explicitBootstrapUsers.length > 0 ? explicitBootstrapUsers : defaultBootstrapUsers;
+  if (generated.length > 0 && explicitBootstrapUsers.length === 0) {
+    console.warn("[auth] Default bootstrap accounts generated with random passwords:");
+    generated.forEach((entry) => {
+      console.warn(`[auth] ${entry}`);
+    });
+    console.warn(
+      "[auth] Set DEFAULT_ADMIN_PASSWORD / DEFAULT_OPERATOR_PASSWORD / DEFAULT_VIEWER_PASSWORD to control bootstrap passwords.",
+    );
+  }
+  const users: AuthUserRecord[] = bootstrapUsers.map((user) => {
     const hashed = hashPassword(user.password);
     return {
       id: user.id,
@@ -114,6 +196,18 @@ function toAuthenticatedUser(record: AuthUserRecord): AuthenticatedUser {
   };
 }
 
+function toAdminView(record: AuthUserRecord): AuthUserAdminView {
+  return {
+    id: record.id,
+    username: record.username,
+    fullName: record.fullName,
+    role: normalizeRole(record.role),
+    enabled: record.enabled !== false,
+    createdAt: record.createdAt,
+    lastLogin: record.lastLogin,
+  };
+}
+
 export function authenticateWithPassword(username: string, password: string): AuthenticatedUser | null {
   const normalizedUsername = sanitizeUsername(username);
   const pass = String(password || "");
@@ -139,4 +233,117 @@ export function getAuthenticatedUserById(userId: string): AuthenticatedUser | nu
   const user = users.find((entry) => entry.id === String(userId || ""));
   if (!user || user.enabled === false) return null;
   return toAuthenticatedUser(user);
+}
+
+export function listAuthUsers(): AuthUserAdminView[] {
+  const users = readAuthUsers();
+  return users
+    .map((user) => toAdminView(user))
+    .sort((a, b) => a.username.localeCompare(b.username));
+}
+
+export function createAuthUser(input: {
+  username: string;
+  fullName?: string;
+  password: string;
+  role: string;
+  enabled?: boolean;
+}): AuthUserAdminView {
+  const users = readAuthUsers();
+  const username = sanitizeUsername(input.username);
+  if (!username || username.length < 3) {
+    throw new Error("username must be at least 3 characters");
+  }
+  if (String(input.password || "").length < 8) {
+    throw new Error("password must be at least 8 characters");
+  }
+  if (users.some((entry) => sanitizeUsername(entry.username) === username)) {
+    throw new Error("username already exists");
+  }
+
+  const now = new Date().toISOString();
+  const hashed = hashPassword(String(input.password || ""));
+  const nextUser: AuthUserRecord = {
+    id: `${Date.now()}-${randomBytes(4).toString("hex")}`,
+    username,
+    fullName: String(input.fullName || username).trim() || username,
+    role: normalizeRole(input.role),
+    enabled: input.enabled !== false,
+    createdAt: now,
+    lastLogin: null,
+    passwordHash: hashed.passwordHash,
+    passwordSalt: hashed.passwordSalt,
+  };
+  users.push(nextUser);
+  writeAuthUsers(users);
+  return toAdminView(nextUser);
+}
+
+export function updateAuthUser(
+  userId: string,
+  updates: Partial<{ username: string; fullName: string; role: string; enabled: boolean }>,
+): AuthUserAdminView {
+  const users = readAuthUsers();
+  const idx = users.findIndex((entry) => entry.id === String(userId || ""));
+  if (idx < 0) {
+    throw new Error("user not found");
+  }
+  const user = users[idx];
+  const nextUsername =
+    updates.username != null ? sanitizeUsername(String(updates.username || "")) : sanitizeUsername(user.username);
+  if (!nextUsername || nextUsername.length < 3) {
+    throw new Error("username must be at least 3 characters");
+  }
+  if (
+    users.some(
+      (entry, entryIdx) => entryIdx !== idx && sanitizeUsername(entry.username) === nextUsername,
+    )
+  ) {
+    throw new Error("username already exists");
+  }
+
+  user.username = nextUsername;
+  if (updates.fullName != null) {
+    user.fullName = String(updates.fullName || "").trim() || nextUsername;
+  }
+  if (updates.role != null) {
+    user.role = normalizeRole(updates.role);
+  }
+  if (updates.enabled != null) {
+    user.enabled = Boolean(updates.enabled);
+  }
+  users[idx] = user;
+  writeAuthUsers(users);
+  return toAdminView(user);
+}
+
+export function resetAuthUserPassword(userId: string, password: string): AuthUserAdminView {
+  if (String(password || "").length < 8) {
+    throw new Error("password must be at least 8 characters");
+  }
+  const users = readAuthUsers();
+  const idx = users.findIndex((entry) => entry.id === String(userId || ""));
+  if (idx < 0) {
+    throw new Error("user not found");
+  }
+  const hashed = hashPassword(password);
+  users[idx].passwordHash = hashed.passwordHash;
+  users[idx].passwordSalt = hashed.passwordSalt;
+  writeAuthUsers(users);
+  return toAdminView(users[idx]);
+}
+
+export function deleteAuthUser(userId: string) {
+  const users = readAuthUsers();
+  const idx = users.findIndex((entry) => entry.id === String(userId || ""));
+  if (idx < 0) {
+    throw new Error("user not found");
+  }
+  const user = users[idx];
+  const remainingAdmins = users.filter((entry) => entry.id !== user.id && normalizeRole(entry.role) === "admin");
+  if (normalizeRole(user.role) === "admin" && remainingAdmins.length === 0) {
+    throw new Error("cannot delete the last admin user");
+  }
+  users.splice(idx, 1);
+  writeAuthUsers(users);
 }

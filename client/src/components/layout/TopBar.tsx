@@ -124,28 +124,8 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
       .catch(() => {}); // Fail silently, use localStorage
   }, [session.user?.id]);
 
-  // Load users and groups from localStorage for @ mention autocomplete
+  // Load users and groups for @ mention autocomplete
   useEffect(() => {
-    const loadUsersFromStorage = (): { id: string; username: string; fullName: string; role: string }[] => {
-      const savedUsers = localStorage.getItem('mouse_gcs_users');
-      if (savedUsers) {
-        try {
-          const users = JSON.parse(savedUsers);
-          return users
-            .filter((u: any) => u.enabled !== false)
-            .map((u: any) => ({
-              id: u.id,
-              username: u.username,
-              fullName: u.fullName || u.username,
-              role: u.role || 'viewer'
-            }));
-        } catch (e) {
-          console.error('Failed to parse users:', e);
-        }
-      }
-      return [];
-    };
-    
     const loadGroupsFromStorage = (): UserGroup[] => {
       const savedGroups = localStorage.getItem('mouse_gcs_groups');
       if (savedGroups) {
@@ -158,26 +138,63 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
       return [];
     };
     
-    const loadData = () => {
-      // Load users from localStorage (has fullName)
-      const storageUsers = loadUsersFromStorage();
-      setChatUsers(storageUsers);
-      // Load groups from localStorage
+    const loadData = async () => {
+      try {
+        const usersRes = await fetch('/api/admin/users');
+        const usersPayload = await usersRes.json().catch(() => ({}));
+        if (usersRes.ok && Array.isArray(usersPayload?.users)) {
+          const users = usersPayload.users
+            .filter((u: any) => u.enabled !== false)
+            .map((u: any) => ({
+              id: String(u.id || ""),
+              username: String(u.username || ""),
+              fullName: String(u.fullName || u.username || ""),
+              role: String(u.role || "viewer"),
+            }))
+            .filter((u: any) => u.id && u.username);
+          setChatUsers(users);
+        } else {
+          const chatRes = await fetch('/api/chat-users');
+          const chatPayload = await chatRes.json().catch(() => []);
+          if (chatRes.ok && Array.isArray(chatPayload)) {
+            setChatUsers(chatPayload.map((u: any) => ({
+              id: String(u.id || ""),
+              username: String(u.username || ""),
+              fullName: String(u.username || ""),
+              role: String(u.role || "viewer"),
+            })).filter((u: any) => u.id && u.username));
+          } else {
+            setChatUsers([]);
+          }
+        }
+      } catch {
+        setChatUsers([]);
+      }
       const storageGroups = loadGroupsFromStorage();
       setUserGroups(storageGroups);
     };
     
-    loadData();
+    const onStorage = () => {
+      void loadData();
+    };
+    const onUsersUpdated = () => {
+      void loadData();
+    };
+    const onGroupsUpdated = () => {
+      void loadData();
+    };
+
+    void loadData();
     // Listen for cross-tab storage events
-    window.addEventListener('storage', loadData);
+    window.addEventListener('storage', onStorage);
     // Listen for same-tab user updates (custom event from UserAccessPanel)
-    window.addEventListener('users-updated', loadData);
+    window.addEventListener('users-updated', onUsersUpdated);
     // Listen for group updates
-    window.addEventListener('groups-updated', loadData);
+    window.addEventListener('groups-updated', onGroupsUpdated);
     return () => {
-      window.removeEventListener('storage', loadData);
-      window.removeEventListener('users-updated', loadData);
-      window.removeEventListener('groups-updated', loadData);
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('users-updated', onUsersUpdated);
+      window.removeEventListener('groups-updated', onGroupsUpdated);
     };
   }, [session]);
 

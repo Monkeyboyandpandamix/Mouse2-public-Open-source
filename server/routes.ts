@@ -10,7 +10,15 @@ import path from "path";
 import os from "os";
 import net from "net";
 import { flightDynamicsEngine } from "./flightDynamics";
-import { authenticateWithPassword, getAuthenticatedUserById } from "./authStore";
+import {
+  authenticateWithPassword,
+  createAuthUser,
+  deleteAuthUser,
+  getAuthenticatedUserById,
+  listAuthUsers,
+  resetAuthUserPassword,
+  updateAuthUser,
+} from "./authStore";
 import { CommandService, type CommandExecutionResult } from "./commandService";
 import { buildPluginToolSpawnSpec, normalizePluginId } from "./pluginToolRunner";
 import { normalizeClientRequestId, OfflineSyncIdempotencyStore } from "./offlineSyncIdempotency";
@@ -380,6 +388,29 @@ const deleteActiveSession = (token: string) => {
     scheduleRuntimeStatePersist();
   }
   return removed;
+};
+
+const revokeUserSessions = (userId: string) => {
+  const normalized = String(userId || "").trim();
+  if (!normalized) return;
+  Array.from(activeSessions.entries()).forEach(([token, session]) => {
+    if (String(session.userId || "").trim() === normalized) {
+      deleteActiveSession(token);
+    }
+  });
+};
+
+const refreshUserSessions = (userId: string, updates: Partial<Pick<ServerSession, "role" | "name">>) => {
+  const normalized = String(userId || "").trim();
+  if (!normalized) return;
+  Array.from(activeSessions.entries()).forEach(([token, session]) => {
+    if (String(session.userId || "").trim() !== normalized) return;
+    setActiveSession(token, {
+      ...session,
+      role: updates.role != null ? String(updates.role) : session.role,
+      name: updates.name != null ? String(updates.name) : session.name,
+    });
+  });
 };
 
 const setMissionRunRecord = (runId: string, run: MissionRunRecord) => {
@@ -5865,6 +5896,84 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Logout failed" });
+    }
+  });
+
+  app.get("/api/admin/users", requirePermission("user_management"), async (_req, res) => {
+    try {
+      const users = listAuthUsers();
+      return res.json({ success: true, users });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || "Failed to list users" });
+    }
+  });
+
+  app.post("/api/admin/users", requirePermission("user_management"), async (req: any, res) => {
+    try {
+      const username = String(req.body?.username || "").trim();
+      const fullName = String(req.body?.fullName || "").trim();
+      const password = String(req.body?.password || "");
+      const role = String(req.body?.role || "viewer").trim().toLowerCase();
+      const enabled = req.body?.enabled !== false;
+      const user = createAuthUser({ username, fullName, password, role, enabled });
+      return res.json({ success: true, user });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, error: error?.message || "Failed to create user" });
+    }
+  });
+
+  app.patch("/api/admin/users/:id", requirePermission("user_management"), async (req: any, res) => {
+    try {
+      const targetUserId = String(req.params.id || "").trim();
+      if (!targetUserId) return res.status(400).json({ success: false, error: "user id is required" });
+      const session = req.serverSession as ServerSession | undefined;
+      if (session && targetUserId === session.userId && req.body?.enabled === false) {
+        return res.status(400).json({ success: false, error: "You cannot disable your own account" });
+      }
+
+      const user = updateAuthUser(targetUserId, {
+        username: req.body?.username != null ? String(req.body.username) : undefined,
+        fullName: req.body?.fullName != null ? String(req.body.fullName) : undefined,
+        role: req.body?.role != null ? String(req.body.role) : undefined,
+        enabled: req.body?.enabled != null ? Boolean(req.body.enabled) : undefined,
+      });
+
+      if (!user.enabled) {
+        revokeUserSessions(user.id);
+      } else {
+        refreshUserSessions(user.id, { role: user.role, name: user.fullName || user.username });
+      }
+      return res.json({ success: true, user });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, error: error?.message || "Failed to update user" });
+    }
+  });
+
+  app.post("/api/admin/users/:id/reset-password", requirePermission("user_management"), async (req: any, res) => {
+    try {
+      const targetUserId = String(req.params.id || "").trim();
+      const password = String(req.body?.password || "");
+      if (!targetUserId) return res.status(400).json({ success: false, error: "user id is required" });
+      const user = resetAuthUserPassword(targetUserId, password);
+      return res.json({ success: true, user });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, error: error?.message || "Failed to reset password" });
+    }
+  });
+
+  app.delete("/api/admin/users/:id", requirePermission("user_management"), async (req: any, res) => {
+    try {
+      const targetUserId = String(req.params.id || "").trim();
+      const session = req.serverSession as ServerSession | undefined;
+      if (!targetUserId) return res.status(400).json({ success: false, error: "user id is required" });
+      if (session && targetUserId === session.userId) {
+        return res.status(400).json({ success: false, error: "You cannot delete your own account" });
+      }
+      deleteAuthUser(targetUserId);
+      revokeUserSessions(targetUserId);
+      return res.json({ success: true });
+    } catch (error: any) {
+      return res.status(400).json({ success: false, error: error?.message || "Failed to delete user" });
     }
   });
 

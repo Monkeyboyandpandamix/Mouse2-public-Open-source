@@ -48,7 +48,6 @@ interface User {
   id: string;
   username: string;
   fullName: string;
-  password: string;
   role: 'admin' | 'operator' | 'viewer';
   createdAt: string;
   lastLogin: string | null;
@@ -110,44 +109,10 @@ function mergeRolePermissions(saved: RolePermissions): RolePermissions {
   return merged;
 }
 
-const defaultUsers: User[] = [
-  {
-    id: "1",
-    username: "admin",
-    fullName: "System Administrator",
-    password: "admin123",
-    role: "admin",
-    createdAt: "2024-01-01T00:00:00Z",
-    lastLogin: new Date().toISOString(),
-    enabled: true
-  },
-  {
-    id: "2",
-    username: "operator1",
-    fullName: "Flight Operator",
-    password: "operator123",
-    role: "operator",
-    createdAt: "2024-01-10T00:00:00Z",
-    lastLogin: new Date(Date.now() - 86400000).toISOString(),
-    enabled: true
-  },
-  {
-    id: "3",
-    username: "viewer1",
-    fullName: "Mission Observer",
-    password: "viewer123",
-    role: "viewer",
-    createdAt: "2024-01-15T00:00:00Z",
-    lastLogin: null,
-    enabled: true
-  }
-];
+const BUILTIN_ROLES = ['admin', 'operator', 'viewer'] as const;
 
 export function UserAccessPanel() {
-  const [users, setUsers] = useState<User[]>(() => {
-    const saved = localStorage.getItem('mouse_gcs_users');
-    return saved ? JSON.parse(saved) : defaultUsers;
-  });
+  const [users, setUsers] = useState<User[]>([]);
   
   const [rolePermissions, setRolePermissions] = useState<RolePermissions>(() => {
     const saved = localStorage.getItem('mouse_gcs_role_permissions');
@@ -203,10 +168,18 @@ export function UserAccessPanel() {
   const [editRoleValue, setEditRoleValue] = useState("");
   
   // All available roles (built-in + custom)
-  const allRoles = ['admin', 'operator', 'viewer', ...customRoles];
+  const allRoles = [...BUILTIN_ROLES, ...customRoles];
+
+  const fetchUsers = async () => {
+    const response = await fetch('/api/admin/users');
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !Array.isArray(payload?.users)) {
+      throw new Error(payload?.error || "Failed to load users");
+    }
+    setUsers(payload.users as User[]);
+  };
 
   useEffect(() => {
-    localStorage.setItem('mouse_gcs_users', JSON.stringify(users));
     // Dispatch custom event for same-tab listeners (TopBar mention autocomplete)
     window.dispatchEvent(new CustomEvent('users-updated'));
     // Also update groups to remove deleted users
@@ -215,6 +188,14 @@ export function UserAccessPanel() {
       memberIds: g.memberIds.filter(id => users.some(u => u.id === id))
     })));
   }, [users]);
+
+  useEffect(() => {
+    if (!session.isLoggedIn || session.user?.role !== 'admin') return;
+    fetchUsers().catch((error) => {
+      console.error('Failed to fetch users:', error);
+      toast.error(error instanceof Error ? error.message : "Failed to load users");
+    });
+  }, [session.isLoggedIn, session.user?.role]);
   
   useEffect(() => {
     localStorage.setItem('mouse_gcs_groups', JSON.stringify(groups));
@@ -266,12 +247,6 @@ export function UserAccessPanel() {
           setRolePermissions(newPermissions);
         } catch {}
       }
-      if (e.key === 'mouse_gcs_users' && e.newValue) {
-        try {
-          const newUsers = JSON.parse(e.newValue);
-          setUsers(newUsers);
-        } catch {}
-      }
     };
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
@@ -306,21 +281,23 @@ export function UserAccessPanel() {
 
       localStorage.setItem('mouse_gcs_session_token', result.sessionToken);
 
-      const existingLocalUser = users.find((u) => u.username === result.user.username);
       const authenticatedUser: User = {
         id: result.user.id,
         username: result.user.username,
         fullName: result.user.fullName || result.user.username,
-        password: existingLocalUser?.password || "",
         role: (["admin", "operator", "viewer"].includes(String(result.user.role)) ? result.user.role : "viewer") as User["role"],
-        createdAt: existingLocalUser?.createdAt || new Date().toISOString(),
+        createdAt: new Date().toISOString(),
         lastLogin: new Date().toISOString(),
         enabled: result.user.enabled !== false,
       };
       setSession({ user: authenticatedUser, isLoggedIn: true });
-      setUsers(prev => prev.map(u =>
-        u.username === authenticatedUser.username ? { ...u, lastLogin: new Date().toISOString() } : u
-      ));
+      if (authenticatedUser.role === "admin") {
+        await fetchUsers().catch(() => {
+          setUsers([authenticatedUser]);
+        });
+      } else {
+        setUsers([authenticatedUser]);
+      }
       toast.success(`Welcome back, ${authenticatedUser.fullName || authenticatedUser.username}!`);
       setLoginForm({ username: "", password: "" });
     } catch (error) {
@@ -352,7 +329,7 @@ export function UserAccessPanel() {
     toast.info("Logged out successfully");
   };
 
-  const handleCreateUser = () => {
+  const handleCreateUser = async () => {
     if (newUser.password !== newUser.confirmPassword) {
       toast.error("Passwords do not match");
       return;
@@ -361,55 +338,95 @@ export function UserAccessPanel() {
       toast.error("Username must be at least 3 characters");
       return;
     }
-    if (newUser.password.length < 6) {
-      toast.error("Password must be at least 6 characters");
+    if (newUser.password.length < 8) {
+      toast.error("Password must be at least 8 characters");
       return;
     }
-    if (users.some(u => u.username === newUser.username)) {
-      toast.error("Username already exists");
-      return;
+    try {
+      const response = await fetch('/api/admin/users', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: newUser.username,
+          fullName: newUser.fullName,
+          password: newUser.password,
+          role: newUser.role,
+          enabled: true,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.user) {
+        throw new Error(payload?.error || "Failed to create user");
+      }
+      setUsers(prev => [...prev, payload.user as User]);
+      setShowNewUserDialog(false);
+      setNewUser({ username: "", fullName: "", password: "", confirmPassword: "", role: "operator" });
+      toast.success("User created successfully");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to create user");
     }
-
-    const user: User = {
-      id: Date.now().toString(),
-      username: newUser.username,
-      fullName: newUser.fullName || newUser.username,
-      password: newUser.password,
-      role: newUser.role,
-      createdAt: new Date().toISOString(),
-      lastLogin: null,
-      enabled: true
-    };
-    setUsers(prev => [...prev, user]);
-    setShowNewUserDialog(false);
-    setNewUser({ username: "", fullName: "", password: "", confirmPassword: "", role: "operator" });
-    toast.success("User created successfully");
   };
 
-  const handleDeleteUser = (id: string) => {
+  const handleDeleteUser = async (id: string) => {
     if (session.user?.id === id) {
       toast.error("Cannot delete your own account");
       return;
     }
-    setUsers(prev => prev.filter(u => u.id !== id));
-    toast.success("User deleted");
+    try {
+      const response = await fetch(`/api/admin/users/${id}`, { method: 'DELETE' });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.success === false) {
+        throw new Error(payload?.error || "Failed to delete user");
+      }
+      setUsers(prev => prev.filter(u => u.id !== id));
+      toast.success("User deleted");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete user");
+    }
   };
 
-  const handleToggleUser = (id: string, enabled: boolean) => {
+  const handleToggleUser = async (id: string, enabled: boolean) => {
     if (session.user?.id === id && !enabled) {
       toast.error("Cannot disable your own account");
       return;
     }
-    setUsers(prev => prev.map(u => u.id === id ? { ...u, enabled } : u));
-    toast.success(enabled ? "User enabled" : "User disabled");
+    try {
+      const response = await fetch(`/api/admin/users/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.user) {
+        throw new Error(payload?.error || "Failed to update user");
+      }
+      setUsers(prev => prev.map(u => u.id === id ? (payload.user as User) : u));
+      toast.success(enabled ? "User enabled" : "User disabled");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update user");
+    }
   };
 
-  const handleChangeRole = (id: string, role: 'admin' | 'operator' | 'viewer') => {
-    setUsers(prev => prev.map(u => u.id === id ? { ...u, role } : u));
-    if (session.user?.id === id) {
-      setSession(prev => prev.user ? { ...prev, user: { ...prev.user, role } } : prev);
+  const handleChangeRole = async (id: string, role: 'admin' | 'operator' | 'viewer') => {
+    try {
+      const response = await fetch(`/api/admin/users/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.user) {
+        throw new Error(payload?.error || "Failed to update role");
+      }
+      const updated = payload.user as User;
+      setUsers(prev => prev.map(u => u.id === id ? updated : u));
+      if (session.user?.id === id) {
+        setSession(prev => prev.user ? { ...prev, user: { ...prev.user, role: updated.role } } : prev);
+      }
+      toast.success("Role updated");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update role");
     }
-    toast.success("Role updated");
   };
 
   const handleEditUser = (user: User) => {
@@ -418,7 +435,7 @@ export function UserAccessPanel() {
     setShowEditUserDialog(true);
   };
 
-  const handleSaveUserEdit = () => {
+  const handleSaveUserEdit = async () => {
     if (!selectedUser) return;
 
     if (editForm.username.length < 3) {
@@ -433,32 +450,47 @@ export function UserAccessPanel() {
       toast.error("Passwords do not match");
       return;
     }
-    if (editForm.newPassword && editForm.newPassword.length < 6) {
-      toast.error("Password must be at least 6 characters");
+    if (editForm.newPassword && editForm.newPassword.length < 8) {
+      toast.error("Password must be at least 8 characters");
       return;
     }
-
-    setUsers(prev => prev.map(u => {
-      if (u.id === selectedUser.id) {
-        return {
-          ...u,
+    try {
+      const response = await fetch(`/api/admin/users/${selectedUser.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           username: editForm.username,
-          password: editForm.newPassword || u.password
-        };
+          fullName: selectedUser.fullName,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.user) {
+        throw new Error(payload?.error || "Failed to update user");
       }
-      return u;
-    }));
 
-    if (session.user?.id === selectedUser.id) {
-      setSession(prev => prev.user ? { 
-        ...prev, 
-        user: { ...prev.user, username: editForm.username, password: editForm.newPassword || prev.user.password } 
-      } : prev);
+      if (editForm.newPassword) {
+        const resetResponse = await fetch(`/api/admin/users/${selectedUser.id}/reset-password`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: editForm.newPassword }),
+        });
+        const resetPayload = await resetResponse.json().catch(() => ({}));
+        if (!resetResponse.ok || !resetPayload?.user) {
+          throw new Error(resetPayload?.error || "Failed to reset password");
+        }
+      }
+
+      const updated = payload.user as User;
+      setUsers(prev => prev.map(u => u.id === selectedUser.id ? updated : u));
+      if (session.user?.id === selectedUser.id) {
+        setSession(prev => prev.user ? { ...prev, user: { ...prev.user, username: updated.username } } : prev);
+      }
+      setShowEditUserDialog(false);
+      setSelectedUser(null);
+      toast.success("User updated successfully");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to update user");
     }
-
-    setShowEditUserDialog(false);
-    setSelectedUser(null);
-    toast.success("User updated successfully");
   };
 
   const handleResetPassword = (user: User) => {
@@ -467,11 +499,11 @@ export function UserAccessPanel() {
     setShowResetPasswordDialog(true);
   };
 
-  const handleSavePasswordReset = () => {
+  const handleSavePasswordReset = async () => {
     if (!selectedUser) return;
 
-    if (editForm.newPassword.length < 6) {
-      toast.error("Password must be at least 6 characters");
+    if (editForm.newPassword.length < 8) {
+      toast.error("Password must be at least 8 characters");
       return;
     }
     if (editForm.newPassword !== editForm.confirmPassword) {
@@ -479,16 +511,23 @@ export function UserAccessPanel() {
       return;
     }
 
-    setUsers(prev => prev.map(u => {
-      if (u.id === selectedUser.id) {
-        return { ...u, password: editForm.newPassword };
+    try {
+      const response = await fetch(`/api/admin/users/${selectedUser.id}/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: editForm.newPassword }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.user) {
+        throw new Error(payload?.error || "Failed to reset password");
       }
-      return u;
-    }));
-
-    setShowResetPasswordDialog(false);
-    setSelectedUser(null);
-    toast.success("Password reset successfully");
+      setUsers(prev => prev.map(u => u.id === selectedUser.id ? (payload.user as User) : u));
+      setShowResetPasswordDialog(false);
+      setSelectedUser(null);
+      toast.success("Password reset successfully");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to reset password");
+    }
   };
 
   const handleTogglePermission = (role: string, permissionId: string) => {
@@ -773,7 +812,7 @@ export function UserAccessPanel() {
                         type="password"
                         value={newUser.password}
                         onChange={(e) => setNewUser(prev => ({ ...prev, password: e.target.value }))}
-                        placeholder="Enter password (min 6 chars)"
+                        placeholder="Enter password (min 8 chars)"
                         data-testid="input-new-password"
                       />
                     </div>
@@ -797,7 +836,7 @@ export function UserAccessPanel() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {allRoles.map(role => (
+                          {BUILTIN_ROLES.map(role => (
                             <SelectItem key={role} value={role} className="capitalize">{role}</SelectItem>
                           ))}
                         </SelectContent>
@@ -901,7 +940,7 @@ export function UserAccessPanel() {
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {allRoles.map(r => (
+                            {BUILTIN_ROLES.map(r => (
                               <SelectItem key={r} value={r} className="capitalize">{r}</SelectItem>
                             ))}
                           </SelectContent>
@@ -1220,125 +1259,19 @@ export function UserAccessPanel() {
             <TabsContent value="permissions" className="space-y-6">
               {isAdmin && (
                 <>
-                  {/* Create Custom Role Section */}
-                  <Card className="border-2 border-green-500/50">
-                    <CardHeader>
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <CardTitle className="flex items-center gap-2">
-                            <Plus className="h-5 w-5 text-green-500" />
-                            Create Custom Role
-                          </CardTitle>
-                          <CardDescription>
-                            Add new roles beyond Admin, Operator, and Viewer. Custom roles can be assigned to users and groups.
-                          </CardDescription>
-                        </div>
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="flex gap-2">
-                        <Input
-                          placeholder="Enter role name (e.g., pilot, observer, mechanic)"
-                          value={newRoleName}
-                          onChange={(e) => setNewRoleName(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && handleAddCustomRole()}
-                          className="flex-1"
-                          data-testid="input-new-role-name"
-                        />
-                        <Button onClick={handleAddCustomRole} data-testid="button-add-role">
-                          <Plus className="h-4 w-4 mr-1" />
-                          Add Role
-                        </Button>
-                      </div>
-                      {customRoles.length > 0 && (
-                        <div className="mt-4 space-y-2">
-                          <Label className="text-sm text-muted-foreground">Custom Roles:</Label>
-                          <div className="flex flex-wrap gap-2">
-                            {customRoles.map(role => (
-                              <div key={role} className="flex items-center gap-1 bg-muted rounded-md px-2 py-1">
-                                {editingRoleName === role ? (
-                                  <>
-                                    <Input
-                                      value={editRoleValue}
-                                      onChange={(e) => setEditRoleValue(e.target.value)}
-                                      onKeyDown={(e) => {
-                                        if (e.key === 'Enter') handleRenameRole(role);
-                                        if (e.key === 'Escape') {
-                                          setEditingRoleName(null);
-                                          setEditRoleValue("");
-                                        }
-                                      }}
-                                      className="h-6 w-24 text-xs"
-                                      autoFocus
-                                      data-testid={`input-rename-role-${role}`}
-                                    />
-                                    <Button 
-                                      variant="ghost" 
-                                      size="icon" 
-                                      className="h-5 w-5"
-                                      onClick={() => handleRenameRole(role)}
-                                    >
-                                      <CheckCircle className="h-3 w-3 text-green-500" />
-                                    </Button>
-                                    <Button 
-                                      variant="ghost" 
-                                      size="icon" 
-                                      className="h-5 w-5"
-                                      onClick={() => {
-                                        setEditingRoleName(null);
-                                        setEditRoleValue("");
-                                      }}
-                                    >
-                                      <X className="h-3 w-3" />
-                                    </Button>
-                                  </>
-                                ) : (
-                                  <>
-                                    <span className="text-sm capitalize">{role}</span>
-                                    <Button 
-                                      variant="ghost" 
-                                      size="icon" 
-                                      className="h-5 w-5"
-                                      onClick={() => {
-                                        setEditingRoleName(role);
-                                        setEditRoleValue(role);
-                                      }}
-                                      data-testid={`button-edit-role-${role}`}
-                                    >
-                                      <Edit className="h-3 w-3" />
-                                    </Button>
-                                    <Button 
-                                      variant="ghost" 
-                                      size="icon" 
-                                      className="h-5 w-5 text-destructive"
-                                      onClick={() => handleDeleteRole(role)}
-                                      data-testid={`button-delete-role-${role}`}
-                                    >
-                                      <Trash2 className="h-3 w-3" />
-                                    </Button>
-                                  </>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-
                   <Card className="border-2 border-amber-500/50">
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
                         <Settings className="h-5 w-5 text-amber-500" />
-                        Role Permissions
+                        Server Role Permissions
                       </CardTitle>
                       <CardDescription>
-                        Configure what each role can access. Changes apply immediately to all users with that role.
+                        Role permissions are enforced by backend policy. Editing from this panel is disabled.
                       </CardDescription>
                     </CardHeader>
                   </Card>
 
-                  {allRoles.map(role => {
+                  {BUILTIN_ROLES.map(role => {
                     const { color, icon: RoleIcon } = getRoleBadge(role);
                     return (
                       <Card key={role}>
@@ -1353,8 +1286,7 @@ export function UserAccessPanel() {
                         <CardContent>
                           <div className="grid grid-cols-2 gap-3">
                             {allPermissions.map(permission => {
-                              const checked = rolePermissions[role]?.includes(permission.id) ?? false;
-                              const isDisabled = role === 'admin' && ['user_management', 'system_settings'].includes(permission.id);
+                              const checked = defaultRolePermissions[role]?.includes(permission.id) ?? false;
                               return (
                                 <div 
                                   key={permission.id}
@@ -1363,14 +1295,13 @@ export function UserAccessPanel() {
                                   <Checkbox
                                     id={`${role}-${permission.id}`}
                                     checked={checked}
-                                    onCheckedChange={() => handleTogglePermission(role, permission.id)}
-                                    disabled={isDisabled}
+                                    disabled={true}
                                     data-testid={`checkbox-${role}-${permission.id}`}
                                   />
                                   <div className="grid gap-0.5 leading-none">
                                     <label
                                       htmlFor={`${role}-${permission.id}`}
-                                      className={`text-sm font-medium cursor-pointer ${isDisabled ? 'opacity-50' : ''}`}
+                                      className="text-sm font-medium opacity-70"
                                     >
                                       {permission.name}
                                     </label>
@@ -1457,7 +1388,7 @@ export function UserAccessPanel() {
                 type="password"
                 value={editForm.newPassword}
                 onChange={(e) => setEditForm(prev => ({ ...prev, newPassword: e.target.value }))}
-                placeholder="Enter new password (min 6 chars)"
+                placeholder="Enter new password (min 8 chars)"
                 data-testid="input-reset-password"
               />
             </div>

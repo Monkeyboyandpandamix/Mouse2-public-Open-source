@@ -764,9 +764,12 @@ export function MissionPlanningPanel() {
     setIsSearching(true);
     try {
       const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(addressInput)}&limit=5`
+        `/api/geocode?q=${encodeURIComponent(addressInput)}`
       );
-      const results = await response.json();
+      const results = await response.json().catch(() => []);
+      if (!response.ok) {
+        throw new Error((results as any)?.error || "Address search failed");
+      }
       
       if (results.length > 0) {
         setAddressSuggestions(results);

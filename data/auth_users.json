@@ -6,7 +6,7 @@
     "role": "admin",
     "enabled": true,
     "createdAt": "2026-03-15T14:03:42.351Z",
-    "lastLogin": "2026-03-15T18:40:11.863Z",
+    "lastLogin": "2026-03-15T19:46:48.134Z",
     "passwordHash": "4ec23fb7edd12154df8734621a353ec38896ef2f4be177c1c6ae3da6f411a88bdecd3f72caa18ea8cfdc25f06804322ff4a335fdee68f1e58bf0eab2954ebde5",
     "passwordSalt": "74960e923374babf389ee3165bf83f99"
   },
