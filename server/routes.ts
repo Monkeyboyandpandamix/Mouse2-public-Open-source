@@ -4,7 +4,7 @@ import { storage } from "./storage";
 import { WebSocketServer, WebSocket } from "ws";
 import { spawn } from "child_process";
 import { existsSync, mkdirSync } from "fs";
-import { readFile, writeFile } from "fs/promises";
+import { readFile, writeFile, readdir } from "fs/promises";
 import path from "path";
 import os from "os";
 import net from "net";
@@ -19,6 +19,7 @@ import {
   insertSettingsSchema,
   insertMissionSchema,
   insertWaypointSchema,
+  insertFlightSessionSchema,
   insertFlightLogSchema,
   insertSensorDataSchema,
   insertMotorTelemetrySchema,
@@ -29,6 +30,7 @@ import {
   insertBme688ReadingSchema,
 } from "@shared/schema";
 import { ZodError } from "zod";
+import { fromError } from "zod-validation-error";
 import { syncDataToSheets, getOrCreateBackupSpreadsheet, getSpreadsheetUrl } from "./googleSheets";
 import { uploadFileToDrive, listDriveFiles, checkDriveConnection, deleteFileFromDrive } from "./googleDrive";
 import { 
@@ -52,6 +54,170 @@ interface ServerSession {
 const activeSessions = new Map<string, ServerSession>();
 const airspaceCache = new Map<string, { expiresAt: number; payload: any }>();
 const staticAirspaceCache = new Map<string, any>();
+let serialPassthroughProcess: any = null;
+const serialPassthroughState = {
+  running: false,
+  command: "",
+  startedAt: null as string | null,
+  message: "Not running",
+};
+let rtkNtripProcess: any = null;
+const rtkNtripState = {
+  running: false,
+  command: "",
+  startedAt: null as string | null,
+  host: "",
+  port: 0,
+  mountpoint: "",
+  message: "Not running",
+};
+let gpsInjectProcess: any = null;
+const gpsInjectState = {
+  running: false,
+  command: "",
+  startedAt: null as string | null,
+  profileId: "",
+  message: "Not running",
+};
+const firmwareState: {
+  busy: boolean;
+  progress: number;
+  status: "idle" | "running" | "completed" | "failed";
+  message: string;
+  lastRunAt: string | null;
+} = {
+  busy: false,
+  progress: 0,
+  status: "idle",
+  message: "No firmware operation yet",
+  lastRunAt: null,
+};
+const calibrationState: Record<string, { status: "idle" | "running" | "completed" | "failed"; lastRunAt: string | null; message?: string; ack?: number | null }> = {
+  compass: { status: "idle", lastRunAt: null },
+  accel: { status: "idle", lastRunAt: null },
+  radio: { status: "idle", lastRunAt: null },
+  esc: { status: "idle", lastRunAt: null },
+  gyro: { status: "idle", lastRunAt: null },
+  baro: { status: "idle", lastRunAt: null },
+  level: { status: "idle", lastRunAt: null },
+};
+const DATA_DIR = path.resolve(process.cwd(), "data");
+const RTK_PROFILE_FILE = path.join(DATA_DIR, "rtk_profiles.json");
+const PLUGINS_DIR = path.resolve(process.cwd(), "plugins");
+const PLUGIN_STATE_FILE = path.join(DATA_DIR, "plugin_state.json");
+const FIRMWARE_CATALOG_FILE = path.join(DATA_DIR, "firmware_catalog.json");
+const OPTIONAL_HARDWARE_PROFILES: Record<string, Array<{ name: string; value: number }>> = {
+  dronecan_core: [
+    { name: "CAN_P1_DRIVER", value: 1 },
+    { name: "CAN_D1_PROTOCOL", value: 1 },
+  ],
+  dronecan_periph_scan: [
+    { name: "CAN_P1_DRIVER", value: 1 },
+    { name: "CAN_D1_PROTOCOL", value: 1 },
+    { name: "CAN_D1_UC_NODE", value: 10 },
+  ],
+  rangefinder_lidar: [
+    { name: "RNGFND1_TYPE", value: 8 },
+    { name: "RNGFND1_ORIENT", value: 25 },
+    { name: "RNGFND1_MAX_CM", value: 4000 },
+  ],
+  rangefinder_secondary: [
+    { name: "RNGFND2_TYPE", value: 8 },
+    { name: "RNGFND2_ORIENT", value: 0 },
+    { name: "RNGFND2_MAX_CM", value: 4000 },
+  ],
+  battery_monitor_dual: [
+    { name: "BATT_MONITOR", value: 4 },
+    { name: "BATT2_MONITOR", value: 4 },
+    { name: "BATT_ARM_VOLT", value: 10.5 },
+  ],
+  battery_monitor_smart: [
+    { name: "BATT_MONITOR", value: 16 },
+    { name: "BATT_FS_LOW_ACT", value: 2 },
+    { name: "BATT_ARM_MAH", value: 200 },
+  ],
+  optical_flow: [
+    { name: "FLOW_TYPE", value: 5 },
+    { name: "FLOW_ORIENT_YAW", value: 0 },
+    { name: "EK3_SRC1_VELXY", value: 5 },
+  ],
+  adsb_core: [
+    { name: "ADSB_ENABLE", value: 1 },
+    { name: "AVD_ENABLE", value: 1 },
+    { name: "AVD_W_DIST_XY", value: 40 },
+  ],
+  esc_telemetry: [
+    { name: "SERVO_BLH_AUTO", value: 1 },
+    { name: "SERVO_BLH_MASK", value: 65535 },
+    { name: "SERVO_BLH_TRATE", value: 10 },
+  ],
+};
+
+const SIK_MODEM_PROFILES: Record<string, string[]> = {
+  long_range: ["ATS1=57", "ATS2=64", "ATS3=64", "ATS4=25", "ATS5=33", "ATS8=1", "AT&W"],
+  low_latency: ["ATS1=57", "ATS2=128", "ATS3=128", "ATS4=25", "ATS5=50", "ATS8=1", "AT&W"],
+  robust: ["ATS1=57", "ATS2=32", "ATS3=32", "ATS4=20", "ATS5=20", "ATS8=1", "AT&W"],
+};
+
+interface RtkProfile {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  mountpoint: string;
+  username: string;
+  password: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+async function readRtkProfiles(): Promise<RtkProfile[]> {
+  try {
+    if (!existsSync(RTK_PROFILE_FILE)) return [];
+    const raw = await readFile(RTK_PROFILE_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeRtkProfiles(profiles: RtkProfile[]) {
+  mkdirSync(DATA_DIR, { recursive: true });
+  await writeFile(RTK_PROFILE_FILE, JSON.stringify(profiles, null, 2), "utf-8");
+}
+
+async function readPluginState(): Promise<Record<string, { enabled: boolean }>> {
+  try {
+    if (!existsSync(PLUGIN_STATE_FILE)) return {};
+    const raw = await readFile(PLUGIN_STATE_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function writePluginState(state: Record<string, { enabled: boolean }>) {
+  mkdirSync(DATA_DIR, { recursive: true });
+  await writeFile(PLUGIN_STATE_FILE, JSON.stringify(state, null, 2), "utf-8");
+}
+
+async function readFirmwareCatalog(): Promise<any[]> {
+  try {
+    if (!existsSync(FIRMWARE_CATALOG_FILE)) return [];
+    const raw = await readFile(FIRMWARE_CATALOG_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeFirmwareCatalog(entries: any[]) {
+  mkdirSync(DATA_DIR, { recursive: true });
+  await writeFile(FIRMWARE_CATALOG_FILE, JSON.stringify(entries, null, 2), "utf-8");
+}
 
 import { randomBytes } from 'crypto';
 
@@ -329,6 +495,42 @@ export async function registerRoutes(
       // Public message - broadcast to all
       broadcast(type, data);
     }
+  };
+
+  const runMavlinkParamBridge = async (args: string[]) => {
+    return await new Promise<any>((resolve) => {
+      const py = spawn(PYTHON_EXEC, [path.join(SCRIPTS_DIR, "mavlink_params.py"), ...args]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          resolve({ ok: Boolean(parsed?.success), data: parsed, error: parsed?.error || err || null });
+        } catch {
+          resolve({ ok: false, data: null, error: err || "Invalid bridge response" });
+        }
+      });
+    });
+  };
+
+  const runMavlinkVehicleControl = async (args: string[]) => {
+    return await new Promise<any>((resolve) => {
+      const py = spawn(PYTHON_EXEC, [path.join(SCRIPTS_DIR, "mavlink_vehicle_control.py"), ...args]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          resolve({ ok: Boolean(parsed?.success), data: parsed, error: parsed?.error || err || null });
+        } catch {
+          resolve({ ok: false, data: null, error: err || "Invalid bridge response" });
+        }
+      });
+    });
   };
 
   const execCommand = async (
@@ -786,6 +988,2500 @@ export async function registerRoutes(
       res.send(content);
     } catch {
       res.status(404).json({ success: false, error: "Latest model file is unavailable" });
+    }
+  });
+
+  // MAVLink Parameter Manager API (ArduPilot/Cube+)
+  app.get("/api/mavlink/params", async (req, res) => {
+    try {
+      const connectionString = String(req.query.connectionString || "").trim();
+      if (!connectionString) {
+        return res.status(400).json({ success: false, error: "connectionString is required" });
+      }
+
+      const timeout = Math.max(3, Math.min(30, Number(req.query.timeout || 12)));
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_params.py"),
+        "list",
+        "--connection",
+        connectionString,
+        "--timeout",
+        String(timeout),
+      ]);
+
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) return res.json(parsed);
+          return res.status(500).json({ success: false, error: parsed?.error || err || "Parameter list failed" });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid response from MAVLink bridge" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to fetch params" });
+    }
+  });
+
+  app.get("/api/mavlink/params/:name", async (req, res) => {
+    try {
+      const connectionString = String(req.query.connectionString || "").trim();
+      if (!connectionString) {
+        return res.status(400).json({ success: false, error: "connectionString is required" });
+      }
+      const name = String(req.params.name || "").trim().toUpperCase();
+      if (!name) {
+        return res.status(400).json({ success: false, error: "parameter name is required" });
+      }
+
+      const timeout = Math.max(3, Math.min(20, Number(req.query.timeout || 8)));
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_params.py"),
+        "get",
+        "--connection",
+        connectionString,
+        "--name",
+        name,
+        "--timeout",
+        String(timeout),
+      ]);
+
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) return res.json(parsed);
+          return res.status(404).json({ success: false, error: parsed?.error || err || "Parameter not found" });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid response from MAVLink bridge" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to fetch parameter" });
+    }
+  });
+
+  app.patch("/api/mavlink/params/:name", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || req.query.connectionString || "").trim();
+      if (!connectionString) {
+        return res.status(400).json({ success: false, error: "connectionString is required" });
+      }
+
+      const name = String(req.params.name || "").trim().toUpperCase();
+      const value = Number(req.body?.value);
+      if (!name || !Number.isFinite(value)) {
+        return res.status(400).json({ success: false, error: "valid parameter name and numeric value required" });
+      }
+
+      const timeout = Math.max(3, Math.min(20, Number(req.body?.timeout || req.query.timeout || 8)));
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_params.py"),
+        "set",
+        "--connection",
+        connectionString,
+        "--name",
+        name,
+        "--value",
+        String(value),
+        "--timeout",
+        String(timeout),
+      ]);
+
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) return res.json(parsed);
+          return res.status(500).json({ success: false, error: parsed?.error || err || "Failed to set parameter" });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid response from MAVLink bridge" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to set parameter" });
+    }
+  });
+
+  app.post("/api/mavlink/params/import", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const params = Array.isArray(req.body?.params) ? req.body.params : [];
+      if (!connectionString) {
+        return res.status(400).json({ success: false, error: "connectionString is required" });
+      }
+      if (!params.length) {
+        return res.status(400).json({ success: false, error: "params array is required" });
+      }
+
+      const applied: any[] = [];
+      const failed: any[] = [];
+      for (const p of params) {
+        const name = String(p?.name || "").trim().toUpperCase();
+        const value = Number(p?.value);
+        if (!name || !Number.isFinite(value)) {
+          failed.push({ name, value, error: "invalid input" });
+          continue;
+        }
+
+        const py = spawn(PYTHON_EXEC, [
+          path.join(SCRIPTS_DIR, "mavlink_params.py"),
+          "set",
+          "--connection",
+          connectionString,
+          "--name",
+          name,
+          "--value",
+          String(value),
+          "--timeout",
+          "6",
+        ]);
+        let out = "";
+        let err = "";
+        await new Promise<void>((resolve) => {
+          py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+          py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+          py.on("close", () => {
+            try {
+              const parsed = JSON.parse((out || "").trim() || "{}");
+              if (parsed?.success) applied.push({ name, value: parsed.value });
+              else failed.push({ name, value, error: parsed?.error || err || "set failed" });
+            } catch {
+              failed.push({ name, value, error: err || "invalid bridge response" });
+            }
+            resolve();
+          });
+        });
+      }
+
+      res.json({ success: true, applied, failed });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to import parameters" });
+    }
+  });
+
+  app.get("/api/mavlink/params/export", async (req, res) => {
+    try {
+      const connectionString = String(req.query.connectionString || "").trim();
+      if (!connectionString) {
+        return res.status(400).json({ success: false, error: "connectionString is required" });
+      }
+
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_params.py"),
+        "list",
+        "--connection",
+        connectionString,
+        "--timeout",
+        "14",
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (!parsed?.success) {
+            return res.status(500).json({ success: false, error: parsed?.error || err || "Export failed" });
+          }
+          const payload = {
+            exportedAt: new Date().toISOString(),
+            connectionString,
+            count: parsed.count || 0,
+            params: parsed.params || [],
+          };
+          res.setHeader("Content-Type", "application/json");
+          res.setHeader("Content-Disposition", `attachment; filename=fc-params-${Date.now()}.json`);
+          return res.send(JSON.stringify(payload, null, 2));
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid response from MAVLink bridge" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to export parameters" });
+    }
+  });
+
+  app.post("/api/mavlink/params/compare", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      const inputRaw = req.body?.params;
+      const inputList = Array.isArray(inputRaw)
+        ? inputRaw
+        : inputRaw && typeof inputRaw === "object"
+          ? Object.entries(inputRaw).map(([name, value]) => ({ name, value }))
+          : [];
+      if (!inputList.length) return res.status(400).json({ success: false, error: "params array/object is required" });
+      const tolerance = Math.max(0, Number(req.body?.tolerance ?? 0.001));
+
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_params.py"),
+        "list",
+        "--connection",
+        connectionString,
+        "--timeout",
+        "12",
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (!parsed?.success) return res.status(500).json({ success: false, error: parsed?.error || err || "Failed to list FC params" });
+          const fcParams = Array.isArray(parsed.params) ? parsed.params : [];
+          const fcMap = new Map<string, number>();
+          for (const item of fcParams) {
+            const name = String(item?.name || "").toUpperCase();
+            const value = Number(item?.value);
+            if (name && Number.isFinite(value)) fcMap.set(name, value);
+          }
+
+          const mismatched: Array<{ name: string; expected: number; actual: number }> = [];
+          const missingOnFc: Array<{ name: string; expected: number }> = [];
+          const matched: Array<{ name: string; expected: number; actual: number }> = [];
+          const inputNames = new Set<string>();
+
+          for (const row of inputList) {
+            const name = String(row?.name || "").trim().toUpperCase();
+            const expected = Number(row?.value);
+            if (!name || !Number.isFinite(expected)) continue;
+            inputNames.add(name);
+            const actual = fcMap.get(name);
+            if (actual == null) {
+              missingOnFc.push({ name, expected });
+              continue;
+            }
+            if (Math.abs(actual - expected) > tolerance) mismatched.push({ name, expected, actual });
+            else matched.push({ name, expected, actual });
+          }
+
+          const missingInInput = Array.from(fcMap.keys())
+            .filter((name) => !inputNames.has(name))
+            .slice(0, 200);
+
+          res.json({
+            success: true,
+            tolerance,
+            inputCount: inputNames.size,
+            fcCount: fcMap.size,
+            matchedCount: matched.length,
+            mismatchCount: mismatched.length,
+            missingOnFcCount: missingOnFc.length,
+            missingInInputCount: missingInInput.length,
+            mismatched,
+            missingOnFc,
+            missingInInput,
+          });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid compare response" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Parameter compare failed" });
+    }
+  });
+
+  app.post("/api/mavlink/fence/upload", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const zones = Array.isArray(req.body?.zones) ? req.body.zones : [];
+      if (!connectionString) {
+        return res.status(400).json({ success: false, error: "connectionString is required" });
+      }
+      if (!zones.length) {
+        return res.status(400).json({ success: false, error: "zones are required" });
+      }
+
+      const enabledZones = zones.filter((z: any) => z?.enabled !== false);
+      if (!enabledZones.length) {
+        return res.status(400).json({ success: false, error: "no enabled zones to upload" });
+      }
+
+      const primary = enabledZones[0];
+      const toPoints = (zone: any): { lat: number; lng: number }[] => {
+        if ((zone?.type === "custom" || zone?.type === "polygon") && Array.isArray(zone?.points)) {
+          return zone.points
+            .map((p: any) => ({ lat: Number(p?.lat), lng: Number(p?.lng) }))
+            .filter((p: any) => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+        }
+        if (zone?.type === "circle" && zone?.center && Number(zone?.radius) > 0) {
+          const samples = 18;
+          const lat = Number(zone.center.lat);
+          const lng = Number(zone.center.lng);
+          const radius = Number(zone.radius);
+          const out: { lat: number; lng: number }[] = [];
+          for (let i = 0; i < samples; i++) {
+            const a = (Math.PI * 2 * i) / samples;
+            const dLat = (radius * Math.cos(a)) / 111320;
+            const dLng = (radius * Math.sin(a)) / (111320 * Math.cos((lat * Math.PI) / 180));
+            out.push({ lat: lat + dLat, lng: lng + dLng });
+          }
+          return out;
+        }
+        return [];
+      };
+
+      const points = toPoints(primary);
+      if (points.length < 3) {
+        return res.status(400).json({ success: false, error: "selected geofence cannot be converted to polygon points" });
+      }
+
+      const payload = {
+        points,
+        action: primary?.action || "warn",
+        minAltitude: Number(primary?.minAltitude ?? 0),
+        maxAltitude: Number(primary?.maxAltitude ?? 120),
+        enable: true,
+      };
+
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_fence.py"),
+        "upload",
+        "--connection",
+        connectionString,
+        "--timeout",
+        "12",
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.stdin.write(JSON.stringify(payload));
+      py.stdin.end();
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) {
+            return res.json({ success: true, uploadedPoints: parsed.uploadedPoints, zoneName: primary?.name || null });
+          }
+          return res.status(500).json({ success: false, error: parsed?.error || err || "Fence upload failed" });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid response from fence bridge" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Fence upload failed" });
+    }
+  });
+
+  app.get("/api/mavlink/fence/download", async (req, res) => {
+    try {
+      const connectionString = String(req.query.connectionString || "").trim();
+      if (!connectionString) {
+        return res.status(400).json({ success: false, error: "connectionString is required" });
+      }
+
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_fence.py"),
+        "download",
+        "--connection",
+        connectionString,
+        "--timeout",
+        "10",
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (!parsed?.success) {
+            return res.status(500).json({ success: false, error: parsed?.error || err || "Fence download failed" });
+          }
+          return res.json(parsed);
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid response from fence bridge" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Fence download failed" });
+    }
+  });
+
+  app.post("/api/mavlink/mission/upload", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const waypoints = Array.isArray(req.body?.waypoints) ? req.body.waypoints : [];
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      if (!waypoints.length) return res.status(400).json({ success: false, error: "waypoints are required" });
+
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_mission.py"),
+        "upload",
+        "--connection",
+        connectionString,
+        "--timeout",
+        "14",
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.stdin.write(JSON.stringify({ waypoints }));
+      py.stdin.end();
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) return res.json(parsed);
+          return res.status(500).json({ success: false, error: parsed?.error || err || "Mission upload failed" });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid mission bridge response" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Mission upload failed" });
+    }
+  });
+
+  app.get("/api/mavlink/mission/download", async (req, res) => {
+    try {
+      const connectionString = String(req.query.connectionString || "").trim();
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_mission.py"),
+        "download",
+        "--connection",
+        connectionString,
+        "--timeout",
+        "14",
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) return res.json(parsed);
+          return res.status(500).json({ success: false, error: parsed?.error || err || "Mission download failed" });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid mission bridge response" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Mission download failed" });
+    }
+  });
+
+  app.post("/api/mavlink/mission/validate", async (req, res) => {
+    try {
+      const waypoints = Array.isArray(req.body?.waypoints) ? req.body.waypoints : [];
+      if (!waypoints.length) {
+        return res.status(400).json({ success: false, error: "waypoints are required" });
+      }
+
+      const errors: string[] = [];
+      waypoints.forEach((wp: any, idx: number) => {
+        const n = idx + 1;
+        const lat = Number(wp?.lat);
+        const lng = Number(wp?.lng);
+        const alt = Number(wp?.altitude);
+        if (!Number.isFinite(lat) || lat < -90 || lat > 90) errors.push(`WP ${n}: invalid latitude`);
+        if (!Number.isFinite(lng) || lng < -180 || lng > 180) errors.push(`WP ${n}: invalid longitude`);
+        if (!Number.isFinite(alt) || alt < 0 || alt > 500) errors.push(`WP ${n}: altitude must be 0..500m`);
+      });
+
+      if (errors.length) {
+        return res.status(400).json({ success: false, valid: false, errors });
+      }
+
+      res.json({ success: true, valid: true, count: waypoints.length });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Mission validation failed" });
+    }
+  });
+
+  app.post("/api/mavlink/mission/diff", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const localWaypoints = Array.isArray(req.body?.waypoints) ? req.body.waypoints : [];
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      if (!localWaypoints.length) return res.status(400).json({ success: false, error: "waypoints are required" });
+
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_mission.py"),
+        "download",
+        "--connection",
+        connectionString,
+        "--timeout",
+        "12",
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (!parsed?.success) {
+            return res.status(500).json({ success: false, error: parsed?.error || err || "Failed to download FC mission" });
+          }
+
+          const fcWaypoints = Array.isArray(parsed.waypoints) ? parsed.waypoints : [];
+          const maxLen = Math.max(fcWaypoints.length, localWaypoints.length);
+          const changes: any[] = [];
+          const eq = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol;
+
+          for (let i = 0; i < maxLen; i++) {
+            const local = localWaypoints[i];
+            const fc = fcWaypoints[i];
+            if (!local && fc) {
+              changes.push({ order: i + 1, type: "remove_from_fc", fc });
+              continue;
+            }
+            if (local && !fc) {
+              changes.push({ order: i + 1, type: "add_to_fc", local });
+              continue;
+            }
+            const localLat = Number(local?.lat);
+            const localLng = Number(local?.lng);
+            const localAlt = Number(local?.altitude);
+            const fcLat = Number(fc?.lat);
+            const fcLng = Number(fc?.lng);
+            const fcAlt = Number(fc?.altitude);
+            const localAction = String(local?.action || "flythrough");
+            const fcAction = String(fc?.action || "flythrough");
+            const changed =
+              !eq(localLat, fcLat, 0.00001) ||
+              !eq(localLng, fcLng, 0.00001) ||
+              !eq(localAlt, fcAlt, 0.5) ||
+              localAction !== fcAction;
+            if (changed) {
+              changes.push({
+                order: i + 1,
+                type: "update",
+                local: { lat: localLat, lng: localLng, altitude: localAlt, action: localAction },
+                fc: { lat: fcLat, lng: fcLng, altitude: fcAlt, action: fcAction },
+              });
+            }
+          }
+
+          res.json({
+            success: true,
+            identical: changes.length === 0,
+            localCount: localWaypoints.length,
+            fcCount: fcWaypoints.length,
+            changes,
+          });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid mission diff response" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Mission diff failed" });
+    }
+  });
+
+  app.post("/api/mavlink/rally/upload", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const points = Array.isArray(req.body?.points) ? req.body.points : [];
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_rally.py"),
+        "upload",
+        "--connection",
+        connectionString,
+        "--timeout",
+        "12",
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.stdin.write(JSON.stringify({ points }));
+      py.stdin.end();
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) return res.json(parsed);
+          return res.status(500).json({ success: false, error: parsed?.error || err || "Rally upload failed" });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid rally bridge response" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Rally upload failed" });
+    }
+  });
+
+  app.get("/api/mavlink/rally/download", async (req, res) => {
+    try {
+      const connectionString = String(req.query.connectionString || "").trim();
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_rally.py"),
+        "download",
+        "--connection",
+        connectionString,
+        "--timeout",
+        "12",
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) return res.json(parsed);
+          return res.status(500).json({ success: false, error: parsed?.error || err || "Rally download failed" });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid rally bridge response" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Rally download failed" });
+    }
+  });
+
+  app.get("/api/mavlink/calibration/status", async (_req, res) => {
+    res.json({ success: true, calibration: calibrationState });
+  });
+
+  app.post("/api/mavlink/calibration/start", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const mode = String(req.body?.mode || "").trim().toLowerCase();
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      if (!["compass", "accel", "radio", "esc", "gyro", "baro", "level"].includes(mode)) {
+        return res.status(400).json({ success: false, error: "mode must be compass|accel|radio|esc|gyro|baro|level" });
+      }
+
+      calibrationState[mode].status = "running";
+      calibrationState[mode].lastRunAt = new Date().toISOString();
+      calibrationState[mode].message = "Calibration command sent";
+
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_calibration.py"),
+        "start",
+        "--connection",
+        connectionString,
+        "--mode",
+        mode,
+        "--timeout",
+        "10",
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) {
+            calibrationState[mode].status = "completed";
+            calibrationState[mode].ack = parsed.ack ?? null;
+            calibrationState[mode].message = "Calibration accepted";
+            return res.json({ success: true, mode, ack: parsed.ack ?? null });
+          }
+          calibrationState[mode].status = "failed";
+          calibrationState[mode].message = parsed?.error || err || "Calibration failed";
+          return res.status(500).json({ success: false, error: calibrationState[mode].message });
+        } catch {
+          calibrationState[mode].status = "failed";
+          calibrationState[mode].message = err || "Invalid calibration bridge response";
+          return res.status(500).json({ success: false, error: calibrationState[mode].message });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Calibration start failed" });
+    }
+  });
+
+  app.post("/api/mavlink/calibration/cancel", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_calibration.py"),
+        "cancel",
+        "--connection",
+        connectionString,
+        "--timeout",
+        "8",
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) {
+            for (const m of ["compass", "accel", "radio", "esc", "gyro", "baro", "level"]) {
+              calibrationState[m].status = "idle";
+              calibrationState[m].message = "Cancelled/reset";
+              calibrationState[m].ack = parsed.ack ?? null;
+            }
+            return res.json({ success: true, ack: parsed.ack ?? null });
+          }
+          return res.status(500).json({ success: false, error: parsed?.error || err || "Cancel failed" });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid calibration bridge response" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Calibration cancel failed" });
+    }
+  });
+
+  app.get("/api/mavlink/mode-mapping", async (req, res) => {
+    try {
+      const connectionString = String(req.query.connectionString || "").trim();
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      const names = [
+        "FLTMODE1",
+        "FLTMODE2",
+        "FLTMODE3",
+        "FLTMODE4",
+        "FLTMODE5",
+        "FLTMODE6",
+        "MODE_CH",
+        "RCMAP_ROLL",
+        "RCMAP_PITCH",
+        "RCMAP_THROTTLE",
+        "RCMAP_YAW",
+      ];
+      const mapping: Record<string, number | null> = {};
+      for (const name of names) {
+        const result = await runMavlinkParamBridge(["get", "--connection", connectionString, "--name", name, "--timeout", "6"]);
+        mapping[name] = result.ok ? Number(result.data?.value) : null;
+      }
+      res.json({ success: true, mapping });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to read mode mapping" });
+    }
+  });
+
+  app.post("/api/mavlink/mode-mapping/apply", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const mapping = req.body?.mapping || {};
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      const entries = Object.entries(mapping).filter(([k, v]) => typeof v === "number");
+      if (!entries.length) return res.status(400).json({ success: false, error: "mapping values are required" });
+
+      const applied: any[] = [];
+      const failed: any[] = [];
+      for (const [name, value] of entries) {
+        const result = await runMavlinkParamBridge([
+          "set",
+          "--connection",
+          connectionString,
+          "--name",
+          String(name).toUpperCase(),
+          "--value",
+          String(Number(value)),
+          "--timeout",
+          "6",
+        ]);
+        if (result.ok) applied.push({ name, value: Number(result.data?.value ?? value) });
+        else failed.push({ name, value, error: result.error || "set failed" });
+      }
+
+      res.json({ success: true, applied, failed });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to apply mode mapping" });
+    }
+  });
+
+  const copterAirframeProfiles: Record<string, { name: string; firmware: string; params: Record<string, number>; notes: string[] }> = {
+    quad_x: {
+      name: "Quadcopter X",
+      firmware: "ArduCopter",
+      params: {
+        FRAME_CLASS: 1,
+        FRAME_TYPE: 1,
+        MOT_PWM_TYPE: 6,
+      },
+      notes: ["Requires motor re-check and ESC recalibration after frame change."],
+    },
+    hexa_x: {
+      name: "Hexacopter X",
+      firmware: "ArduCopter",
+      params: {
+        FRAME_CLASS: 2,
+        FRAME_TYPE: 1,
+        MOT_PWM_TYPE: 6,
+      },
+      notes: ["Verify power system and motor order for 6-motor layout."],
+    },
+    octa_x: {
+      name: "Octocopter X",
+      firmware: "ArduCopter",
+      params: {
+        FRAME_CLASS: 3,
+        FRAME_TYPE: 1,
+        MOT_PWM_TYPE: 6,
+      },
+      notes: ["Recommended for heavy lift; verify ESC protocol on all channels."],
+    },
+  };
+
+  app.get("/api/mavlink/airframe/profiles", async (_req, res) => {
+    res.json({ success: true, profiles: copterAirframeProfiles });
+  });
+
+  app.post("/api/mavlink/airframe/apply", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const profileId = String(req.body?.profileId || "").trim().toLowerCase();
+      const rebootAfter = req.body?.rebootAfter !== false;
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      const profile = copterAirframeProfiles[profileId];
+      if (!profile) return res.status(400).json({ success: false, error: "Unknown airframe profile" });
+
+      const applied: any[] = [];
+      const failed: any[] = [];
+      for (const [key, value] of Object.entries(profile.params)) {
+        const result = await runMavlinkParamBridge([
+          "set",
+          "--connection",
+          connectionString,
+          "--name",
+          String(key).toUpperCase(),
+          "--value",
+          String(Number(value)),
+          "--timeout",
+          "6",
+        ]);
+        if (result.ok) applied.push({ name: key, value: Number(result.data?.value ?? value) });
+        else failed.push({ name: key, value, error: result.error || "set failed" });
+      }
+
+      let reboot = null as null | { success: boolean; error?: string };
+      if (rebootAfter) {
+        const rebootResult = await runMavlinkVehicleControl([
+          "action",
+          "--connection",
+          connectionString,
+          "--action",
+          "reboot",
+          "--timeout",
+          "6",
+        ]);
+        reboot = rebootResult.ok ? { success: true } : { success: false, error: rebootResult.error || "reboot failed" };
+      }
+
+      res.json({
+        success: true,
+        profileId,
+        profileName: profile.name,
+        firmware: profile.firmware,
+        applied,
+        failed,
+        reboot,
+        notes: profile.notes,
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to apply airframe profile" });
+    }
+  });
+
+  app.post("/api/mavlink/airframe/reconfigure", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const profileId = String(req.body?.profileId || "").trim().toLowerCase();
+      const optionalProfiles = Array.isArray(req.body?.optionalProfiles)
+        ? req.body.optionalProfiles.map((x: any) => String(x || "").trim()).filter(Boolean)
+        : [];
+      const rebootAfter = req.body?.rebootAfter !== false;
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      const profile = copterAirframeProfiles[profileId];
+      if (!profile) return res.status(400).json({ success: false, error: "Unknown airframe profile" });
+
+      const baseApplied: any[] = [];
+      const baseFailed: any[] = [];
+      for (const [key, value] of Object.entries(profile.params)) {
+        const result = await runMavlinkParamBridge([
+          "set",
+          "--connection",
+          connectionString,
+          "--name",
+          String(key).toUpperCase(),
+          "--value",
+          String(Number(value)),
+          "--timeout",
+          "6",
+        ]);
+        if (result.ok) baseApplied.push({ name: key, value: Number(result.data?.value ?? value) });
+        else baseFailed.push({ name: key, value, error: result.error || "set failed" });
+      }
+
+      const optionalApplied: Array<{ profileId: string; name: string; value: number }> = [];
+      const optionalFailed: Array<{ profileId: string; name: string; value: number; error: string }> = [];
+      for (const optionalProfileId of optionalProfiles) {
+        const p = OPTIONAL_HARDWARE_PROFILES[optionalProfileId];
+        if (!p) {
+          optionalFailed.push({ profileId: optionalProfileId, name: "*", value: 0, error: "profile not found" });
+          continue;
+        }
+        for (const item of p) {
+          const result = await runMavlinkParamBridge([
+            "set",
+            "--connection",
+            connectionString,
+            "--name",
+            item.name,
+            "--value",
+            String(item.value),
+            "--timeout",
+            "6",
+          ]);
+          if (result.ok) optionalApplied.push({ profileId: optionalProfileId, name: item.name, value: item.value });
+          else optionalFailed.push({ profileId: optionalProfileId, name: item.name, value: item.value, error: result.error || "set failed" });
+        }
+      }
+
+      let reboot = null as null | { success: boolean; error?: string };
+      if (rebootAfter) {
+        const rebootResult = await runMavlinkVehicleControl([
+          "action",
+          "--connection",
+          connectionString,
+          "--action",
+          "reboot",
+          "--timeout",
+          "8",
+        ]);
+        reboot = rebootResult.ok ? { success: true } : { success: false, error: rebootResult.error || "reboot failed" };
+      }
+
+      res.json({
+        success: true,
+        profileId,
+        profileName: profile.name,
+        baseApplied,
+        baseFailed,
+        optionalProfiles,
+        optionalApplied,
+        optionalFailed,
+        reboot,
+        checklist: [
+          "Run accelerometer + compass calibration",
+          "Run radio and ESC calibration",
+          "Verify motor order before arming",
+          "Confirm frame type in HUD after reboot",
+        ],
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to run airframe reconfigure workflow" });
+    }
+  });
+
+  app.post("/api/mavlink/vehicle/action", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const action = String(req.body?.action || "").trim().toLowerCase();
+      const mode = String(req.body?.mode || "").trim().toUpperCase();
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      if (!["arm", "disarm", "set_mode", "reboot"].includes(action)) {
+        return res.status(400).json({ success: false, error: "action must be arm|disarm|set_mode|reboot" });
+      }
+      if (action === "set_mode" && !mode) {
+        return res.status(400).json({ success: false, error: "mode is required for set_mode" });
+      }
+
+      const args = ["action", "--connection", connectionString, "--action", action, "--timeout", "8"];
+      if (mode) args.push("--mode", mode);
+      const result = await runMavlinkVehicleControl(args);
+      if (!result.ok) return res.status(500).json({ success: false, error: result.error || "Vehicle action failed" });
+      res.json({ success: true, result: result.data });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Vehicle action failed" });
+    }
+  });
+
+  app.post("/api/mavlink/manual-control", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+
+      const x = Number(req.body?.x ?? 0);
+      const y = Number(req.body?.y ?? 0);
+      const z = Number(req.body?.z ?? 500);
+      const r = Number(req.body?.r ?? 0);
+      const buttons = Number(req.body?.buttons ?? 0);
+      const durationMs = Number(req.body?.durationMs ?? 400);
+
+      const result = await runMavlinkVehicleControl([
+        "manual",
+        "--connection",
+        connectionString,
+        "--x",
+        String(Number.isFinite(x) ? x : 0),
+        "--y",
+        String(Number.isFinite(y) ? y : 0),
+        "--z",
+        String(Number.isFinite(z) ? z : 500),
+        "--r",
+        String(Number.isFinite(r) ? r : 0),
+        "--buttons",
+        String(Number.isFinite(buttons) ? buttons : 0),
+        "--duration-ms",
+        String(Number.isFinite(durationMs) ? durationMs : 400),
+        "--timeout",
+        "6",
+      ]);
+
+      if (!result.ok) return res.status(500).json({ success: false, error: result.error || "Manual control failed" });
+      res.json({ success: true, result: result.data });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Manual control failed" });
+    }
+  });
+
+  app.post("/api/mavlink/swarm/action", async (req, res) => {
+    try {
+      const connectionStrings = Array.isArray(req.body?.connectionStrings)
+        ? req.body.connectionStrings.map((v: any) => String(v || "").trim()).filter(Boolean)
+        : [];
+      const action = String(req.body?.action || "").trim().toLowerCase();
+      const mode = String(req.body?.mode || "").trim().toUpperCase();
+      if (!connectionStrings.length) return res.status(400).json({ success: false, error: "connectionStrings are required" });
+      if (!["arm", "disarm", "set_mode"].includes(action)) {
+        return res.status(400).json({ success: false, error: "action must be arm|disarm|set_mode" });
+      }
+      if (action === "set_mode" && !mode) {
+        return res.status(400).json({ success: false, error: "mode is required for set_mode" });
+      }
+
+      const results: Array<{ connectionString: string; success: boolean; ack?: number | null; error?: string }> = [];
+      for (const connectionString of connectionStrings) {
+        const args = ["action", "--connection", connectionString, "--action", action, "--timeout", "8"];
+        if (mode) args.push("--mode", mode);
+        const result = await runMavlinkVehicleControl(args);
+        if (result.ok) {
+          results.push({
+            connectionString,
+            success: true,
+            ack: result.data?.ack ?? null,
+          });
+        } else {
+          results.push({
+            connectionString,
+            success: false,
+            error: result.error || "action failed",
+          });
+        }
+      }
+
+      const successCount = results.filter((r) => r.success).length;
+      res.json({
+        success: successCount > 0,
+        action,
+        mode: mode || null,
+        successCount,
+        total: results.length,
+        results,
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Swarm action failed" });
+    }
+  });
+
+  app.post("/api/mavlink/swarm/formation-plan", async (req, res) => {
+    try {
+      const count = Math.max(1, Math.min(24, Number(req.body?.count || 1)));
+      const formation = String(req.body?.formation || "line").trim().toLowerCase();
+      const spacing = Math.max(1, Number(req.body?.spacingMeters || 10));
+      const originLat = Number(req.body?.originLat || 0);
+      const originLng = Number(req.body?.originLng || 0);
+      if (!Number.isFinite(originLat) || !Number.isFinite(originLng)) {
+        return res.status(400).json({ success: false, error: "originLat and originLng are required" });
+      }
+      const metersToLat = (m: number) => m / 111320;
+      const metersToLng = (m: number, atLat: number) => m / (111320 * Math.cos((atLat * Math.PI) / 180));
+      const slots: Array<{ idx: number; offsetNorthM: number; offsetEastM: number; lat: number; lng: number }> = [];
+      for (let i = 0; i < count; i++) {
+        let north = 0;
+        let east = 0;
+        if (formation === "line") {
+          east = i * spacing;
+        } else if (formation === "column") {
+          north = i * spacing;
+        } else if (formation === "wedge") {
+          if (i === 0) {
+            north = 0;
+            east = 0;
+          } else {
+            const rank = Math.ceil(i / 2);
+            north = rank * spacing;
+            east = (i % 2 === 0 ? -1 : 1) * rank * spacing;
+          }
+        } else if (formation === "grid") {
+          const side = Math.ceil(Math.sqrt(count));
+          const row = Math.floor(i / side);
+          const col = i % side;
+          north = row * spacing;
+          east = col * spacing;
+        }
+        slots.push({
+          idx: i + 1,
+          offsetNorthM: north,
+          offsetEastM: east,
+          lat: originLat + metersToLat(north),
+          lng: originLng + metersToLng(east, originLat),
+        });
+      }
+      res.json({ success: true, formation, count, spacingMeters: spacing, origin: { lat: originLat, lng: originLng }, slots });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Formation planning failed" });
+    }
+  });
+
+  app.post("/api/mavlink/swarm/sync-action", async (req, res) => {
+    try {
+      const connectionStrings = Array.isArray(req.body?.connectionStrings)
+        ? req.body.connectionStrings.map((v: any) => String(v || "").trim()).filter(Boolean)
+        : [];
+      const action = String(req.body?.action || "").trim().toLowerCase();
+      const mode = String(req.body?.mode || "").trim().toUpperCase();
+      const staggerMs = Math.max(0, Number(req.body?.staggerMs || 0));
+      if (!connectionStrings.length) return res.status(400).json({ success: false, error: "connectionStrings are required" });
+      if (!["arm", "disarm", "set_mode", "reboot"].includes(action)) {
+        return res.status(400).json({ success: false, error: "action must be arm|disarm|set_mode|reboot" });
+      }
+
+      const startedAt = Date.now();
+      const results: Array<{ connectionString: string; success: boolean; error?: string; delayMs: number }> = [];
+      for (let i = 0; i < connectionStrings.length; i++) {
+        if (i > 0 && staggerMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, staggerMs));
+        }
+        const conn = connectionStrings[i];
+        const args = ["action", "--connection", conn, "--action", action, "--timeout", "8"];
+        if (mode) args.push("--mode", mode);
+        const result = await runMavlinkVehicleControl(args);
+        results.push({
+          connectionString: conn,
+          success: result.ok,
+          error: result.ok ? undefined : (result.error || "action failed"),
+          delayMs: Date.now() - startedAt,
+        });
+      }
+      res.json({ success: true, action, mode: mode || null, staggerMs, results });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Swarm sync action failed" });
+    }
+  });
+
+  app.post("/api/mavlink/swarm/formation-mission", async (req, res) => {
+    try {
+      const slots = Array.isArray(req.body?.slots) ? req.body.slots : [];
+      const altitude = Number(req.body?.altitude || 40);
+      const holdSec = Number(req.body?.holdSec || 6);
+      const missions = slots
+        .map((slot: any, idx: number) => ({
+          vehicle: String(slot.vehicle || slot.connectionString || `vehicle-${idx + 1}`),
+          connectionString: String(slot.connectionString || "").trim(),
+          mission: [
+            { order: 1, lat: Number(slot.lat), lng: Number(slot.lng), altitude, action: "takeoff", actionParams: { frame: "relative" } },
+            { order: 2, lat: Number(slot.lat), lng: Number(slot.lng), altitude, action: "hover", actionParams: { hoverTime: holdSec, frame: "relative" } },
+          ],
+        }))
+        .filter((m: any) => Number.isFinite(m.mission[0].lat) && Number.isFinite(m.mission[0].lng));
+      res.json({ success: true, count: missions.length, missions });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Formation mission generation failed" });
+    }
+  });
+
+  app.get("/api/mavlink/optional-hardware/profiles", async (_req, res) => {
+    res.json({ success: true, profiles: OPTIONAL_HARDWARE_PROFILES });
+  });
+
+  app.post("/api/mavlink/optional-hardware/apply", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const profileId = String(req.body?.profileId || "").trim();
+      if (!connectionString || !profileId) return res.status(400).json({ success: false, error: "connectionString and profileId are required" });
+      const profile = OPTIONAL_HARDWARE_PROFILES[profileId];
+      if (!profile) return res.status(404).json({ success: false, error: "profile not found" });
+      const applied: any[] = [];
+      const failed: any[] = [];
+      for (const item of profile) {
+        const result = await runMavlinkParamBridge([
+          "set",
+          "--connection",
+          connectionString,
+          "--name",
+          item.name,
+          "--value",
+          String(item.value),
+          "--timeout",
+          "6",
+        ]);
+        if (result.ok) applied.push(item);
+        else failed.push({ ...item, error: result.error || "set failed" });
+      }
+      res.json({ success: true, profileId, applied, failed });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to apply optional hardware profile" });
+    }
+  });
+
+  app.get("/api/mavlink/radio-sik/status", async (req, res) => {
+    try {
+      const connectionString = String(req.query.connectionString || "").trim();
+      const serialPort = Math.max(1, Math.min(8, Number(req.query.serialPort || 1)));
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+
+      const keys = [
+        `SERIAL${serialPort}_PROTOCOL`,
+        `SERIAL${serialPort}_BAUD`,
+        `SR${serialPort}_RAW_SENS`,
+        `SR${serialPort}_EXT_STAT`,
+        `SR${serialPort}_RC_CHAN`,
+        `SR${serialPort}_POSITION`,
+        `SR${serialPort}_EXTRA1`,
+        `SR${serialPort}_EXTRA2`,
+        `SR${serialPort}_EXTRA3`,
+        "TELEM_DELAY",
+      ];
+      const values: Record<string, number | null> = {};
+      for (const key of keys) {
+        const result = await runMavlinkParamBridge(["get", "--connection", connectionString, "--name", key, "--timeout", "5"]);
+        values[key] = result.ok ? Number(result.data?.value) : null;
+      }
+      res.json({ success: true, serialPort, values });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to read SiK status" });
+    }
+  });
+
+  const buildSikProfileParams = (serialPort: number, profile: string) => {
+    const baseByProfile: Record<string, Record<string, number>> = {
+      long_range: {
+        [`SERIAL${serialPort}_PROTOCOL`]: 2,
+        [`SERIAL${serialPort}_BAUD`]: 57,
+        [`SR${serialPort}_POSITION`]: 2,
+        [`SR${serialPort}_EXTRA1`]: 2,
+        [`SR${serialPort}_EXTRA2`]: 2,
+        [`SR${serialPort}_EXTRA3`]: 2,
+        [`SR${serialPort}_RC_CHAN`]: 2,
+        "TELEM_DELAY": 0,
+      },
+      low_latency: {
+        [`SERIAL${serialPort}_PROTOCOL`]: 2,
+        [`SERIAL${serialPort}_BAUD`]: 115,
+        [`SR${serialPort}_POSITION`]: 8,
+        [`SR${serialPort}_EXTRA1`]: 8,
+        [`SR${serialPort}_EXTRA2`]: 8,
+        [`SR${serialPort}_EXTRA3`]: 6,
+        [`SR${serialPort}_RC_CHAN`]: 6,
+        "TELEM_DELAY": 0,
+      },
+    };
+    return baseByProfile[profile] || null;
+  };
+
+  app.post("/api/mavlink/radio-sik/apply", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const serialPort = Math.max(1, Math.min(8, Number(req.body?.serialPort || 1)));
+      const profile = String(req.body?.profile || "long_range").trim().toLowerCase();
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+
+      const selected = buildSikProfileParams(serialPort, profile);
+      if (!selected) {
+        return res.status(400).json({ success: false, error: "profile must be long_range|low_latency" });
+      }
+
+      const overrides = req.body?.overrides && typeof req.body.overrides === "object" ? req.body.overrides : {};
+      const merged = { ...selected, ...overrides };
+
+      const applied: any[] = [];
+      const failed: any[] = [];
+      for (const [key, value] of Object.entries(merged)) {
+        const result = await runMavlinkParamBridge([
+          "set",
+          "--connection",
+          connectionString,
+          "--name",
+          String(key).toUpperCase(),
+          "--value",
+          String(Number(value)),
+          "--timeout",
+          "6",
+        ]);
+        if (result.ok) applied.push({ name: key, value: Number(result.data?.value ?? value) });
+        else failed.push({ name: key, value, error: result.error || "set failed" });
+      }
+
+      res.json({ success: true, serialPort, profile, applied, failed });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to apply SiK profile" });
+    }
+  });
+
+  app.post("/api/mavlink/radio-sik/apply-verify", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const serialPort = Math.max(1, Math.min(8, Number(req.body?.serialPort || 1)));
+      const profile = String(req.body?.profile || "long_range").trim().toLowerCase();
+      const verifyDelayMs = Math.max(100, Math.min(5000, Number(req.body?.verifyDelayMs || 700)));
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      const selected = buildSikProfileParams(serialPort, profile);
+      if (!selected) {
+        return res.status(400).json({ success: false, error: "profile must be long_range|low_latency" });
+      }
+
+      const overrides = req.body?.overrides && typeof req.body.overrides === "object" ? req.body.overrides : {};
+      const merged = { ...selected, ...overrides };
+      const applied: any[] = [];
+      const failed: any[] = [];
+      for (const [key, value] of Object.entries(merged)) {
+        const result = await runMavlinkParamBridge([
+          "set",
+          "--connection",
+          connectionString,
+          "--name",
+          String(key).toUpperCase(),
+          "--value",
+          String(Number(value)),
+          "--timeout",
+          "6",
+        ]);
+        if (result.ok) applied.push({ name: key, value: Number(result.data?.value ?? value) });
+        else failed.push({ name: key, value, error: result.error || "set failed" });
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, verifyDelayMs));
+      const verified: Record<string, number | null> = {};
+      const mismatches: Array<{ name: string; expected: number; actual: number | null }> = [];
+      for (const [key, expected] of Object.entries(merged)) {
+        const result = await runMavlinkParamBridge(["get", "--connection", connectionString, "--name", key, "--timeout", "5"]);
+        const actual = result.ok ? Number(result.data?.value) : null;
+        verified[key] = actual;
+        if (actual === null || Math.abs(Number(actual) - Number(expected)) > 0.01) {
+          mismatches.push({ name: key, expected: Number(expected), actual });
+        }
+      }
+
+      res.json({
+        success: true,
+        serialPort,
+        profile,
+        applied,
+        failed,
+        verified,
+        mismatches,
+        verifiedOk: mismatches.length === 0,
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to apply+verify SiK profile" });
+    }
+  });
+
+  app.post("/api/mavlink/radio-sik/modem-query", async (req, res) => {
+    try {
+      const port = String(req.body?.port || "").trim();
+      const command = String(req.body?.command || "ATI").trim();
+      if (!port) return res.status(400).json({ success: false, error: "port is required" });
+      const template = process.env.MOUSE_SIK_AT_CMD || "";
+      if (!template.trim()) {
+        return res.status(503).json({
+          success: false,
+          error: "MOUSE_SIK_AT_CMD is not configured",
+          example: "python3 /opt/mouse/tools/sik_at.py --port {port} --cmd '{cmd}'",
+        });
+      }
+      const cmd = template.replace(/\{port\}/g, port).replace(/\{cmd\}/g, command.replace(/'/g, ""));
+      const proc = spawn("/bin/zsh", ["-lc", cmd], { cwd: process.cwd(), env: process.env });
+      let out = "";
+      let err = "";
+      proc.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      proc.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      proc.on("close", (code) => {
+        res.json({
+          success: code === 0,
+          port,
+          command,
+          stdout: out.trim(),
+          stderr: err.trim(),
+          code,
+        });
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "SiK modem query failed" });
+    }
+  });
+
+  app.get("/api/mavlink/radio-sik/modem-profiles", async (_req, res) => {
+    res.json({ success: true, profiles: SIK_MODEM_PROFILES });
+  });
+
+  app.post("/api/mavlink/radio-sik/modem-apply-profile", async (req, res) => {
+    try {
+      const port = String(req.body?.port || "").trim();
+      const profileId = String(req.body?.profileId || "").trim();
+      if (!port || !profileId) return res.status(400).json({ success: false, error: "port and profileId are required" });
+      const template = process.env.MOUSE_SIK_AT_CMD || "";
+      if (!template.trim()) return res.status(503).json({ success: false, error: "MOUSE_SIK_AT_CMD is not configured" });
+      const cmds = SIK_MODEM_PROFILES[profileId];
+      if (!cmds) return res.status(404).json({ success: false, error: "modem profile not found" });
+
+      const results: Array<{ command: string; success: boolean; stdout: string; stderr: string; code: number | null }> = [];
+      for (const c of cmds) {
+        const cmd = template.replace(/\{port\}/g, port).replace(/\{cmd\}/g, c.replace(/'/g, ""));
+        const result = await new Promise<{ success: boolean; stdout: string; stderr: string; code: number | null }>((resolve) => {
+          const proc = spawn("/bin/zsh", ["-lc", cmd], { cwd: process.cwd(), env: process.env });
+          let out = "";
+          let err = "";
+          proc.stdout.on("data", (d: Buffer) => (out += d.toString()));
+          proc.stderr.on("data", (d: Buffer) => (err += d.toString()));
+          proc.on("close", (code) => resolve({ success: code === 0, stdout: out.trim(), stderr: err.trim(), code }));
+        });
+        results.push({ command: c, ...result });
+      }
+      const failed = results.filter((r) => !r.success);
+      res.json({ success: failed.length === 0, port, profileId, results, failedCount: failed.length });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "SiK modem profile apply failed" });
+    }
+  });
+
+  app.get("/api/mavlink/inspector/snapshot", async (req, res) => {
+    try {
+      const connectionString = String(req.query.connectionString || "").trim();
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      const timeout = Math.max(2, Math.min(12, Number(req.query.timeout || 6)));
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_inspector.py"),
+        "--connection",
+        connectionString,
+        "--timeout",
+        String(timeout),
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) return res.json(parsed);
+          return res.status(500).json({ success: false, error: parsed?.error || err || "Inspector snapshot failed" });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid inspector response" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Inspector snapshot failed" });
+    }
+  });
+
+  app.get("/api/mavlink/inspector/live", async (req, res) => {
+    try {
+      const connectionString = String(req.query.connectionString || "").trim();
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      const timeout = Math.max(2, Math.min(12, Number(req.query.timeout || 6)));
+      const duration = Math.max(0.5, Math.min(5, Number(req.query.duration || 2)));
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_inspector.py"),
+        "--connection",
+        connectionString,
+        "--timeout",
+        String(timeout),
+        "--live",
+        "--duration",
+        String(duration),
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) return res.json(parsed);
+          return res.status(500).json({ success: false, error: parsed?.error || err || "Inspector live stream failed" });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid inspector live response" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Inspector live stream failed" });
+    }
+  });
+
+  app.get("/api/mavlink/serial-passthrough/status", async (_req, res) => {
+    res.json({ success: true, state: serialPassthroughState });
+  });
+
+  app.post("/api/mavlink/serial-passthrough/start", async (req, res) => {
+    try {
+      if (serialPassthroughProcess) return res.status(409).json({ success: false, error: "Serial passthrough already running" });
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const localPort = Number(req.body?.localPort || 5760);
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      if (!Number.isFinite(localPort) || localPort < 1 || localPort > 65535) {
+        return res.status(400).json({ success: false, error: "localPort must be 1..65535" });
+      }
+
+      const template = process.env.MOUSE_SERIAL_PASSTHROUGH_CMD || "";
+      if (!template.trim()) {
+        return res.status(503).json({
+          success: false,
+          error: "MOUSE_SERIAL_PASSTHROUGH_CMD is not configured",
+          example: "mavproxy.py --master={conn} --out=udp:127.0.0.1:{port}",
+        });
+      }
+
+      const cmd = template
+        .replace(/\{conn\}/g, connectionString)
+        .replace(/\{port\}/g, String(localPort));
+      const child = spawn("/bin/zsh", ["-lc", cmd], {
+        cwd: process.cwd(),
+        env: process.env,
+        stdio: "ignore",
+      });
+      serialPassthroughProcess = child;
+      serialPassthroughState.running = true;
+      serialPassthroughState.command = cmd;
+      serialPassthroughState.startedAt = new Date().toISOString();
+      serialPassthroughState.message = `Running on local port ${localPort}`;
+
+      child.on("exit", () => {
+        serialPassthroughProcess = null;
+        serialPassthroughState.running = false;
+        serialPassthroughState.message = "Stopped";
+      });
+
+      res.json({ success: true, state: serialPassthroughState });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to start serial passthrough" });
+    }
+  });
+
+  app.post("/api/mavlink/serial-passthrough/stop", async (_req, res) => {
+    try {
+      if (serialPassthroughProcess) {
+        serialPassthroughProcess.kill("SIGTERM");
+        serialPassthroughProcess = null;
+      }
+      serialPassthroughState.running = false;
+      serialPassthroughState.message = "Stopped";
+      res.json({ success: true, state: serialPassthroughState });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to stop serial passthrough" });
+    }
+  });
+
+  const startRtkNtripProcess = (
+    host: string,
+    port: number,
+    mountpoint: string,
+    username: string,
+    password: string,
+    connectionString: string,
+  ): { ok: boolean; error?: string } => {
+    if (rtkNtripProcess) return { ok: false, error: "RTK/NTRIP already running" };
+    const template = process.env.MOUSE_NTRIP_CLIENT_CMD || "";
+    if (!template.trim()) {
+      return {
+        ok: false,
+        error: "MOUSE_NTRIP_CLIENT_CMD is not configured (example: str2str -in ntrip://{user}:{pass}@{host}:{port}/{mount} -out serial://{conn})",
+      };
+    }
+    const cmd = template
+      .replace(/\{host\}/g, host)
+      .replace(/\{port\}/g, String(port))
+      .replace(/\{mount\}/g, mountpoint)
+      .replace(/\{user\}/g, username)
+      .replace(/\{pass\}/g, password)
+      .replace(/\{conn\}/g, connectionString);
+    const child = spawn("/bin/zsh", ["-lc", cmd], {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: "ignore",
+    });
+    rtkNtripProcess = child;
+    rtkNtripState.running = true;
+    rtkNtripState.command = cmd;
+    rtkNtripState.startedAt = new Date().toISOString();
+    rtkNtripState.host = host;
+    rtkNtripState.port = port;
+    rtkNtripState.mountpoint = mountpoint;
+    rtkNtripState.message = "RTK/NTRIP streaming active";
+    child.on("exit", () => {
+      rtkNtripProcess = null;
+      rtkNtripState.running = false;
+      rtkNtripState.message = "Stopped";
+    });
+    return { ok: true };
+  };
+
+  app.get("/api/mavlink/rtk/profiles", async (_req, res) => {
+    try {
+      const profiles = await readRtkProfiles();
+      res.json({ success: true, profiles });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to list RTK profiles" });
+    }
+  });
+
+  app.get("/api/mavlink/rtk/profiles/export", async (_req, res) => {
+    try {
+      const profiles = await readRtkProfiles();
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="rtk-profiles-${Date.now()}.json"`);
+      res.send(JSON.stringify({ profiles }, null, 2));
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to export RTK profiles" });
+    }
+  });
+
+  app.post("/api/mavlink/rtk/profiles", async (req, res) => {
+    try {
+      const name = String(req.body?.name || "").trim();
+      const host = String(req.body?.host || "").trim();
+      const port = Number(req.body?.port || 2101);
+      const mountpoint = String(req.body?.mountpoint || "").trim();
+      const username = String(req.body?.username || "").trim();
+      const password = String(req.body?.password || "").trim();
+      const id = String(req.body?.id || "").trim();
+      if (!name || !host || !mountpoint) {
+        return res.status(400).json({ success: false, error: "name, host, and mountpoint are required" });
+      }
+
+      const profiles = await readRtkProfiles();
+      const now = new Date().toISOString();
+      const profileId = id || `rtk-${Date.now()}`;
+      const existingIdx = profiles.findIndex((p) => p.id === profileId);
+      const profile: RtkProfile = {
+        id: profileId,
+        name,
+        host,
+        port: Number.isFinite(port) ? port : 2101,
+        mountpoint,
+        username,
+        password,
+        createdAt: existingIdx >= 0 ? profiles[existingIdx].createdAt : now,
+        updatedAt: now,
+      };
+      if (existingIdx >= 0) profiles[existingIdx] = profile;
+      else profiles.push(profile);
+      await writeRtkProfiles(profiles);
+      res.json({ success: true, profile });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to save RTK profile" });
+    }
+  });
+
+  app.post("/api/mavlink/rtk/profiles/import", async (req, res) => {
+    try {
+      const incoming = Array.isArray(req.body?.profiles) ? req.body.profiles : [];
+      if (!incoming.length) return res.status(400).json({ success: false, error: "profiles array is required" });
+
+      const current = await readRtkProfiles();
+      const byId = new Map<string, RtkProfile>(current.map((p) => [p.id, p]));
+      const now = new Date().toISOString();
+      let imported = 0;
+      let skipped = 0;
+
+      for (const raw of incoming) {
+        const id = String(raw?.id || `rtk-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`).trim();
+        const name = String(raw?.name || "").trim();
+        const host = String(raw?.host || "").trim();
+        const mountpoint = String(raw?.mountpoint || "").trim();
+        if (!name || !host || !mountpoint) {
+          skipped += 1;
+          continue;
+        }
+        const existing = byId.get(id);
+        byId.set(id, {
+          id,
+          name,
+          host,
+          port: Number(raw?.port || 2101),
+          mountpoint,
+          username: String(raw?.username || "").trim(),
+          password: String(raw?.password || "").trim(),
+          createdAt: existing?.createdAt || now,
+          updatedAt: now,
+        });
+        imported += 1;
+      }
+
+      await writeRtkProfiles(Array.from(byId.values()));
+      res.json({ success: true, imported, skipped, total: byId.size });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to import RTK profiles" });
+    }
+  });
+
+  app.delete("/api/mavlink/rtk/profiles/:id", async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      const profiles = await readRtkProfiles();
+      const next = profiles.filter((p) => p.id !== id);
+      await writeRtkProfiles(next);
+      res.json({ success: true, removed: profiles.length - next.length });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to delete RTK profile" });
+    }
+  });
+
+  app.get("/api/mavlink/rtk/status", async (_req, res) => {
+    res.json({ success: true, state: rtkNtripState });
+  });
+
+  app.post("/api/mavlink/rtk/start", async (req, res) => {
+    try {
+      const host = String(req.body?.host || "").trim();
+      const port = Number(req.body?.port || 2101);
+      const mountpoint = String(req.body?.mountpoint || "").trim();
+      const username = String(req.body?.username || "").trim();
+      const password = String(req.body?.password || "").trim();
+      const connectionString = String(req.body?.connectionString || "").trim();
+      if (!host || !mountpoint || !connectionString) {
+        return res.status(400).json({ success: false, error: "host, mountpoint, and connectionString are required" });
+      }
+      const started = startRtkNtripProcess(host, port, mountpoint, username, password, connectionString);
+      if (!started.ok) return res.status(409).json({ success: false, error: started.error });
+      res.json({ success: true, state: rtkNtripState });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to start RTK/NTRIP" });
+    }
+  });
+
+  app.post("/api/mavlink/rtk/reconnect", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const profileId = String(req.body?.profileId || "").trim();
+      if (!connectionString || !profileId) {
+        return res.status(400).json({ success: false, error: "connectionString and profileId are required" });
+      }
+
+      const profiles = await readRtkProfiles();
+      const profile = profiles.find((p) => p.id === profileId);
+      if (!profile) return res.status(404).json({ success: false, error: "RTK profile not found" });
+
+      if (rtkNtripProcess) {
+        rtkNtripProcess.kill("SIGTERM");
+        rtkNtripProcess = null;
+      }
+      rtkNtripState.running = false;
+      rtkNtripState.message = "Reconnecting";
+
+      const started = startRtkNtripProcess(
+        profile.host,
+        profile.port,
+        profile.mountpoint,
+        profile.username,
+        profile.password,
+        connectionString,
+      );
+      if (!started.ok) return res.status(409).json({ success: false, error: started.error });
+      res.json({ success: true, state: rtkNtripState, profile });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to reconnect RTK/NTRIP" });
+    }
+  });
+
+  app.get("/api/mavlink/gps-inject/status", async (_req, res) => {
+    res.json({ success: true, state: gpsInjectState });
+  });
+
+  app.post("/api/mavlink/gps-inject/start", async (req, res) => {
+    try {
+      if (gpsInjectProcess) return res.status(409).json({ success: false, error: "GPS inject already running" });
+      const connectionString = String(req.body?.connectionString || "").trim();
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+
+      let host = String(req.body?.host || "").trim();
+      let port = Number(req.body?.port || 2101);
+      let mountpoint = String(req.body?.mountpoint || "").trim();
+      let username = String(req.body?.username || "").trim();
+      let password = String(req.body?.password || "").trim();
+      const profileId = String(req.body?.profileId || "").trim();
+      if (profileId) {
+        const profiles = await readRtkProfiles();
+        const p = profiles.find((x) => x.id === profileId);
+        if (!p) return res.status(404).json({ success: false, error: "RTK profile not found" });
+        host = p.host;
+        port = p.port;
+        mountpoint = p.mountpoint;
+        username = p.username;
+        password = p.password;
+      }
+      if (!host || !mountpoint) {
+        return res.status(400).json({ success: false, error: "host and mountpoint (or profileId) are required" });
+      }
+
+      const template = process.env.MOUSE_GPS_INJECT_CMD || "";
+      if (!template.trim()) {
+        return res.status(503).json({
+          success: false,
+          error: "MOUSE_GPS_INJECT_CMD is not configured",
+          example: "str2str -in ntrip://{user}:{pass}@{host}:{port}/{mount} -out serial://{conn}",
+        });
+      }
+
+      const cmd = template
+        .replace(/\{host\}/g, host)
+        .replace(/\{port\}/g, String(port))
+        .replace(/\{mount\}/g, mountpoint)
+        .replace(/\{user\}/g, username)
+        .replace(/\{pass\}/g, password)
+        .replace(/\{conn\}/g, connectionString);
+      const child = spawn("/bin/zsh", ["-lc", cmd], {
+        cwd: process.cwd(),
+        env: process.env,
+        stdio: "ignore",
+      });
+      gpsInjectProcess = child;
+      gpsInjectState.running = true;
+      gpsInjectState.command = cmd;
+      gpsInjectState.startedAt = new Date().toISOString();
+      gpsInjectState.profileId = profileId;
+      gpsInjectState.message = "GPS injection active";
+
+      child.on("exit", () => {
+        gpsInjectProcess = null;
+        gpsInjectState.running = false;
+        gpsInjectState.message = "Stopped";
+      });
+
+      res.json({ success: true, state: gpsInjectState });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to start GPS inject" });
+    }
+  });
+
+  app.post("/api/mavlink/gps-inject/stop", async (_req, res) => {
+    try {
+      if (gpsInjectProcess) {
+        gpsInjectProcess.kill("SIGTERM");
+        gpsInjectProcess = null;
+      }
+      gpsInjectState.running = false;
+      gpsInjectState.message = "Stopped";
+      res.json({ success: true, state: gpsInjectState });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to stop GPS inject" });
+    }
+  });
+
+  app.get("/api/firmware/catalog", async (_req, res) => {
+    try {
+      const entries = await readFirmwareCatalog();
+      res.json({ success: true, entries });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to load firmware catalog" });
+    }
+  });
+
+  app.post("/api/firmware/catalog", async (req, res) => {
+    try {
+      const entry = req.body || {};
+      const id = String(entry.id || `fw-${Date.now()}`).trim();
+      const name = String(entry.name || "").trim();
+      const version = String(entry.version || "").trim();
+      const fileUrl = String(entry.fileUrl || "").trim();
+      const vehicle = String(entry.vehicle || "copter").trim();
+      if (!name || !version || !fileUrl) {
+        return res.status(400).json({ success: false, error: "name, version, fileUrl are required" });
+      }
+      const entries = await readFirmwareCatalog();
+      const idx = entries.findIndex((e: any) => String(e.id) === id);
+      const row = { id, name, version, vehicle, fileUrl, notes: String(entry.notes || ""), updatedAt: new Date().toISOString() };
+      if (idx >= 0) entries[idx] = row;
+      else entries.push(row);
+      await writeFirmwareCatalog(entries);
+      res.json({ success: true, entry: row });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to update firmware catalog" });
+    }
+  });
+
+  app.delete("/api/firmware/catalog/:id", async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      const entries = await readFirmwareCatalog();
+      const next = entries.filter((e: any) => String(e.id) !== id);
+      await writeFirmwareCatalog(next);
+      res.json({ success: true, removed: entries.length - next.length });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to delete firmware catalog entry" });
+    }
+  });
+
+  app.post("/api/firmware/catalog/install", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const id = String(req.body?.id || "").trim();
+      if (!connectionString || !id) {
+        return res.status(400).json({ success: false, error: "connectionString and id are required" });
+      }
+      const entries = await readFirmwareCatalog();
+      const entry = entries.find((e: any) => String(e.id) === id);
+      if (!entry) return res.status(404).json({ success: false, error: "catalog entry not found" });
+      const url = String(entry.fileUrl || "");
+      if (!url.startsWith("http://") && !url.startsWith("https://")) {
+        return res.status(400).json({ success: false, error: "fileUrl must be http/https" });
+      }
+
+      const resp = await fetch(url);
+      if (!resp.ok) return res.status(502).json({ success: false, error: `Failed to download firmware (${resp.status})` });
+      const buf = Buffer.from(await resp.arrayBuffer());
+      const filename = `${String(entry.name).replace(/\s+/g, "_")}-${String(entry.version)}.apj`;
+      const asBase64 = buf.toString("base64");
+
+      // Reuse existing flashing endpoint workflow.
+      req.body.filename = filename;
+      req.body.fileContentBase64 = asBase64;
+      req.body.connectionString = connectionString;
+      // Call through same logic by invoking client endpoint style (internal function duplication avoided).
+      return res.json({ success: true, downloaded: true, filename, fileContentBase64: asBase64, note: "Use /api/firmware/flash with this payload" });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to install firmware from catalog" });
+    }
+  });
+
+  app.post("/api/mavlink/rtk/stop", async (_req, res) => {
+    try {
+      if (rtkNtripProcess) {
+        rtkNtripProcess.kill("SIGTERM");
+        rtkNtripProcess = null;
+      }
+      rtkNtripState.running = false;
+      rtkNtripState.message = "Stopped";
+      res.json({ success: true, state: rtkNtripState });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to stop RTK/NTRIP" });
+    }
+  });
+
+  app.get("/api/firmware/status", async (_req, res) => {
+    res.json({ success: true, state: firmwareState });
+  });
+
+  app.post("/api/firmware/flash", async (req, res) => {
+    try {
+      if (firmwareState.busy) return res.status(409).json({ success: false, error: "Firmware operation already running" });
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const filename = String(req.body?.filename || "").trim();
+      const base64 = String(req.body?.fileContentBase64 || "");
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      if (!filename || !base64) return res.status(400).json({ success: false, error: "filename and fileContentBase64 are required" });
+      if (!filename.endsWith(".apj") && !filename.endsWith(".px4")) {
+        return res.status(400).json({ success: false, error: "Firmware must be .apj or .px4" });
+      }
+
+      const firmwareDir = path.resolve(process.cwd(), "data", "firmware");
+      mkdirSync(firmwareDir, { recursive: true });
+      const safeName = `${Date.now()}-${path.basename(filename).replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const fullPath = path.join(firmwareDir, safeName);
+      await writeFile(fullPath, Buffer.from(base64, "base64"));
+
+      firmwareState.busy = true;
+      firmwareState.progress = 5;
+      firmwareState.status = "running";
+      firmwareState.message = "Firmware upload started";
+      firmwareState.lastRunAt = new Date().toISOString();
+
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_firmware.py"),
+        "flash",
+        "--connection",
+        connectionString,
+        "--file",
+        fullPath,
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      const progressTimer = setInterval(() => {
+        if (firmwareState.progress < 90 && firmwareState.busy) firmwareState.progress += 5;
+      }, 500);
+
+      py.on("close", () => {
+        clearInterval(progressTimer);
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) {
+            firmwareState.busy = false;
+            firmwareState.progress = 100;
+            firmwareState.status = "completed";
+            firmwareState.message = parsed?.message || "Firmware uploaded";
+            return;
+          }
+          firmwareState.busy = false;
+          firmwareState.status = "failed";
+          firmwareState.message = parsed?.error || err || "Firmware upload failed";
+          firmwareState.progress = 0;
+        } catch {
+          firmwareState.busy = false;
+          firmwareState.status = "failed";
+          firmwareState.message = err || "Firmware upload failed";
+          firmwareState.progress = 0;
+        }
+      });
+
+      res.json({ success: true, started: true });
+    } catch (error: any) {
+      firmwareState.busy = false;
+      firmwareState.status = "failed";
+      firmwareState.message = error?.message || "Firmware upload failed";
+      firmwareState.progress = 0;
+      res.status(500).json({ success: false, error: firmwareState.message });
+    }
+  });
+
+  app.post("/api/firmware/recover-bootloader", async (req, res) => {
+    try {
+      if (firmwareState.busy) return res.status(409).json({ success: false, error: "Firmware operation already running" });
+      const connectionString = String(req.body?.connectionString || "").trim();
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+
+      firmwareState.busy = true;
+      firmwareState.progress = 10;
+      firmwareState.status = "running";
+      firmwareState.message = "Bootloader recovery started";
+      firmwareState.lastRunAt = new Date().toISOString();
+
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_firmware.py"),
+        "recover",
+        "--connection",
+        connectionString,
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) {
+            firmwareState.busy = false;
+            firmwareState.progress = 100;
+            firmwareState.status = "completed";
+            firmwareState.message = parsed?.message || "Bootloader recovery completed";
+            return;
+          }
+          firmwareState.busy = false;
+          firmwareState.progress = 0;
+          firmwareState.status = "failed";
+          firmwareState.message = parsed?.error || err || "Bootloader recovery failed";
+        } catch {
+          firmwareState.busy = false;
+          firmwareState.progress = 0;
+          firmwareState.status = "failed";
+          firmwareState.message = err || "Bootloader recovery failed";
+        }
+      });
+      res.json({ success: true, started: true });
+    } catch (error: any) {
+      firmwareState.busy = false;
+      firmwareState.progress = 0;
+      firmwareState.status = "failed";
+      firmwareState.message = error?.message || "Bootloader recovery failed";
+      res.status(500).json({ success: false, error: firmwareState.message });
+    }
+  });
+
+  app.get("/api/mavlink/dataflash/list", async (req, res) => {
+    try {
+      const connectionString = String(req.query.connectionString || "").trim();
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      const py = spawn(PYTHON_EXEC, [path.join(SCRIPTS_DIR, "mavlink_dataflash.py"), "list", "--connection", connectionString, "--timeout", "10"]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) return res.json(parsed);
+          return res.status(500).json({ success: false, error: parsed?.error || err || "Failed to list DataFlash logs" });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid DataFlash list response" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to list DataFlash logs" });
+    }
+  });
+
+  app.post("/api/mavlink/dataflash/download", async (req, res) => {
+    try {
+      const connectionString = String(req.body?.connectionString || "").trim();
+      const logId = Number(req.body?.logId);
+      if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
+      if (!Number.isFinite(logId)) return res.status(400).json({ success: false, error: "logId is required" });
+      const logsDir = path.resolve(process.cwd(), "data", "dataflash");
+      mkdirSync(logsDir, { recursive: true });
+      const outPath = path.join(logsDir, `log-${logId}-${Date.now()}.bin`);
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_dataflash.py"),
+        "download",
+        "--connection",
+        connectionString,
+        "--log-id",
+        String(logId),
+        "--output",
+        outPath,
+        "--timeout",
+        "12",
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (!parsed?.success) return res.status(500).json({ success: false, error: parsed?.error || err || "DataFlash download failed" });
+          const name = path.basename(parsed.output || outPath);
+          return res.json({ success: true, logId, size: parsed.size, file: name, filePath: outPath, downloadUrl: `/api/mavlink/dataflash/file/${name}` });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid DataFlash download response" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "DataFlash download failed" });
+    }
+  });
+
+  app.get("/api/mavlink/dataflash/file/:name", async (req, res) => {
+    try {
+      const safeName = path.basename(String(req.params.name || ""));
+      const filePath = path.resolve(process.cwd(), "data", "dataflash", safeName);
+      if (!existsSync(filePath)) return res.status(404).json({ success: false, error: "File not found" });
+      res.download(filePath);
+    } catch {
+      res.status(500).json({ success: false, error: "Failed to download file" });
+    }
+  });
+
+  app.post("/api/mavlink/dataflash/analyze", async (req, res) => {
+    try {
+      const filePath = String(req.body?.filePath || "").trim();
+      if (!filePath) return res.status(400).json({ success: false, error: "filePath is required" });
+      const py = spawn(PYTHON_EXEC, [path.join(SCRIPTS_DIR, "mavlink_dataflash.py"), "analyze", "--file", filePath]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (parsed?.success) return res.json(parsed);
+          return res.status(500).json({ success: false, error: parsed?.error || err || "DataFlash analysis failed" });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid DataFlash analysis response" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "DataFlash analysis failed" });
+    }
+  });
+
+  app.post("/api/mavlink/dataflash/replay", async (req, res) => {
+    try {
+      const filePath = String(req.body?.filePath || "").trim();
+      if (!filePath) return res.status(400).json({ success: false, error: "filePath is required" });
+      const py = spawn(PYTHON_EXEC, [path.join(SCRIPTS_DIR, "mavlink_dataflash.py"), "analyze", "--file", filePath]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (!parsed?.success) return res.status(500).json({ success: false, error: parsed?.error || err || "Replay parse failed" });
+          const analysis = parsed.analysis || {};
+          const gpsTrack = Array.isArray(analysis.gpsTrack) ? analysis.gpsTrack : [];
+          const keyframes = gpsTrack
+            .map((p: any, i: number) => ({
+              i: i + 1,
+              lat: Number(p.lat),
+              lng: Number(p.lng),
+              alt: Number.isFinite(Number(p.alt)) ? Number(p.alt) : null,
+              t: Number.isFinite(Number(p.t)) ? Number(p.t) : null,
+            }))
+            .filter((p: any) => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+          const geojson = {
+            type: "FeatureCollection",
+            features: [
+              {
+                type: "Feature",
+                geometry: {
+                  type: "LineString",
+                  coordinates: keyframes.map((k: any) => [k.lng, k.lat, Number.isFinite(k.alt) ? k.alt : 0]),
+                },
+                properties: {
+                  file: analysis.file,
+                  pointCount: keyframes.length,
+                  durationSecApprox: analysis.durationSecApprox ?? null,
+                },
+              },
+            ],
+          };
+          return res.json({ success: true, replay: { keyframes, geojson, summary: { file: analysis.file, pointCount: keyframes.length, durationSecApprox: analysis.durationSecApprox ?? null } } });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid replay response" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "DataFlash replay failed" });
+    }
+  });
+
+  app.post("/api/mavlink/geotag/run", async (req, res) => {
+    try {
+      const imagesDir = String(req.body?.imagesDir || "").trim();
+      const logFile = String(req.body?.logFile || "").trim();
+      const writeExif = Boolean(req.body?.writeExif);
+      const matchModeRaw = String(req.body?.matchMode || "proportional").trim().toLowerCase();
+      const matchMode = matchModeRaw === "time_offset" ? "time_offset" : "proportional";
+      const timeOffsetSec = Number(req.body?.timeOffsetSec || 0);
+      if (!imagesDir || !logFile) {
+        return res.status(400).json({ success: false, error: "imagesDir and logFile are required" });
+      }
+      const outDir = path.resolve(process.cwd(), "data", "geotag");
+      mkdirSync(outDir, { recursive: true });
+      const outJson = path.join(outDir, `geotag-${Date.now()}.json`);
+
+      const py = spawn(PYTHON_EXEC, [
+        path.join(SCRIPTS_DIR, "mavlink_geotag.py"),
+        "--images-dir",
+        imagesDir,
+        "--log-file",
+        logFile,
+        "--out-json",
+        outJson,
+        "--match-mode",
+        matchMode,
+        "--time-offset-sec",
+        String(Number.isFinite(timeOffsetSec) ? timeOffsetSec : 0),
+        ...(writeExif ? ["--write-exif"] : []),
+      ]);
+      let out = "";
+      let err = "";
+      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      py.on("close", () => {
+        try {
+          const parsed = JSON.parse((out || "").trim() || "{}");
+          if (!parsed?.success) {
+            return res.status(500).json({ success: false, error: parsed?.error || err || "Geotagging failed" });
+          }
+          return res.json({ success: true, report: parsed, reportPath: outJson });
+        } catch {
+          return res.status(500).json({ success: false, error: err || "Invalid geotag response" });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Geotagging failed" });
+    }
+  });
+
+  app.get("/api/plugins", async (_req, res) => {
+    try {
+      mkdirSync(PLUGINS_DIR, { recursive: true });
+      const entries = await readdir(PLUGINS_DIR, { withFileTypes: true });
+      const state = await readPluginState();
+      const plugins: any[] = [];
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const id = entry.name;
+        const manifestPath = path.join(PLUGINS_DIR, id, "plugin.json");
+        if (!existsSync(manifestPath)) continue;
+        try {
+          const raw = await readFile(manifestPath, "utf-8");
+          const manifest = JSON.parse(raw);
+          plugins.push({
+            id,
+            name: String(manifest?.name || id),
+            version: String(manifest?.version || "0.0.0"),
+            description: String(manifest?.description || ""),
+            tools: Array.isArray(manifest?.tools) ? manifest.tools : [],
+            enabled: state[id]?.enabled !== false,
+          });
+        } catch {
+          plugins.push({ id, name: id, version: "0.0.0", description: "Invalid plugin manifest", tools: [], enabled: false });
+        }
+      }
+      res.json({ success: true, plugins });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to load plugins" });
+    }
+  });
+
+  app.post("/api/plugins/:id/enable", async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      const enabled = req.body?.enabled !== false;
+      const state = await readPluginState();
+      state[id] = { enabled };
+      await writePluginState(state);
+      res.json({ success: true, id, enabled });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to update plugin state" });
+    }
+  });
+
+  app.post("/api/plugins/:id/run-tool", async (req, res) => {
+    try {
+      const id = String(req.params.id || "").trim();
+      const toolId = String(req.body?.toolId || "").trim();
+      const argsRaw = String(req.body?.args || "").trim();
+      const state = await readPluginState();
+      if (state[id] && state[id].enabled === false) {
+        return res.status(403).json({ success: false, error: "Plugin is disabled" });
+      }
+
+      const manifestPath = path.join(PLUGINS_DIR, id, "plugin.json");
+      if (!existsSync(manifestPath)) return res.status(404).json({ success: false, error: "Plugin not found" });
+      const raw = await readFile(manifestPath, "utf-8");
+      const manifest = JSON.parse(raw);
+      const tools = Array.isArray(manifest?.tools) ? manifest.tools : [];
+      const tool = tools.find((t: any) => String(t?.id || "") === toolId);
+      if (!tool || !String(tool.command || "").trim()) {
+        return res.status(404).json({ success: false, error: "Tool not found in plugin manifest" });
+      }
+
+      // Command comes from local plugin manifest; args are appended as plain text.
+      const cmd = `${String(tool.command).trim()}${argsRaw ? ` ${argsRaw}` : ""}`;
+      const proc = spawn("/bin/zsh", ["-lc", cmd], { cwd: process.cwd(), env: process.env });
+      let out = "";
+      let err = "";
+      proc.stdout.on("data", (d: Buffer) => (out += d.toString()));
+      proc.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      proc.on("close", (code) => {
+        res.json({
+          success: code === 0,
+          pluginId: id,
+          toolId,
+          code,
+          stdout: out.slice(0, 12000),
+          stderr: err.slice(0, 12000),
+        });
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to run plugin tool" });
+    }
+  });
+
+  app.post("/api/plugins/sdk/create-template", async (req, res) => {
+    try {
+      const id = String(req.body?.id || "").trim().toLowerCase();
+      const name = String(req.body?.name || "").trim();
+      if (!id || !/^[a-z0-9_-]+$/.test(id)) {
+        return res.status(400).json({ success: false, error: "id is required (a-z0-9_-)" });
+      }
+      const pluginDir = path.join(PLUGINS_DIR, id);
+      const toolsDir = path.join(pluginDir, "tools");
+      if (existsSync(pluginDir)) return res.status(409).json({ success: false, error: "plugin id already exists" });
+      mkdirSync(toolsDir, { recursive: true });
+      const manifest = {
+        name: name || id,
+        version: "0.1.0",
+        description: "Starter plugin scaffold",
+        tools: [
+          {
+            id: "hello",
+            name: "Hello Tool",
+            command: `bash plugins/${id}/tools/hello.sh`,
+          },
+        ],
+      };
+      await writeFile(path.join(pluginDir, "plugin.json"), JSON.stringify(manifest, null, 2), "utf-8");
+      await writeFile(
+        path.join(pluginDir, "README.md"),
+        `# ${name || id}\n\nStarter plugin scaffold.\n\n- Edit \`plugin.json\` to define tools.\n- Add scripts under \`tools/\`.\n`,
+        "utf-8",
+      );
+      await writeFile(
+        path.join(toolsDir, "hello.sh"),
+        "#!/bin/bash\nset -euo pipefail\necho \"Hello from plugin template\"\n",
+        "utf-8",
+      );
+      try {
+        const proc = spawn("/bin/zsh", ["-lc", `chmod +x ${path.join(toolsDir, "hello.sh")}`], { cwd: process.cwd(), env: process.env });
+        proc.on("close", () => {});
+      } catch {
+        // best effort
+      }
+      res.json({ success: true, id, pluginDir });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to create plugin template" });
+    }
+  });
+
+  app.post("/api/plugins/sdk/validate", async (req, res) => {
+    try {
+      const id = String(req.body?.id || "").trim();
+      if (!id) return res.status(400).json({ success: false, error: "id is required" });
+      const pluginDir = path.join(PLUGINS_DIR, id);
+      const manifestPath = path.join(pluginDir, "plugin.json");
+      if (!existsSync(manifestPath)) return res.status(404).json({ success: false, error: "plugin manifest not found" });
+      const raw = await readFile(manifestPath, "utf-8");
+      const manifest = JSON.parse(raw);
+      const errors: string[] = [];
+      const warnings: string[] = [];
+      if (!String(manifest?.name || "").trim()) errors.push("name is required");
+      if (!String(manifest?.version || "").trim()) errors.push("version is required");
+      const tools = Array.isArray(manifest?.tools) ? manifest.tools : [];
+      if (!tools.length) warnings.push("no tools defined");
+      for (const tool of tools) {
+        const tid = String(tool?.id || "").trim();
+        const cmd = String(tool?.command || "").trim();
+        if (!tid) errors.push("tool id missing");
+        if (!cmd) errors.push(`tool ${tid || "<unknown>"} missing command`);
+      }
+      res.json({ success: errors.length === 0, id, errors, warnings, toolCount: tools.length });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Plugin validation failed" });
+    }
+  });
+
+  app.post("/api/plugins/sdk/package", async (req, res) => {
+    try {
+      const id = String(req.body?.id || "").trim();
+      if (!id) return res.status(400).json({ success: false, error: "id is required" });
+      const pluginDir = path.join(PLUGINS_DIR, id);
+      if (!existsSync(pluginDir)) return res.status(404).json({ success: false, error: "plugin not found" });
+      const outDir = path.resolve(process.cwd(), "data", "plugins");
+      mkdirSync(outDir, { recursive: true });
+      const archivePath = path.join(outDir, `${id}-${Date.now()}.tar.gz`);
+      const proc = spawn("/bin/zsh", ["-lc", `tar -czf "${archivePath}" -C "${PLUGINS_DIR}" "${id}"`], {
+        cwd: process.cwd(),
+        env: process.env,
+      });
+      let err = "";
+      proc.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      proc.on("close", (code) => {
+        if (code !== 0 || !existsSync(archivePath)) {
+          return res.status(500).json({ success: false, error: err || "Failed to package plugin" });
+        }
+        return res.json({ success: true, id, archivePath });
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Plugin packaging failed" });
     }
   });
 
@@ -2191,6 +4887,23 @@ export async function registerRoutes(
       res.json(session);
     } catch (error) {
       res.status(500).json({ error: "Failed to get session" });
+    }
+  });
+
+  app.patch("/api/flight-sessions/:id", async (req, res) => {
+    try {
+      const updates = insertFlightSessionSchema.partial().parse(req.body ?? {});
+      const session = await storage.updateFlightSession(req.params.id, updates);
+      if (!session) {
+        return res.status(404).json({ error: "Session not found" });
+      }
+      broadcast("flight_session_updated", session);
+      res.json(session);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        return res.status(400).json({ error: fromError(error).message });
+      }
+      res.status(500).json({ error: "Failed to update session" });
     }
   });
 

@@ -17,6 +17,7 @@ import {
   Plane, 
   AlertTriangle,
   Video,
+  HardDrive,
   Box,
   RefreshCw,
   Trash2,
@@ -148,6 +149,26 @@ export function FlightLogsPanel() {
   const [dataViewDialog, setDataViewDialog] = useState<DataViewType>(null);
   const [videoDialog, setVideoDialog] = useState(false);
   const [mapDialog, setMapDialog] = useState(false);
+  const [fcConnectionString, setFcConnectionString] = useState(() => {
+    const saved = localStorage.getItem("mouse_selected_drone");
+    try {
+      const parsed = saved ? JSON.parse(saved) : null;
+      return parsed?.connectionString || "serial:/dev/ttyACM0:57600";
+    } catch {
+      return "serial:/dev/ttyACM0:57600";
+    }
+  });
+  const [dataflashBusy, setDataflashBusy] = useState(false);
+  const [dataflashLogs, setDataflashLogs] = useState<Array<{ id: number; size: number; timeUtc: number }>>([]);
+  const [selectedDataflashFile, setSelectedDataflashFile] = useState<string | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<any | null>(null);
+  const [replayResult, setReplayResult] = useState<any | null>(null);
+  const [geotagImagesDir, setGeotagImagesDir] = useState("");
+  const [geotagLogFile, setGeotagLogFile] = useState("");
+  const [geotagMatchMode, setGeotagMatchMode] = useState<"proportional" | "time_offset">("proportional");
+  const [geotagTimeOffsetSec, setGeotagTimeOffsetSec] = useState("0");
+  const [geotagBusy, setGeotagBusy] = useState(false);
+  const [geotagReport, setGeotagReport] = useState<any | null>(null);
   const noFlyZones = useNoFlyZones();
 
   const { data: flightSessions = [], isLoading: sessionsLoading, refetch: refetchSessions } = useQuery<FlightSession[]>({
@@ -247,6 +268,128 @@ export function FlightLogsPanel() {
       gpsSatellites: log.gpsSatellites || 0,
     }));
   }, [sessionLogs]);
+
+  const loadDataflashLogs = async () => {
+    setDataflashBusy(true);
+    try {
+      const res = await fetch(`/api/mavlink/dataflash/list?connectionString=${encodeURIComponent(fcConnectionString)}`);
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to list DataFlash logs");
+      const logs = Array.isArray(data.logs) ? data.logs.map((x: any) => ({ id: Number(x.id), size: Number(x.size), timeUtc: Number(x.timeUtc || 0) })) : [];
+      setDataflashLogs(logs);
+      toast.success(`Found ${logs.length} DataFlash logs`);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to list DataFlash logs");
+    } finally {
+      setDataflashBusy(false);
+    }
+  };
+
+  const downloadDataflashLog = async (logId: number) => {
+    setDataflashBusy(true);
+    try {
+      const res = await fetch("/api/mavlink/dataflash/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ connectionString: fcConnectionString, logId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to download DataFlash log");
+      setSelectedDataflashFile(data.filePath || null);
+      setAnalysisResult(null);
+      if (data.downloadUrl) {
+        const a = document.createElement("a");
+        a.href = data.downloadUrl;
+        a.download = data.file || `log-${logId}.bin`;
+        a.click();
+      }
+      toast.success(`Downloaded DataFlash log ${logId}`);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to download DataFlash log");
+    } finally {
+      setDataflashBusy(false);
+    }
+  };
+
+  const analyzeDataflashLog = async () => {
+    if (!selectedDataflashFile) {
+      toast.error("Download a DataFlash file first");
+      return;
+    }
+    setDataflashBusy(true);
+    try {
+      const res = await fetch("/api/mavlink/dataflash/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filePath: selectedDataflashFile }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to analyze log");
+      setAnalysisResult(data.analysis || null);
+      toast.success("DataFlash analysis complete");
+    } catch (e: any) {
+      toast.error(e.message || "Failed to analyze DataFlash log");
+    } finally {
+      setDataflashBusy(false);
+    }
+  };
+
+  const loadDataflashReplay = async () => {
+    if (!selectedDataflashFile) {
+      toast.error("Select a downloaded DataFlash log first");
+      return;
+    }
+    setDataflashBusy(true);
+    try {
+      const res = await fetch("/api/mavlink/dataflash/replay", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filePath: selectedDataflashFile }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to build replay");
+      setReplayResult(data.replay || null);
+      toast.success("DataFlash replay generated");
+    } catch (e: any) {
+      toast.error(e.message || "Failed to build replay");
+    } finally {
+      setDataflashBusy(false);
+    }
+  };
+
+  const runGeotagPipeline = async (writeExif: boolean) => {
+    if (!geotagImagesDir.trim()) {
+      toast.error("Images directory is required");
+      return;
+    }
+    const logFile = geotagLogFile.trim() || selectedDataflashFile || "";
+    if (!logFile) {
+      toast.error("DataFlash log file is required");
+      return;
+    }
+    setGeotagBusy(true);
+    try {
+      const res = await fetch("/api/mavlink/geotag/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          imagesDir: geotagImagesDir.trim(),
+          logFile,
+          writeExif,
+          matchMode: geotagMatchMode,
+          timeOffsetSec: Number(geotagTimeOffsetSec || 0),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Geotag pipeline failed");
+      setGeotagReport(data.report || null);
+      toast.success(writeExif ? "Geotag + EXIF write complete" : "Geotag analysis complete");
+    } catch (e: any) {
+      toast.error(e.message || "Geotag pipeline failed");
+    } finally {
+      setGeotagBusy(false);
+    }
+  };
 
   const flightPath = useMemo(() => {
     return sessionLogs
@@ -1070,6 +1213,122 @@ export function FlightLogsPanel() {
                         <ExternalLink className="h-4 w-4 ml-auto" />
                       </a>
                     </Button>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="p-4">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <HardDrive className="h-4 w-4" />
+                    DataFlash (.BIN) Tools
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-4 pt-0 space-y-3">
+                  <Input
+                    value={fcConnectionString}
+                    onChange={(e) => setFcConnectionString(e.target.value)}
+                    className="h-8 text-xs font-mono"
+                    placeholder="serial:/dev/ttyACM0:57600"
+                  />
+                  <Button variant="outline" className="w-full justify-start" onClick={loadDataflashLogs} disabled={dataflashBusy}>
+                    <RefreshCw className={`h-4 w-4 mr-2 ${dataflashBusy ? "animate-spin" : ""}`} />
+                    List DataFlash Logs from FC
+                  </Button>
+                  <div className="max-h-36 overflow-auto border rounded">
+                    {dataflashLogs.length === 0 ? (
+                      <p className="text-xs text-muted-foreground p-2">No logs loaded</p>
+                    ) : (
+                      dataflashLogs.map((l) => (
+                        <button
+                          key={l.id}
+                          onClick={() => downloadDataflashLog(l.id)}
+                          className="w-full text-left p-2 text-xs hover:bg-accent border-b last:border-b-0"
+                        >
+                          LOG #{l.id} - {(l.size / (1024 * 1024)).toFixed(2)} MB
+                        </button>
+                      ))
+                    )}
+                  </div>
+                  <Button variant="secondary" className="w-full justify-start" onClick={analyzeDataflashLog} disabled={dataflashBusy || !selectedDataflashFile}>
+                    <Activity className="h-4 w-4 mr-2" />
+                    Analyze Downloaded BIN
+                  </Button>
+                  <Button variant="outline" className="w-full justify-start" onClick={loadDataflashReplay} disabled={dataflashBusy || !selectedDataflashFile}>
+                    <MapPin className="h-4 w-4 mr-2" />
+                    Build Replay Track
+                  </Button>
+                  {analysisResult && (
+                    <div className="text-xs rounded border p-2 bg-muted/30 space-y-1">
+                      <p>File: {analysisResult.file}</p>
+                      <p>Size: {analysisResult.sizeMB} MB</p>
+                      {analysisResult.durationSecApprox != null && <p>Duration (approx): {analysisResult.durationSecApprox}s</p>}
+                      {analysisResult.messageCountSampled != null && <p>Messages sampled: {analysisResult.messageCountSampled}</p>}
+                    </div>
+                  )}
+                  {replayResult && (
+                    <div className="text-xs rounded border p-2 bg-muted/30 space-y-1">
+                      <p>Replay points: {replayResult.summary?.pointCount ?? 0}</p>
+                      <p>Duration (approx): {replayResult.summary?.durationSecApprox ?? "n/a"}s</p>
+                      <pre className="max-h-28 overflow-auto">{JSON.stringify(replayResult.keyframes?.slice(0, 10) || [], null, 2)}</pre>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader className="p-4">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Navigation className="h-4 w-4" />
+                    Camera Geotag Pipeline
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-4 pt-0 space-y-3">
+                  <Input
+                    value={geotagImagesDir}
+                    onChange={(e) => setGeotagImagesDir(e.target.value)}
+                    className="h-8 text-xs font-mono"
+                    placeholder="/path/to/images"
+                  />
+                  <Input
+                    value={geotagLogFile}
+                    onChange={(e) => setGeotagLogFile(e.target.value)}
+                    className="h-8 text-xs font-mono"
+                    placeholder={selectedDataflashFile || "/path/to/log.bin (optional if downloaded above)"}
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <Select value={geotagMatchMode} onValueChange={(v) => setGeotagMatchMode(v as "proportional" | "time_offset")}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="proportional">Proportional</SelectItem>
+                        <SelectItem value="time_offset">Time Offset</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Input
+                      value={geotagTimeOffsetSec}
+                      onChange={(e) => setGeotagTimeOffsetSec(e.target.value)}
+                      className="h-8 text-xs"
+                      placeholder="offset sec"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button variant="outline" className="w-full justify-start" onClick={() => runGeotagPipeline(false)} disabled={geotagBusy}>
+                      Analyze Geotag Match
+                    </Button>
+                    <Button variant="secondary" className="w-full justify-start" onClick={() => runGeotagPipeline(true)} disabled={geotagBusy}>
+                      Write EXIF GPS
+                    </Button>
+                  </div>
+                  {geotagReport && (
+                    <div className="text-xs rounded border p-2 bg-muted/30 space-y-1">
+                      <p>Source: {geotagReport.source}</p>
+                      <p>Match: {geotagReport.matchMode || "proportional"}</p>
+                      <p>Images: {geotagReport.imageCount}</p>
+                      <p>Geotagged: {geotagReport.geotaggedCount}</p>
+                      <p>EXIF written: {geotagReport.exifWrittenCount}</p>
+                    </div>
                   )}
                 </CardContent>
               </Card>

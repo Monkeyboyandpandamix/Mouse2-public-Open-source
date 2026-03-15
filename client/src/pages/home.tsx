@@ -22,6 +22,15 @@ import { GeofencingPanel } from "@/components/panels/GeofencingPanel";
 import { GUIConfigPanel } from "@/components/panels/GUIConfigPanel";
 import { DroneSelectionPanel } from "@/components/panels/DroneSelectionPanel";
 import { FlightPathOptimizerPanel } from "@/components/panels/FlightPathOptimizerPanel";
+import { FlightControllerParamsPanel } from "@/components/panels/FlightControllerParamsPanel";
+import { CalibrationPanel } from "@/components/panels/CalibrationPanel";
+import { FlightModeMappingPanel } from "@/components/panels/FlightModeMappingPanel";
+import { MavlinkToolsPanel } from "@/components/panels/MavlinkToolsPanel";
+import { RtkNtripPanel } from "@/components/panels/RtkNtripPanel";
+import { VehicleSetupPanel } from "@/components/panels/VehicleSetupPanel";
+import { SwarmOpsPanel } from "@/components/panels/SwarmOpsPanel";
+import { PluginToolchainPanel } from "@/components/panels/PluginToolchainPanel";
+import { MissionPlannerParityPanel } from "@/components/panels/MissionPlannerParityPanel";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, X, Eye, ArrowLeft, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -124,6 +133,15 @@ export default function Home() {
       window.removeEventListener('drone-selected' as any, handleDroneChange);
       window.removeEventListener('show-drone-selection' as any, handleShowDroneSelection);
     };
+  }, []);
+
+  useEffect(() => {
+    const handleNavigateTab = (e: CustomEvent<{ tabId?: string }>) => {
+      const next = String(e.detail?.tabId || "").trim();
+      if (next) setActiveTab(next);
+    };
+    window.addEventListener("navigate-tab" as any, handleNavigateTab);
+    return () => window.removeEventListener("navigate-tab" as any, handleNavigateTab);
   }, []);
 
   // Listen for real system errors from MAVLink/sensors
@@ -447,6 +465,60 @@ export default function Home() {
         return (
           <div className="flex-1 relative overflow-hidden">
             <TerminalCommandsPanel />
+          </div>
+        );
+      case "fcparams":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <FlightControllerParamsPanel />
+          </div>
+        );
+      case "modesetup":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <FlightModeMappingPanel />
+          </div>
+        );
+      case "calibration":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <CalibrationPanel />
+          </div>
+        );
+      case "mavtools":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <MavlinkToolsPanel />
+          </div>
+        );
+      case "rtk":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <RtkNtripPanel />
+          </div>
+        );
+      case "vehiclesetup":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <VehicleSetupPanel />
+          </div>
+        );
+      case "swarm":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <SwarmOpsPanel />
+          </div>
+        );
+      case "plugins":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <PluginToolchainPanel />
+          </div>
+        );
+      case "mp-parity":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <MissionPlannerParityPanel />
           </div>
         );
       case "users":

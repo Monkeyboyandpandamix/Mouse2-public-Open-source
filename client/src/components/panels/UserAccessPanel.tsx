@@ -221,6 +221,7 @@ export function UserAccessPanel() {
   useEffect(() => {
     localStorage.setItem('mouse_gcs_session', JSON.stringify(session));
     window.dispatchEvent(new CustomEvent('session-change', { detail: session }));
+    window.dispatchEvent(new CustomEvent('session-updated', { detail: session }));
   }, [session]);
 
   // Cross-tab synchronization via storage event
@@ -328,6 +329,7 @@ export function UserAccessPanel() {
     localStorage.removeItem('mouse_gcs_session');
     localStorage.removeItem('mouse_gcs_session_token');
     window.dispatchEvent(new CustomEvent('session-change', { detail: { user: null, isLoggedIn: false } }));
+    window.dispatchEvent(new CustomEvent('session-updated', { detail: { user: null, isLoggedIn: false } }));
     toast.info("Logged out successfully");
   };
 

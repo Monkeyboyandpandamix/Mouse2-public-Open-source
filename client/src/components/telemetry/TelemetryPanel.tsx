@@ -25,6 +25,29 @@ interface SensorHealth {
   compassStatus: string;
 }
 
+interface MissionExecuteWaypoint {
+  id?: number;
+  order?: number;
+  lat: number;
+  lng: number;
+}
+
+interface StabilizerStatus {
+  armed: boolean;
+  payloadShiftEstimate: number;
+  disturbanceCompensation: number;
+  holdAltitude: number;
+  altitudeError: number;
+  adaptiveScale: number;
+}
+
+interface AutomationScriptRun {
+  id?: string;
+  name?: string;
+  trigger?: string;
+  reason?: string;
+}
+
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
 export function TelemetryPanel() {
@@ -46,6 +69,13 @@ export function TelemetryPanel() {
     imuStatus: "NO DATA",
     compassStatus: "NO DATA",
   });
+  const [stabilizerStatus, setStabilizerStatus] = useState<StabilizerStatus | null>(null);
+  const [lastAutomationRun, setLastAutomationRun] = useState<{
+    name: string;
+    reason: string;
+    trigger: string;
+    at: number;
+  } | null>(null);
   
   // Flight state
   const [altitude, setAltitude] = useState(0);
@@ -73,10 +103,42 @@ export function TelemetryPanel() {
       );
     }
   }, []);
+
+  useEffect(() => {
+    const handleStabilizerStatus = (e: CustomEvent<StabilizerStatus>) => {
+      const d = e.detail;
+      if (!d) return;
+      setStabilizerStatus({
+        armed: Boolean(d.armed),
+        payloadShiftEstimate: Number(d.payloadShiftEstimate) || 0,
+        disturbanceCompensation: Number(d.disturbanceCompensation) || 0,
+        holdAltitude: Number(d.holdAltitude) || 0,
+        altitudeError: Number(d.altitudeError) || 0,
+        adaptiveScale: Number(d.adaptiveScale) || 1,
+      });
+    };
+    const handleAutomationRun = (e: CustomEvent<AutomationScriptRun>) => {
+      const d = e.detail || {};
+      setLastAutomationRun({
+        name: d.name || "Unnamed script",
+        reason: d.reason || "Manual run",
+        trigger: d.trigger || "manual",
+        at: Date.now(),
+      });
+    };
+    window.addEventListener("stabilizer-status" as any, handleStabilizerStatus);
+    window.addEventListener("automation-script-run" as any, handleAutomationRun);
+    return () => {
+      window.removeEventListener("stabilizer-status" as any, handleStabilizerStatus);
+      window.removeEventListener("automation-script-run" as any, handleAutomationRun);
+    };
+  }, []);
   const [distToHome, setDistToHome] = useState(0);
   const lastExternalTelemetryTsRef = useRef(0);
   const batteryPercentRef = useRef(100);
   const [guidedTarget, setGuidedTarget] = useState<{ lat: number; lng: number } | null>(null);
+  const missionQueueRef = useRef<MissionExecuteWaypoint[]>([]);
+  const activeMissionWaypointRef = useRef<MissionExecuteWaypoint | null>(null);
   
   // Use refs to avoid stale closures
   const positionRef = useRef(position);
@@ -127,8 +189,8 @@ export function TelemetryPanel() {
         setBatteryCurrent(0);
       }
     };
-    const handleFlightCommand = (e: CustomEvent<{ command: string; target?: any; corrections?: any }>) => {
-      const { command, target, corrections } = e.detail;
+    const handleFlightCommand = (e: CustomEvent<{ command: string; target?: any; corrections?: any; waypoint?: any }>) => {
+      const { command, target, corrections, waypoint } = e.detail;
       switch (command) {
         case 'takeoff':
           setFlightMode('takeoff');
@@ -155,6 +217,7 @@ export function TelemetryPanel() {
           if (target && typeof target.lat === 'number' && typeof target.lng === 'number') {
             setGuidedTarget({ lat: target.lat, lng: target.lng });
             setFlightMode('rtl');
+            activeMissionWaypointRef.current = waypoint || activeMissionWaypointRef.current;
           }
           break;
         case 'stabilize_adjust':
@@ -174,13 +237,79 @@ export function TelemetryPanel() {
           break;
       }
     };
+    const dispatchNextMissionWaypoint = () => {
+      const next = missionQueueRef.current.shift();
+      if (!next) {
+        activeMissionWaypointRef.current = null;
+        return;
+      }
+      activeMissionWaypointRef.current = next;
+      window.dispatchEvent(
+        new CustomEvent("flight-command", {
+          detail: {
+            command: "guided-waypoint",
+            target: { lat: next.lat, lng: next.lng },
+            source: "mission_execute",
+            waypoint: next,
+          },
+        }),
+      );
+    };
+    const handleMissionExecute = (
+      e: CustomEvent<{ missionName?: string; waypoints?: MissionExecuteWaypoint[] }>,
+    ) => {
+      const waypoints = Array.isArray(e.detail?.waypoints)
+        ? e.detail.waypoints
+            .map((w) => ({
+              id: w.id,
+              order: w.order,
+              lat: Number(w.lat),
+              lng: Number(w.lng),
+            }))
+            .filter((w) => Number.isFinite(w.lat) && Number.isFinite(w.lng))
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+        : [];
+      missionQueueRef.current = waypoints;
+      dispatchNextMissionWaypoint();
+    };
+    const handleSensorUpdate = (e: CustomEvent<any>) => {
+      const d = e.detail || {};
+      setSensorHealth((prev) => ({
+        ...prev,
+        lidarRange: typeof d.lidarRange === "number" ? d.lidarRange : prev.lidarRange,
+        cpuTemp: typeof d.cpuTemp === "number" ? d.cpuTemp : prev.cpuTemp,
+        escTemp: typeof d.escTemp === "number" ? d.escTemp : prev.escTemp,
+        vibration: typeof d.vibration === "number" ? d.vibration : prev.vibration,
+        barometer: typeof d.barometer === "number" ? d.barometer : prev.barometer,
+        imuStatus: typeof d.imuStatus === "string" ? d.imuStatus : prev.imuStatus,
+        compassStatus: typeof d.compassStatus === "string" ? d.compassStatus : prev.compassStatus,
+      }));
+    };
+    const handleMotorTelemetry = (e: CustomEvent<any>) => {
+      const list = Array.isArray(e.detail?.motors) ? e.detail.motors : Array.isArray(e.detail) ? e.detail : null;
+      if (!list) return;
+      setMotors((prev) =>
+        list.map((m: any, idx: number) => ({
+          rpm: Number.isFinite(m?.rpm) ? m.rpm : prev[idx]?.rpm ?? 0,
+          temp: Number.isFinite(m?.temp) ? m.temp : prev[idx]?.temp ?? 0,
+          current: Number.isFinite(m?.current) ? m.current : prev[idx]?.current ?? 0,
+          status: m?.status === "warning" || m?.status === "error" ? m.status : "ok",
+        })),
+      );
+    };
     window.addEventListener('motor-count-changed' as any, handleMotorCountChange);
     window.addEventListener('arm-state-changed' as any, handleArmStateChange);
     window.addEventListener('flight-command' as any, handleFlightCommand);
+    window.addEventListener('mission-execute' as any, handleMissionExecute);
+    window.addEventListener('sensor-update' as any, handleSensorUpdate);
+    window.addEventListener('motor-telemetry-update' as any, handleMotorTelemetry);
     return () => {
       window.removeEventListener('motor-count-changed' as any, handleMotorCountChange);
       window.removeEventListener('arm-state-changed' as any, handleArmStateChange);
       window.removeEventListener('flight-command' as any, handleFlightCommand);
+      window.removeEventListener('mission-execute' as any, handleMissionExecute);
+      window.removeEventListener('sensor-update' as any, handleSensorUpdate);
+      window.removeEventListener('motor-telemetry-update' as any, handleMotorTelemetry);
     };
   }, []);
 
@@ -347,6 +476,29 @@ export function TelemetryPanel() {
         const dist = Math.sqrt(dLat * dLat + dLng * dLng);
         if (dist < 0.00001) {
           setGuidedTarget(null);
+          if (activeMissionWaypointRef.current) {
+            window.dispatchEvent(
+              new CustomEvent("waypoint-reached", {
+                detail: activeMissionWaypointRef.current,
+              }),
+            );
+          }
+          const next = missionQueueRef.current.shift();
+          if (next) {
+            activeMissionWaypointRef.current = next;
+            window.dispatchEvent(
+              new CustomEvent("flight-command", {
+                detail: {
+                  command: "guided-waypoint",
+                  source: "mission_execute",
+                  target: { lat: next.lat, lng: next.lng },
+                  waypoint: next,
+                },
+              }),
+            );
+          } else {
+            activeMissionWaypointRef.current = null;
+          }
         } else {
           const step = Math.min(0.15, movementScale / Math.max(dist, 0.0000001));
           nextPosition = {
@@ -549,6 +701,38 @@ export function TelemetryPanel() {
               <div className="flex items-center justify-between">
                 <span className="text-xs text-muted-foreground uppercase">Next Waypoint</span>
                 <span className="font-mono text-muted-foreground">---</span>
+              </div>
+            </div>
+
+            <Separator />
+
+            <div className="space-y-3">
+              <span className="text-xs text-muted-foreground uppercase font-bold">Autonomy</span>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Stabilizer</span>
+                <span className={stabilizerStatus?.armed ? "font-mono text-emerald-500" : "font-mono text-muted-foreground"}>
+                  {stabilizerStatus?.armed ? "ACTIVE" : "STANDBY"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Payload Shift</span>
+                <span className="font-mono text-foreground">
+                  {stabilizerStatus ? stabilizerStatus.payloadShiftEstimate.toFixed(2) : "---"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Disturbance Comp.</span>
+                <span className="font-mono text-foreground">
+                  {stabilizerStatus ? stabilizerStatus.disturbanceCompensation.toFixed(2) : "---"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Last Script</span>
+                <span className="font-mono text-muted-foreground">
+                  {lastAutomationRun
+                    ? `${lastAutomationRun.name.slice(0, 14)} (${lastAutomationRun.trigger})`
+                    : "---"}
+                </span>
               </div>
             </div>
 

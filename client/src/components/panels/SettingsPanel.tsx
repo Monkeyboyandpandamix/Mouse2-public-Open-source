@@ -25,6 +25,16 @@ import {
   getUsbRadioPortOptions,
 } from "@/lib/platform";
 
+interface FirmwareCatalogEntry {
+  id: string;
+  name: string;
+  version: string;
+  vehicle: string;
+  fileUrl: string;
+  notes?: string;
+  updatedAt?: string;
+}
+
 // Google Account Manager Component for standalone deployments
 function GoogleAccountManager() {
   const [status, setStatus] = useState<{
@@ -267,6 +277,14 @@ export function SettingsPanel() {
   const [firmwareFile, setFirmwareFile] = useState<File | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+  const [firmwareStatusMessage, setFirmwareStatusMessage] = useState<string>("");
+  const [firmwareCatalog, setFirmwareCatalog] = useState<FirmwareCatalogEntry[]>([]);
+  const [catalogBusy, setCatalogBusy] = useState(false);
+  const [catalogName, setCatalogName] = useState("");
+  const [catalogVersion, setCatalogVersion] = useState("");
+  const [catalogVehicle, setCatalogVehicle] = useState("copter");
+  const [catalogUrl, setCatalogUrl] = useState("");
+  const [catalogNotes, setCatalogNotes] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   const [connectionSettings, setConnectionSettings] = useState({
@@ -769,6 +787,130 @@ export function SettingsPanel() {
     }
   };
 
+  const getFirmwareConnectionString = () => {
+    return connectionSettings.connectionType === "usb" || connectionSettings.connectionType === "gpio"
+      ? `serial:${connectionSettings.fcPort}:${connectionSettings.fcBaud}`
+      : `udp:${connectionSettings.droneIp}:${connectionSettings.telemetryPort}`;
+  };
+
+  const loadFirmwareCatalog = async () => {
+    setCatalogBusy(true);
+    try {
+      const res = await fetch("/api/firmware/catalog");
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to load firmware catalog");
+      setFirmwareCatalog(Array.isArray(data.entries) ? data.entries : []);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to load firmware catalog");
+    } finally {
+      setCatalogBusy(false);
+    }
+  };
+
+  const addCatalogEntry = async () => {
+    if (!catalogName.trim() || !catalogVersion.trim() || !catalogUrl.trim()) {
+      toast.error("Name, version, and URL are required");
+      return;
+    }
+    setCatalogBusy(true);
+    try {
+      const res = await fetch("/api/firmware/catalog", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: catalogName.trim(),
+          version: catalogVersion.trim(),
+          vehicle: catalogVehicle.trim() || "copter",
+          fileUrl: catalogUrl.trim(),
+          notes: catalogNotes.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to save firmware catalog entry");
+      toast.success("Firmware catalog entry saved");
+      setCatalogName("");
+      setCatalogVersion("");
+      setCatalogVehicle("copter");
+      setCatalogUrl("");
+      setCatalogNotes("");
+      await loadFirmwareCatalog();
+    } catch (e: any) {
+      toast.error(e.message || "Failed to save firmware catalog entry");
+    } finally {
+      setCatalogBusy(false);
+    }
+  };
+
+  const deleteCatalogEntry = async (id: string) => {
+    setCatalogBusy(true);
+    try {
+      const res = await fetch(`/api/firmware/catalog/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Failed to delete firmware catalog entry");
+      toast.success("Firmware catalog entry deleted");
+      await loadFirmwareCatalog();
+    } catch (e: any) {
+      toast.error(e.message || "Failed to delete firmware catalog entry");
+    } finally {
+      setCatalogBusy(false);
+    }
+  };
+
+  const installFromCatalog = async (id: string) => {
+    setIsUploading(true);
+    setUploadProgress(2);
+    setFirmwareStatusMessage("Downloading firmware from catalog...");
+    try {
+      const res = await fetch("/api/firmware/catalog/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id,
+          connectionString: getFirmwareConnectionString(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Catalog download failed");
+
+      const startRes = await fetch("/api/firmware/flash", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          connectionString: getFirmwareConnectionString(),
+          filename: data.filename,
+          fileContentBase64: data.fileContentBase64,
+        }),
+      });
+      const startData = await startRes.json();
+      if (!startRes.ok || !startData.success) throw new Error(startData.error || "Failed to start firmware upload");
+      setFirmwareStatusMessage("Firmware upload started on FC...");
+
+      const pollStart = Date.now();
+      while (Date.now() - pollStart < 15 * 60 * 1000) {
+        const stRes = await fetch("/api/firmware/status");
+        const stData = await stRes.json();
+        if (stRes.ok && stData.success) {
+          const state = stData.state;
+          setUploadProgress(Number(state.progress || 0));
+          setFirmwareStatusMessage(String(state.message || ""));
+          if (!state.busy) {
+            if (state.status === "completed") {
+              toast.success("Firmware upload complete! Orange Cube+ reboot may be required.");
+            } else {
+              throw new Error(state.message || "Firmware upload failed");
+            }
+            break;
+          }
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    } catch (e: any) {
+      toast.error(e.message || "Catalog install failed");
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
   const handleFirmwareUpload = async () => {
     if (!firmwareFile) {
       toast.error("Please select a firmware file first");
@@ -776,26 +918,82 @@ export function SettingsPanel() {
     }
 
     setIsUploading(true);
-    setUploadProgress(0);
+    setUploadProgress(2);
+    setFirmwareStatusMessage("Preparing firmware payload...");
 
-    const interval = setInterval(() => {
-      setUploadProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          return 100;
-        }
-        return prev + 10;
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = String(reader.result || "");
+          const comma = result.indexOf(",");
+          resolve(comma >= 0 ? result.slice(comma + 1) : result);
+        };
+        reader.onerror = () => reject(new Error("Failed to read firmware file"));
+        reader.readAsDataURL(firmwareFile);
       });
-    }, 500);
 
-    setTimeout(() => {
-      clearInterval(interval);
-      setUploadProgress(100);
+      const connectionString = getFirmwareConnectionString();
+
+      const startRes = await fetch("/api/firmware/flash", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          connectionString,
+          filename: firmwareFile.name,
+          fileContentBase64: base64,
+        }),
+      });
+      const startData = await startRes.json();
+      if (!startRes.ok || !startData.success) throw new Error(startData.error || "Failed to start firmware upload");
+
+      setFirmwareStatusMessage("Firmware upload started on FC...");
+      const pollStart = Date.now();
+      while (Date.now() - pollStart < 15 * 60 * 1000) {
+        const stRes = await fetch("/api/firmware/status");
+        const stData = await stRes.json();
+        if (stRes.ok && stData.success) {
+          const state = stData.state;
+          setUploadProgress(Number(state.progress || 0));
+          setFirmwareStatusMessage(String(state.message || ""));
+          if (!state.busy) {
+            if (state.status === "completed") {
+              toast.success("Firmware upload complete! Orange Cube+ reboot may be required.");
+              setFirmwareFile(null);
+            } else {
+              throw new Error(state.message || "Firmware upload failed");
+            }
+            break;
+          }
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    } catch (e: any) {
+      toast.error(e.message || "Firmware upload failed");
+    } finally {
       setIsUploading(false);
-      toast.success("Firmware upload complete! Orange Cube+ will reboot...");
-      setFirmwareFile(null);
-    }, 5000);
+    }
   };
+
+  const handleBootloaderRecover = async () => {
+    try {
+      const connectionString = getFirmwareConnectionString();
+      const res = await fetch("/api/firmware/recover-bootloader", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ connectionString }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error || "Bootloader recovery failed");
+      toast.success("Bootloader recovery started");
+    } catch (e: any) {
+      toast.error(e.message || "Bootloader recovery failed");
+    }
+  };
+
+  useEffect(() => {
+    void loadFirmwareCatalog();
+  }, []);
 
   // Show permission denied if user doesn't have access
   if (!canAccessSettings) {
@@ -3180,6 +3378,9 @@ export function SettingsPanel() {
                         <span className="font-mono">{uploadProgress}%</span>
                       </div>
                       <Progress value={uploadProgress} className="h-2" />
+                      {firmwareStatusMessage && (
+                        <p className="text-xs text-muted-foreground">{firmwareStatusMessage}</p>
+                      )}
                     </div>
                   )}
 
@@ -3214,6 +3415,10 @@ export function SettingsPanel() {
                     </div>
                   </div>
                 </div>
+                <Button variant="secondary" className="w-full" onClick={handleBootloaderRecover} disabled={isUploading}>
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                  Bootloader Recovery
+                </Button>
               </CardContent>
             </Card>
 
@@ -3235,6 +3440,54 @@ export function SettingsPanel() {
                     ArduCopter Latest (Beta)
                   </a>
                 </Button>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Firmware Catalog (Managed)</CardTitle>
+                <CardDescription>Create a reusable firmware catalog and install directly to FC.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="grid md:grid-cols-2 gap-2">
+                  <Input value={catalogName} onChange={(e) => setCatalogName(e.target.value)} placeholder="Name (e.g. ArduCopter Stable)" />
+                  <Input value={catalogVersion} onChange={(e) => setCatalogVersion(e.target.value)} placeholder="Version (e.g. 4.5.7)" />
+                  <Input value={catalogVehicle} onChange={(e) => setCatalogVehicle(e.target.value)} placeholder="Vehicle (copter/plane/rover/sub)" />
+                  <Input value={catalogUrl} onChange={(e) => setCatalogUrl(e.target.value)} placeholder="Firmware URL (.apj/.px4)" />
+                </div>
+                <Input value={catalogNotes} onChange={(e) => setCatalogNotes(e.target.value)} placeholder="Notes (optional)" />
+                <div className="flex gap-2">
+                  <Button variant="secondary" onClick={addCatalogEntry} disabled={catalogBusy || isUploading}>Add Entry</Button>
+                  <Button variant="outline" onClick={loadFirmwareCatalog} disabled={catalogBusy || isUploading}>Refresh</Button>
+                </div>
+                <ScrollArea className="h-56 rounded border">
+                  <div className="p-2 space-y-2">
+                    {firmwareCatalog.length === 0 && (
+                      <p className="text-sm text-muted-foreground">No catalog entries yet.</p>
+                    )}
+                    {firmwareCatalog.map((entry) => (
+                      <div key={entry.id} className="rounded border p-2 text-sm space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <p className="font-medium">{entry.name}</p>
+                            <p className="text-xs text-muted-foreground font-mono">{entry.version} • {entry.vehicle}</p>
+                          </div>
+                          <Badge variant="outline">{entry.id}</Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground truncate">{entry.fileUrl}</p>
+                        {entry.notes && <p className="text-xs text-muted-foreground">{entry.notes}</p>}
+                        <div className="flex gap-2">
+                          <Button size="sm" onClick={() => installFromCatalog(entry.id)} disabled={isUploading || catalogBusy}>
+                            Install to FC
+                          </Button>
+                          <Button size="sm" variant="destructive" onClick={() => deleteCatalogEntry(entry.id)} disabled={isUploading || catalogBusy}>
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
               </CardContent>
             </Card>
           </TabsContent>

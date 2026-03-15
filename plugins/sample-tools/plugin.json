@@ -1,0 +1,17 @@
+{
+  "name": "Sample Tools",
+  "version": "1.0.0",
+  "description": "Starter plugin with safe local diagnostics tools.",
+  "tools": [
+    {
+      "id": "system_health",
+      "name": "System Health",
+      "command": "bash plugins/sample-tools/tools/system_health.sh"
+    },
+    {
+      "id": "list_data_dir",
+      "name": "List Data Directory",
+      "command": "ls -lah data"
+    }
+  ]
+}

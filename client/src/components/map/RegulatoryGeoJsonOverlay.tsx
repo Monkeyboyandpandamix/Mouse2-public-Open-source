@@ -77,6 +77,14 @@ export function RegulatoryGeoJsonOverlay({
           if (layer.maxBytes) {
             const head = await fetch(layer.file, { method: "HEAD" });
             const len = Number(head.headers.get("content-length") || "0");
+            if (!Number.isFinite(len) || len <= 0) {
+              setErrors((prev) => ({
+                ...prev,
+                [layer.id]: "Layer size unknown. Loading blocked for safety.",
+              }));
+              setData((prev) => ({ ...prev, [layer.id]: null }));
+              continue;
+            }
             if (Number.isFinite(len) && len > layer.maxBytes) {
               setErrors((prev) => ({
                 ...prev,

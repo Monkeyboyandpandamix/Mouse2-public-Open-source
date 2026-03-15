@@ -22,7 +22,8 @@ import {
   Edit2,
   Trash2,
   X,
-  Check
+  Check,
+  ListChecks
 } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import {
@@ -227,10 +228,15 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           window.dispatchEvent(new CustomEvent('sensor-update', { detail: data }));
         } else if (type === 'motor_telemetry') {
           window.dispatchEvent(new CustomEvent('motor-telemetry-update', { detail: data }));
+        } else if (type === 'adsb' || type === 'adsb_update') {
+          window.dispatchEvent(new CustomEvent('adsb-update', { detail: data }));
         }
       } catch (e) {
         // Ignore parse errors
       }
+    };
+    ws.onclose = () => {
+      window.dispatchEvent(new CustomEvent('connection-lost', { detail: { source: 'websocket' } }));
     };
     
     return () => ws.close();
@@ -524,6 +530,7 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     setSession({ user: null, isLoggedIn: false });
     setSelectedDrone(null);
     window.dispatchEvent(new CustomEvent('session-change', { detail: { user: null, isLoggedIn: false } }));
+    window.dispatchEvent(new CustomEvent('session-updated', { detail: { user: null, isLoggedIn: false } }));
     toast.info("Logged out successfully");
   };
 
@@ -1019,6 +1026,17 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
             </Button>
           </div>
         )}
+
+        <Button 
+          variant="ghost" 
+          size="icon"
+          className="h-8 w-8 sm:h-9 sm:w-9"
+          onClick={() => window.dispatchEvent(new CustomEvent("navigate-tab", { detail: { tabId: "mp-parity" } }))}
+          data-testid="button-mp-parity"
+          title="Mission Planner Parity Checklist"
+        >
+          <ListChecks className="h-4 w-4 sm:h-5 sm:w-5" />
+        </Button>
 
         <Button 
           variant="ghost" 

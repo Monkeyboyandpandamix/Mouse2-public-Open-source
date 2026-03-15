@@ -3,6 +3,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import path from "path";
+import { spawn } from "child_process";
 
 const app = express();
 const httpServer = createServer(app);
@@ -22,6 +23,29 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+
+async function ensureRuntimeDependencies() {
+  const pythonExec = process.env.PYTHON_PATH ?? "/usr/bin/python3";
+  const scriptPath = path.resolve(process.cwd(), "scripts", "runtime_bootstrap.py");
+  await new Promise<void>((resolve) => {
+    const proc = spawn(pythonExec, [scriptPath], {
+      cwd: process.cwd(),
+      env: process.env,
+    });
+    let out = "";
+    let err = "";
+    proc.stdout.on("data", (d: Buffer) => (out += d.toString()));
+    proc.stderr.on("data", (d: Buffer) => (err += d.toString()));
+    proc.on("close", (code) => {
+      if (code === 0) {
+        log(`runtime deps ready: ${out.trim()}`, "bootstrap");
+      } else {
+        log(`runtime deps bootstrap warning (continuing): ${out.trim() || err.trim()}`, "bootstrap");
+      }
+      resolve();
+    });
+  });
+}
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -61,6 +85,7 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  await ensureRuntimeDependencies();
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

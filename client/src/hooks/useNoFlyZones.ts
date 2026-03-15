@@ -56,7 +56,10 @@ export function useNoFlyZones() {
     };
 
     const update = () => {
-      if (!navigator.geolocation) return;
+      if (!navigator.geolocation) {
+        void fetchLiveZones(36.0957, -79.4378);
+        return;
+      }
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           void fetchLiveZones(pos.coords.latitude, pos.coords.longitude);
