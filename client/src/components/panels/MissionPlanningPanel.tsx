@@ -269,6 +269,11 @@ export function MissionPlanningPanel() {
   });
 
   const selectedMissionData = missions.find(m => m.id === selectedMission);
+  const orderedWaypoints = [...waypoints].sort((a, b) => {
+    const orderDiff = (a.order ?? 0) - (b.order ?? 0);
+    return orderDiff !== 0 ? orderDiff : a.id - b.id;
+  });
+  const getNextWaypointOrder = () => orderedWaypoints.reduce((max, wp) => Math.max(max, wp.order || 0), 0) + 1;
 
   const createMission = useMutation({
     mutationFn: async (mission: any) => {
@@ -390,7 +395,7 @@ export function MissionPlanningPanel() {
     action: string = "flythrough",
   ) => {
     if (!selectedMission || !points.length) return;
-    const baseOrder = waypoints.length + 1;
+    const baseOrder = getNextWaypointOrder();
     const targetAltitude = parseFloat(coordAlt) || 50;
     for (let i = 0; i < points.length; i++) {
       await createWaypointDirect({
@@ -422,14 +427,14 @@ export function MissionPlanningPanel() {
     const output: Array<{ lat: number; lng: number }> = [];
 
     if (generatorType === "corridor") {
-      if (waypoints.length < 2) {
+      if (orderedWaypoints.length < 2) {
         toast.error("Corridor generation requires at least 2 existing waypoints");
         return;
       }
       const half = Math.max(5, Number(corridorWidth) || 40) / 2;
-      for (let i = 0; i < waypoints.length - 1; i++) {
-        const a = { lat: waypoints[i].latitude, lng: waypoints[i].longitude };
-        const b = { lat: waypoints[i + 1].latitude, lng: waypoints[i + 1].longitude };
+      for (let i = 0; i < orderedWaypoints.length - 1; i++) {
+        const a = { lat: orderedWaypoints[i].latitude, lng: orderedWaypoints[i].longitude };
+        const b = { lat: orderedWaypoints[i + 1].latitude, lng: orderedWaypoints[i + 1].longitude };
         const dy = b.lat - a.lat;
         const dx = b.lng - a.lng;
         const mag = Math.hypot(dx, dy) || 1;
@@ -440,7 +445,7 @@ export function MissionPlanningPanel() {
         output.push({ lat: a.lat + dLat, lng: a.lng + dLng });
         output.push({ lat: a.lat - dLat, lng: a.lng - dLng });
       }
-      const last = waypoints[waypoints.length - 1];
+      const last = orderedWaypoints[orderedWaypoints.length - 1];
       output.push({ lat: last.latitude, lng: last.longitude });
     } else {
       const lanes = Math.max(2, Math.ceil(width / spacing));
@@ -498,10 +503,10 @@ export function MissionPlanningPanel() {
     }
     setMissionUtilityBusy(true);
     try {
-      const last = waypoints[waypoints.length - 1];
+      const last = orderedWaypoints[orderedWaypoints.length - 1];
       await createWaypointDirect({
         missionId: selectedMission,
-        order: waypoints.length + 1,
+        order: getNextWaypointOrder(),
         latitude: last.latitude,
         longitude: last.longitude,
         altitude: last.altitude || 40,
@@ -526,7 +531,7 @@ export function MissionPlanningPanel() {
     }
     setMissionUtilityBusy(true);
     try {
-      const reversed = [...waypoints].sort((a, b) => a.order - b.order).reverse();
+      const reversed = [...orderedWaypoints].reverse();
       for (let i = 0; i < reversed.length; i++) {
         await patchWaypointDirect(reversed[i].id, { order: i + 1 });
       }
@@ -551,7 +556,7 @@ export function MissionPlanningPanel() {
     }
     setMissionUtilityBusy(true);
     try {
-      for (const wp of waypoints) {
+      for (const wp of orderedWaypoints) {
         const nextAlt = Math.max(0, Number(wp.altitude || 0) + delta);
         await patchWaypointDirect(wp.id, { altitude: nextAlt });
       }
@@ -571,7 +576,7 @@ export function MissionPlanningPanel() {
     }
     setMissionUtilityBusy(true);
     try {
-      for (const wp of waypoints) {
+      for (const wp of orderedWaypoints) {
         const existing = wp.actionParams || {};
         await patchWaypointDirect(wp.id, {
           actionParams: {
@@ -595,8 +600,8 @@ export function MissionPlanningPanel() {
     if (!selectedMission || !selectedMissionData) return;
 
     const startPoint =
-      waypoints.length > 0
-        ? { lat: waypoints[waypoints.length - 1].latitude, lng: waypoints[waypoints.length - 1].longitude }
+      orderedWaypoints.length > 0
+        ? { lat: orderedWaypoints[orderedWaypoints.length - 1].latitude, lng: orderedWaypoints[orderedWaypoints.length - 1].longitude }
         : { lat: selectedMissionData.homeLatitude, lng: selectedMissionData.homeLongitude };
     const destination = { lat, lng };
 
@@ -631,7 +636,7 @@ export function MissionPlanningPanel() {
     }
 
     const pointsToCreate = [destination];
-    const baseOrder = waypoints.length + 1;
+    const baseOrder = getNextWaypointOrder();
 
     for (let idx = 0; idx < pointsToCreate.length; idx++) {
       const point = pointsToCreate[idx];
@@ -710,7 +715,7 @@ export function MissionPlanningPanel() {
   }, [
     selectedMission,
     selectedMissionData,
-    waypoints,
+    orderedWaypoints,
     coordAlt,
     noFlyZones,
     partTimeRestrictedZones,
@@ -938,7 +943,7 @@ export function MissionPlanningPanel() {
       detail: {
         missionId: selectedMission,
         missionName: selectedMissionData.name,
-        waypoints: waypoints.map(wp => ({
+        waypoints: orderedWaypoints.map(wp => ({
           id: wp.id,
           order: wp.order,
           lat: wp.latitude,
@@ -961,7 +966,7 @@ export function MissionPlanningPanel() {
     
     // Dispatch takeoff command to start the mission
     window.dispatchEvent(new CustomEvent('flight-command', {
-      detail: { command: 'takeoff', altitude: waypoints[0]?.altitude || 50 }
+      detail: { command: 'takeoff', altitude: orderedWaypoints[0]?.altitude || 50 }
     }));
     
     toast.success(`Executing mission: ${selectedMissionData.name}`, {
@@ -996,7 +1001,7 @@ export function MissionPlanningPanel() {
     try {
       const payload = {
         connectionString: fcConnectionString,
-        waypoints: waypoints.map((wp) => ({
+        waypoints: orderedWaypoints.map((wp) => ({
           order: wp.order,
           lat: wp.latitude,
           lng: wp.longitude,
@@ -1037,7 +1042,7 @@ export function MissionPlanningPanel() {
       }
 
       // Replace local mission waypoints with downloaded sequence
-      for (const wp of waypoints) {
+      for (const wp of orderedWaypoints) {
         await fetch(`/api/waypoints/${wp.id}`, { method: "DELETE" });
       }
       for (let i = 0; i < list.length; i++) {
@@ -1300,7 +1305,7 @@ export function MissionPlanningPanel() {
               {/* Map Section */}
               <div className="flex-1 relative">
                 <MissionMap
-                  waypoints={waypoints}
+                  waypoints={orderedWaypoints}
                   homePosition={selectedMissionData ? [selectedMissionData.homeLatitude, selectedMissionData.homeLongitude] : undefined}
                   onMapClick={handleMapClick}
                   clickEnabled={targetMethod === "map"}
@@ -1677,7 +1682,7 @@ export function MissionPlanningPanel() {
                   <div className="p-2 space-y-2">
                     <h4 className="font-bold text-xs text-muted-foreground uppercase px-1">Waypoints</h4>
                     
-                    {waypoints.map((wp) => {
+                    {orderedWaypoints.map((wp, idx) => {
                       const actionInfo = WAYPOINT_ACTIONS.find(a => a.value === wp.action) || WAYPOINT_ACTIONS[0];
                       const isEditing = editingWaypoint?.id === wp.id;
                       
@@ -1688,7 +1693,7 @@ export function MissionPlanningPanel() {
                               <div className="space-y-2">
                                 <div className="flex items-center gap-2 mb-2">
                                   <div className="flex items-center justify-center w-6 h-6 rounded-full bg-amber-500 text-white font-bold text-xs shrink-0">
-                                    {wp.order}
+                                    {idx + 1}
                                   </div>
                                   <span className="text-xs font-bold">Editing Waypoint</span>
                                 </div>
@@ -1965,7 +1970,7 @@ export function MissionPlanningPanel() {
                             ) : (
                               <div className="flex items-start gap-2">
                                 <div className="flex items-center justify-center w-6 h-6 rounded-full bg-primary text-primary-foreground font-bold text-xs shrink-0">
-                                  {wp.order}
+                                  {idx + 1}
                                 </div>
                                 <div className="flex-1 min-w-0 space-y-1">
                                   <div className="text-xs font-mono">

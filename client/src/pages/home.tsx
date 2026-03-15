@@ -40,23 +40,23 @@ const VideoFeed = lazyWithRetry(() => import("@/components/video/VideoFeed").the
 const ControlDeck = lazyWithRetry(() => import("@/components/controls/ControlDeck").then(m => ({ default: m.ControlDeck })), "controls");
 const TelemetryPanel = lazyWithRetry(() => import("@/components/telemetry/TelemetryPanel").then(m => ({ default: m.TelemetryPanel })), "telemetry");
 
-const UserAccessPanel = lazy(() => import("@/components/panels/UserAccessPanel").then(m => ({ default: m.UserAccessPanel })));
-const DroneSelectionPanel = lazy(() => import("@/components/panels/DroneSelectionPanel").then(m => ({ default: m.DroneSelectionPanel })));
-const SettingsPanel = lazy(() => import("@/components/panels/SettingsPanel").then(m => ({ default: m.SettingsPanel })));
-const MissionPlanningPanel = lazy(() => import("@/components/panels/MissionPlanningPanel").then(m => ({ default: m.MissionPlanningPanel })));
-const FlightPathOptimizerPanel = lazy(() => import("@/components/panels/FlightPathOptimizerPanel").then(m => ({ default: m.FlightPathOptimizerPanel })));
-const TrackingPanel = lazy(() => import("@/components/panels/TrackingPanel").then(m => ({ default: m.TrackingPanel })));
-const SpeakerPanel = lazy(() => import("@/components/panels/SpeakerPanel").then(m => ({ default: m.SpeakerPanel })));
-const FlightLogsPanel = lazy(() => import("@/components/panels/FlightLogsPanel").then(m => ({ default: m.FlightLogsPanel })));
-const FlightLogbookPanel = lazy(() => import("@/components/panels/FlightLogbookPanel").then(m => ({ default: m.FlightLogbookPanel })));
-const BME688Panel = lazy(() => import("@/components/panels/BME688Panel"));
-const AutomationPanel = lazy(() => import("@/components/panels/AutomationPanel").then(m => ({ default: m.AutomationPanel })));
-const TerminalCommandsPanel = lazy(() => import("@/components/panels/TerminalCommandsPanel").then(m => ({ default: m.TerminalCommandsPanel })));
-const FlightControllerParamsPanel = lazy(() => import("@/components/panels/FlightControllerParamsPanel").then(m => ({ default: m.FlightControllerParamsPanel })));
-const CalibrationPanel = lazy(() => import("@/components/panels/CalibrationPanel").then(m => ({ default: m.CalibrationPanel })));
-const SwarmOpsPanel = lazy(() => import("@/components/panels/SwarmOpsPanel").then(m => ({ default: m.SwarmOpsPanel })));
-const GeofencingPanel = lazy(() => import("@/components/panels/GeofencingPanel").then(m => ({ default: m.GeofencingPanel })));
-const GUIConfigPanel = lazy(() => import("@/components/panels/GUIConfigPanel").then(m => ({ default: m.GUIConfigPanel })));
+const UserAccessPanel = lazyWithRetry(() => import("@/components/panels/UserAccessPanel").then(m => ({ default: m.UserAccessPanel })), "users");
+const DroneSelectionPanel = lazyWithRetry(() => import("@/components/panels/DroneSelectionPanel").then(m => ({ default: m.DroneSelectionPanel })), "drone-selection");
+const SettingsPanel = lazyWithRetry(() => import("@/components/panels/SettingsPanel").then(m => ({ default: m.SettingsPanel })), "settings");
+const MissionPlanningPanel = lazyWithRetry(() => import("@/components/panels/MissionPlanningPanel").then(m => ({ default: m.MissionPlanningPanel })), "mission");
+const FlightPathOptimizerPanel = lazyWithRetry(() => import("@/components/panels/FlightPathOptimizerPanel").then(m => ({ default: m.FlightPathOptimizerPanel })), "optimizer");
+const TrackingPanel = lazyWithRetry(() => import("@/components/panels/TrackingPanel").then(m => ({ default: m.TrackingPanel })), "tracking");
+const SpeakerPanel = lazyWithRetry(() => import("@/components/panels/SpeakerPanel").then(m => ({ default: m.SpeakerPanel })), "speaker");
+const FlightLogsPanel = lazyWithRetry(() => import("@/components/panels/FlightLogsPanel").then(m => ({ default: m.FlightLogsPanel })), "logs");
+const FlightLogbookPanel = lazyWithRetry(() => import("@/components/panels/FlightLogbookPanel").then(m => ({ default: m.FlightLogbookPanel })), "logbook");
+const BME688Panel = lazyWithRetry(() => import("@/components/panels/BME688Panel"), "environment");
+const AutomationPanel = lazyWithRetry(() => import("@/components/panels/AutomationPanel").then(m => ({ default: m.AutomationPanel })), "automation");
+const TerminalCommandsPanel = lazyWithRetry(() => import("@/components/panels/TerminalCommandsPanel").then(m => ({ default: m.TerminalCommandsPanel })), "terminal");
+const FlightControllerParamsPanel = lazyWithRetry(() => import("@/components/panels/FlightControllerParamsPanel").then(m => ({ default: m.FlightControllerParamsPanel })), "fcparams");
+const CalibrationPanel = lazyWithRetry(() => import("@/components/panels/CalibrationPanel").then(m => ({ default: m.CalibrationPanel })), "calibration");
+const SwarmOpsPanel = lazyWithRetry(() => import("@/components/panels/SwarmOpsPanel").then(m => ({ default: m.SwarmOpsPanel })), "swarm");
+const GeofencingPanel = lazyWithRetry(() => import("@/components/panels/GeofencingPanel").then(m => ({ default: m.GeofencingPanel })), "geofence");
+const GUIConfigPanel = lazyWithRetry(() => import("@/components/panels/GUIConfigPanel").then(m => ({ default: m.GUIConfigPanel })), "guiconfig");
 
 function PanelFallback() {
   return (
@@ -87,6 +87,8 @@ interface Mapping3DStatus {
   lastModelPath: string | null;
   lastModelGeneratedAt: string | null;
 }
+
+const MOVED_TO_SETTINGS_TABS = new Set(["modesetup", "mavtools", "rtk", "plugins", "mp-parity", "vehiclesetup"]);
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState("map");
@@ -180,15 +182,25 @@ export default function Home() {
   useEffect(() => {
     const handleNavigateTab = (e: CustomEvent<{ tabId?: string }>) => {
       const next = String(e.detail?.tabId || "").trim();
-      if (next) setActiveTab(next);
+      if (!next) return;
+      if (MOVED_TO_SETTINGS_TABS.has(next)) {
+        const target = next === "vehiclesetup" ? "modesetup" : next;
+        localStorage.setItem("mouse_settings_advanced_target", target);
+        window.dispatchEvent(new CustomEvent("settings-advanced-target", { detail: { target } }));
+        setActiveTab("settings");
+        return;
+      }
+      setActiveTab(next);
     };
     window.addEventListener("navigate-tab" as any, handleNavigateTab);
     return () => window.removeEventListener("navigate-tab" as any, handleNavigateTab);
   }, []);
 
   useEffect(() => {
-    const movedToSettings = new Set(["modesetup", "mavtools", "rtk", "plugins", "mp-parity", "vehiclesetup"]);
-    if (movedToSettings.has(activeTab)) {
+    if (MOVED_TO_SETTINGS_TABS.has(activeTab)) {
+      const target = activeTab === "vehiclesetup" ? "modesetup" : activeTab;
+      localStorage.setItem("mouse_settings_advanced_target", target);
+      window.dispatchEvent(new CustomEvent("settings-advanced-target", { detail: { target } }));
       setActiveTab("settings");
     }
   }, [activeTab]);

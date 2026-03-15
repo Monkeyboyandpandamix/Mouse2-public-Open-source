@@ -4,6 +4,10 @@ import type { NoFlyZone } from "@/lib/noFlyZones";
 export function useNoFlyZones() {
   const [localZones, setLocalZones] = useState<NoFlyZone[]>([]);
   const [liveZones, setLiveZones] = useState<NoFlyZone[]>([]);
+  const [displayRangeMiles, setDisplayRangeMiles] = useState<number>(() => {
+    const raw = Number(localStorage.getItem("mouse_airspace_display_range_miles") || 30);
+    return Number.isFinite(raw) ? Math.max(1, Math.min(200, raw)) : 30;
+  });
 
   useEffect(() => {
     const load = () => {
@@ -34,11 +38,30 @@ export function useNoFlyZones() {
   }, []);
 
   useEffect(() => {
+    const syncRange = () => {
+      const raw = Number(localStorage.getItem("mouse_airspace_display_range_miles") || 30);
+      const next = Number.isFinite(raw) ? Math.max(1, Math.min(200, raw)) : 30;
+      setDisplayRangeMiles(next);
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (e.key && e.key !== "mouse_airspace_display_range_miles") return;
+      syncRange();
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("airspace-display-range-changed", syncRange as EventListener);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("airspace-display-range-changed", syncRange as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
     let active = true;
 
     const fetchLiveZones = async (lat: number, lng: number) => {
       try {
-        const res = await fetch(`/api/airspace/restricted?lat=${lat}&lng=${lng}&radiusMeters=35000`);
+        const radiusMeters = Math.round(displayRangeMiles * 1609.344);
+        const res = await fetch(`/api/airspace/restricted?lat=${lat}&lng=${lng}&radiusMeters=${radiusMeters}`);
         if (!res.ok) {
           if (active) setLiveZones([]);
           return;
@@ -77,7 +100,7 @@ export function useNoFlyZones() {
       active = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [displayRangeMiles]);
 
   return [...localZones, ...liveZones].filter((zone) => zone?.enabled);
 }

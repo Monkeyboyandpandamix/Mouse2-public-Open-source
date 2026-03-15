@@ -40,6 +40,8 @@ interface FirmwareCatalogEntry {
   updatedAt?: string;
 }
 
+const ADVANCED_SETTINGS_TABS = new Set(["modesetup", "mavtools", "rtk", "plugins", "mp-parity"]);
+
 // Google Account Manager Component for standalone deployments
 function GoogleAccountManager() {
   const [status, setStatus] = useState<{
@@ -327,6 +329,37 @@ export function SettingsPanel() {
     radioTelemetryBaud: "57600",
   });
 
+  useEffect(() => {
+    const applyAdvancedTarget = (rawTarget: string | undefined) => {
+      const target = String(rawTarget || "").trim();
+      if (!ADVANCED_SETTINGS_TABS.has(target)) return;
+      setActiveAdvancedSetup(target);
+      setActiveSettingsTab("operations");
+    };
+
+    const storedTarget = localStorage.getItem("mouse_settings_advanced_target") || "";
+    if (storedTarget) {
+      applyAdvancedTarget(storedTarget);
+      localStorage.removeItem("mouse_settings_advanced_target");
+    }
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key !== "mouse_settings_advanced_target") return;
+      applyAdvancedTarget(e.newValue || "");
+    };
+    const handleAdvancedTargetEvent = (event: Event) => {
+      const custom = event as CustomEvent<{ target?: string }>;
+      applyAdvancedTarget(custom.detail?.target);
+    };
+
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("settings-advanced-target" as any, handleAdvancedTargetEvent);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("settings-advanced-target" as any, handleAdvancedTargetEvent);
+    };
+  }, []);
+
   const [sensorSettings, setSensorSettings] = useState({
     lidarAddress: "0x62",
     lidarRate: "10",
@@ -434,6 +467,7 @@ export function SettingsPanel() {
     lat: "", lng: "", name: ""
   });
   const [savedBaseLocation, setSavedBaseLocation] = useState<{lat: number, lng: number, name: string} | null>(null);
+  const [airspaceDisplayRangeMiles, setAirspaceDisplayRangeMiles] = useState<string>("30");
 
   // Load base location from localStorage
   useEffect(() => {
@@ -449,6 +483,12 @@ export function SettingsPanel() {
         });
       } catch {}
     }
+  }, []);
+
+  useEffect(() => {
+    const raw = Number(localStorage.getItem("mouse_airspace_display_range_miles") || 30);
+    const next = Number.isFinite(raw) ? Math.max(1, Math.min(200, raw)) : 30;
+    setAirspaceDisplayRangeMiles(String(next));
   }, []);
 
   const saveBaseLocationSetting = () => {
@@ -479,6 +519,19 @@ export function SettingsPanel() {
         () => toast.error("Could not get current location")
       );
     }
+  };
+
+  const saveAirspaceDisplayRange = () => {
+    const raw = Number(airspaceDisplayRangeMiles);
+    if (!Number.isFinite(raw)) {
+      toast.error("Enter a valid no-fly display range");
+      return;
+    }
+    const clamped = Math.max(1, Math.min(200, Math.round(raw)));
+    localStorage.setItem("mouse_airspace_display_range_miles", String(clamped));
+    setAirspaceDisplayRangeMiles(String(clamped));
+    window.dispatchEvent(new Event("airspace-display-range-changed"));
+    toast.success(`No-fly display range saved: ${clamped} miles`);
   };
 
   const checkBackupStatus = async () => {
@@ -3144,6 +3197,32 @@ export function SettingsPanel() {
                     />
                   </div>
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>No-Fly Overlay Display Range</CardTitle>
+                <CardDescription>Set how far restricted-airspace overlays are shown on maps around the operator/drone.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="space-y-2">
+                  <Label>Display Range (miles)</Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    max="200"
+                    value={airspaceDisplayRangeMiles}
+                    onChange={(e) => setAirspaceDisplayRangeMiles(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Applies to FAA regulatory overlays and live restricted-airspace fetch range.
+                  </p>
+                </div>
+                <Button onClick={saveAirspaceDisplayRange}>
+                  <Save className="h-4 w-4 mr-2" />
+                  Save Range
+                </Button>
               </CardContent>
             </Card>
 

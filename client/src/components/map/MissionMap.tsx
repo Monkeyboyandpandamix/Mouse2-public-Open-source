@@ -156,7 +156,11 @@ export function MissionMap({ waypoints, homePosition, onMapClick, clickEnabled =
     }
   }, [onMapClick]);
 
-  const flightPath: [number, number][] = waypoints.map(wp => [wp.latitude, wp.longitude]);
+  const orderedWaypoints = [...waypoints].sort((a, b) => {
+    const orderDiff = (a.order ?? 0) - (b.order ?? 0);
+    return orderDiff !== 0 ? orderDiff : (a.id ?? 0) - (b.id ?? 0);
+  });
+  const flightPath: [number, number][] = orderedWaypoints.map(wp => [wp.latitude, wp.longitude]);
   if (homePosition && flightPath.length > 0) {
     flightPath.unshift(homePosition);
   }
@@ -184,11 +188,11 @@ export function MissionMap({ waypoints, homePosition, onMapClick, clickEnabled =
           <Marker position={homePosition} icon={HomeIcon} />
         )}
 
-        {waypoints.map((wp, idx) => (
+        {orderedWaypoints.map((wp, idx) => (
           <Marker 
             key={wp.id || idx} 
             position={[wp.latitude, wp.longitude]} 
-            icon={WaypointIcon(wp.order, wp.action || undefined)} 
+            icon={WaypointIcon(idx + 1, wp.action || undefined)} 
           />
         ))}
 

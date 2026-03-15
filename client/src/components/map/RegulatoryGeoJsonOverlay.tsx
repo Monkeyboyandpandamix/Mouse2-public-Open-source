@@ -3,8 +3,7 @@ import { GeoJSON } from "react-leaflet";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 
-const RADIUS_MILES = 30;
-const RADIUS_METERS = RADIUS_MILES * 1609.344;
+const DEFAULT_RADIUS_MILES = 30;
 
 type FeatureCollection = {
   type: "FeatureCollection";
@@ -93,7 +92,8 @@ function getGeometryCenter(geom: any): [number, number] | null {
 function filterByRadius(
   fc: FeatureCollection | null,
   dronePos: [number, number] | null,
-  operatorPos: [number, number] | null
+  operatorPos: [number, number] | null,
+  radiusMeters: number,
 ): FeatureCollection | null {
   if (!fc?.features?.length) return fc;
   const refs = [dronePos, operatorPos].filter(Boolean) as [number, number][];
@@ -102,7 +102,7 @@ function filterByRadius(
     const center = getGeometryCenter(f.geometry);
     if (!center) return true;
     const [lat, lon] = center;
-    return refs.some(([refLat, refLon]) => haversineMeters(lat, lon, refLat, refLon) <= RADIUS_METERS);
+    return refs.some(([refLat, refLon]) => haversineMeters(lat, lon, refLat, refLon) <= radiusMeters);
   });
   return { ...fc, features: filtered };
 }
@@ -123,9 +123,14 @@ export function RegulatoryGeoJsonOverlay({
   const [enabled, setEnabled] = useState<Record<string, boolean>>(
     () => Object.fromEntries(LAYERS.map((l) => [l.id, l.defaultOn])),
   );
+  const [displayRangeMiles, setDisplayRangeMiles] = useState<number>(() => {
+    const raw = Number(localStorage.getItem("mouse_airspace_display_range_miles") || DEFAULT_RADIUS_MILES);
+    return Number.isFinite(raw) ? Math.max(1, Math.min(200, raw)) : DEFAULT_RADIUS_MILES;
+  });
   const [data, setData] = useState<Record<string, FeatureCollection | null>>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const radiusMeters = displayRangeMiles * 1609.344;
 
   useEffect(() => {
     const onSession = (e: CustomEvent<{ isLoggedIn?: boolean }>) => {
@@ -135,6 +140,24 @@ export function RegulatoryGeoJsonOverlay({
     };
     window.addEventListener("session-change" as any, onSession);
     return () => window.removeEventListener("session-change" as any, onSession);
+  }, []);
+
+  useEffect(() => {
+    const syncRange = () => {
+      const raw = Number(localStorage.getItem("mouse_airspace_display_range_miles") || DEFAULT_RADIUS_MILES);
+      const next = Number.isFinite(raw) ? Math.max(1, Math.min(200, raw)) : DEFAULT_RADIUS_MILES;
+      setDisplayRangeMiles(next);
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (e.key && e.key !== "mouse_airspace_display_range_miles") return;
+      syncRange();
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("airspace-display-range-changed", syncRange as EventListener);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("airspace-display-range-changed", syncRange as EventListener);
+    };
   }, []);
 
   useEffect(() => {
@@ -186,10 +209,10 @@ export function RegulatoryGeoJsonOverlay({
     const out: Record<string, FeatureCollection | null> = {};
     for (const layer of activeLayers) {
       const raw = data[layer.id];
-      out[layer.id] = filterByRadius(raw, dronePosition, operatorPosition);
+      out[layer.id] = filterByRadius(raw, dronePosition, operatorPosition, radiusMeters);
     }
     return out;
-  }, [activeLayers, data, dronePosition, operatorPosition]);
+  }, [activeLayers, data, dronePosition, operatorPosition, radiusMeters]);
 
   const totalVisibleFeatures = useMemo(
     () =>
@@ -241,7 +264,7 @@ export function RegulatoryGeoJsonOverlay({
             </div>
           ))}
           <p className="text-[10px] text-muted-foreground">
-            Visible within {RADIUS_MILES}mi of drone/operator: {totalVisibleFeatures} feature(s).
+            Visible within {displayRangeMiles}mi of drone/operator: {totalVisibleFeatures} feature(s).
           </p>
           <p className="text-[10px] text-muted-foreground">
             FAA Facility Map is very large and may stay disabled if the file is too heavy for real-time client rendering.
