@@ -3,6 +3,7 @@ import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { TelemetryProvider } from "@/contexts/TelemetryContext";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
 import { Component, type ErrorInfo, type ReactNode, useEffect } from "react";
@@ -120,10 +121,12 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <AppErrorBoundary>
-          <Toaster />
-          <Router />
-        </AppErrorBoundary>
+        <TelemetryProvider>
+          <AppErrorBoundary>
+            <Toaster />
+            <Router />
+          </AppErrorBoundary>
+        </TelemetryProvider>
       </TooltipProvider>
     </QueryClientProvider>
   );

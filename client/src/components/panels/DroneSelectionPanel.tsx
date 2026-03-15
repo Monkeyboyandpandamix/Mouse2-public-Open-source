@@ -29,6 +29,8 @@ import {
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { Drone } from "@shared/schema";
+import { dronesApi } from "@/lib/api";
+import { reportApiError } from "@/lib/apiErrors";
 import { usePermissions } from "@/hooks/usePermissions";
 import { getRuntimePlatform, getSerialPortOptions } from "@/lib/platform";
 
@@ -82,19 +84,13 @@ export function DroneSelectionPanel({ onDroneSelected, onSkipPreview }: DroneSel
 
   const { data: drones = [], isLoading, refetch } = useQuery<Drone[]>({
     queryKey: ["/api/drones"],
+    queryFn: () => dronesApi.list() as Promise<Drone[]>,
     refetchInterval: 5000,
   });
 
   const createDroneMutation = useMutation({
-    mutationFn: async (drone: typeof newDrone) => {
-      const res = await fetch("/api/drones", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(drone),
-      });
-      if (!res.ok) throw new Error("Failed to create drone");
-      return res.json();
-    },
+    mutationFn: async (drone: typeof newDrone) =>
+      dronesApi.create(drone) as Promise<Drone>,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/drones"] });
       setShowAddDialog(false);
@@ -115,44 +111,33 @@ export function DroneSelectionPanel({ onDroneSelected, onSkipPreview }: DroneSel
       });
       toast.success("Drone added successfully");
     },
-    onError: () => {
-      toast.error("Failed to add drone");
+    onError: (e) => {
+      reportApiError(e, "Failed to add drone");
     },
   });
 
   const deleteDroneMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await fetch(`/api/drones/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete drone");
-      return res.json();
-    },
+    mutationFn: async (id: string) => dronesApi.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/drones"] });
       toast.success("Drone removed");
     },
-    onError: () => {
-      toast.error("Failed to remove drone");
+    onError: (e) => {
+      reportApiError(e, "Failed to remove drone");
     },
   });
 
   const updateDroneMutation = useMutation({
-    mutationFn: async (drone: Partial<Drone> & { id: string }) => {
-      const res = await fetch(`/api/drones/${drone.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(drone),
-      });
-      if (!res.ok) throw new Error("Failed to update drone");
-      return res.json();
-    },
+    mutationFn: async (drone: Partial<Drone> & { id: string }) =>
+      dronesApi.update(drone.id, drone) as Promise<Drone>,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/drones"] });
       setShowEditDialog(false);
       setEditingDrone(null);
       toast.success("Drone updated successfully");
     },
-    onError: () => {
-      toast.error("Failed to update drone");
+    onError: (e) => {
+      reportApiError(e, "Failed to update drone");
     },
   });
 

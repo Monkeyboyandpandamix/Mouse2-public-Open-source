@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { usePermissions } from "@/hooks/usePermissions";
 import { toast } from "sonner";
+import { reportApiError } from "@/lib/apiErrors";
 import { Lock, RefreshCw, Save } from "lucide-react";
 
 interface MappingState {
@@ -67,7 +68,7 @@ export function FlightModeMappingPanel() {
       setMapping(merged);
       toast.success("Loaded mapping from FC");
     } catch (e: any) {
-      toast.error(e.message || "Failed to load mapping");
+      reportApiError(e, "Failed to load mapping");
     } finally {
       setBusy(false);
     }
@@ -92,7 +93,7 @@ export function FlightModeMappingPanel() {
         toast.error(`Failed ${data.failed.length} params`);
       }
     } catch (e: any) {
-      toast.error(e.message || "Failed to apply mapping");
+      reportApiError(e, "Failed to apply mapping");
     } finally {
       setBusy(false);
     }

@@ -119,6 +119,13 @@ The system operates in **offline-first mode** using local JSON storage with opti
 - Admin dashboard cloud endpoint for fleet-wide audit visibility
 - Offline media staging and automatic retry to cloud when connectivity returns
 
+**GPS-Denied / Network-Denied Operation** (no GPS, no WiFi/internet):
+- Use the **Offline** map type (Map layer controls) to avoid tile network calls
+- Run backend + frontend on the same machine (localhost) when no network is available
+- Drone connects via MAVLink (serial/radio); telemetry flows locally
+- Breadcrumbs persist to localStorage for return-to-home across page refresh
+- Airspace/geocode APIs return empty when offline; operations continue without errors
+
 ### UX and Deployment
 - Role-gated UI panels with server-side permission checks on critical API writes/actions
 - App Hosting deployment support for web operators

@@ -196,77 +196,99 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     };
   }, [session]);
 
-  // WebSocket subscription for real-time updates
+  // WebSocket subscription for real-time updates with reconnect
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
-    
-    ws.onopen = () => {
-      // Authenticate with server-side session token for DM privacy
-      const sessionToken = localStorage.getItem('mouse_gcs_session_token');
-      if (sessionToken) {
-        ws.send(JSON.stringify({ type: 'auth', sessionToken }));
-      }
-    };
-    
-    ws.onmessage = (event) => {
-      try {
-        const { type, data } = JSON.parse(event.data);
-        if (type === 'new_message') {
-          // Server already filters DMs, but add client-side check as safety
-          setMessages(prev => {
-            // Avoid duplicates
-            if (prev.some(m => m.id === data.id)) return prev;
-            // Limit messages to prevent memory bloat (keep last 200)
-            const updated = [...prev, data];
-            return updated.length > 200 ? updated.slice(-200) : updated;
-          });
-        } else if (type === 'message_updated') {
-          setMessages(prev => prev.map(m => m.id === data.id ? data : m));
-        } else if (type === 'message_deleted') {
-          setMessages(prev => prev.map(m => 
-            m.id === data.id ? { ...m, deleted: true, content: "[Message deleted]" } : m
-          ));
-        } else if (type === 'telemetry' || type === 'telemetry_recorded') {
-          const normalized = {
-            ...data,
-            position: data.position || (
-              typeof data.latitude === 'number' && typeof data.longitude === 'number'
-                ? { lat: data.latitude, lng: data.longitude }
-                : undefined
-            ),
-            heading: data.heading ?? data.yaw ?? 0,
-            groundSpeed: data.groundSpeed ?? data.speed ?? 0,
-            source: 'ws',
-          };
-          (window as any).__currentTelemetry = normalized;
-          window.dispatchEvent(new CustomEvent('telemetry-update', { detail: normalized }));
-        } else if (type === 'sensor_data') {
-          window.dispatchEvent(new CustomEvent('sensor-update', { detail: data }));
-        } else if (type === 'motor_telemetry') {
-          window.dispatchEvent(new CustomEvent('motor-telemetry-update', { detail: data }));
-        } else if (type === 'adsb' || type === 'adsb_update') {
-          window.dispatchEvent(new CustomEvent('adsb-update', { detail: data }));
-        } else if (type === 'audio_output_selected') {
-          window.dispatchEvent(new CustomEvent('audio-output-updated', { detail: data }));
-        } else if (type === 'audio_live') {
-          window.dispatchEvent(new CustomEvent('audio-live-updated', { detail: data }));
-        } else if (type === 'audio_drone_mic') {
-          window.dispatchEvent(new CustomEvent('audio-drone-mic-updated', { detail: data }));
-        } else if (type === 'audio_tts') {
-          window.dispatchEvent(new CustomEvent('audio-tts-broadcast', { detail: data }));
-        } else if (type === 'audio_buzzer') {
-          window.dispatchEvent(new CustomEvent('audio-buzzer-played', { detail: data }));
+    let tornDown = false;
+    let currentWs: WebSocket | null = null;
+    let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+    const MAX_RECONNECT_DELAY_MS = 30000;
+    const INITIAL_RECONNECT_DELAY_MS = 1000;
+
+    const connect = (attempt = 0) => {
+      if (tornDown) return;
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      currentWs = new WebSocket(`${protocol}//${window.location.host}/ws`);
+      const ws = currentWs;
+
+      ws.onopen = () => {
+        const sessionToken = localStorage.getItem('mouse_gcs_session_token');
+        if (sessionToken) {
+          ws.send(JSON.stringify({ type: 'auth', sessionToken }));
         }
-      } catch (e) {
-        // Ignore parse errors
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const { type, data } = JSON.parse(event.data);
+          if (type === 'new_message') {
+            setMessages(prev => {
+              if (prev.some(m => m.id === data.id)) return prev;
+              const updated = [...prev, data];
+              return updated.length > 200 ? updated.slice(-200) : updated;
+            });
+          } else if (type === 'message_updated') {
+            setMessages(prev => prev.map(m => m.id === data.id ? data : m));
+          } else if (type === 'message_deleted') {
+            setMessages(prev => prev.map(m =>
+              m.id === data.id ? { ...m, deleted: true, content: "[Message deleted]" } : m
+            ));
+          } else if (type === 'telemetry' || type === 'telemetry_recorded') {
+            const normalized = {
+              ...data,
+              position: data.position || (
+                typeof data.latitude === 'number' && typeof data.longitude === 'number'
+                  ? { lat: data.latitude, lng: data.longitude }
+                  : undefined
+              ),
+              heading: data.heading ?? data.yaw ?? 0,
+              groundSpeed: data.groundSpeed ?? data.speed ?? 0,
+              source: 'ws',
+            };
+            (window as any).__currentTelemetry = normalized;
+            window.dispatchEvent(new CustomEvent('telemetry-update', { detail: normalized }));
+          } else if (type === 'sensor_data') {
+            window.dispatchEvent(new CustomEvent('sensor-update', { detail: data }));
+          } else if (type === 'motor_telemetry') {
+            window.dispatchEvent(new CustomEvent('motor-telemetry-update', { detail: data }));
+          } else if (type === 'adsb' || type === 'adsb_update') {
+            window.dispatchEvent(new CustomEvent('adsb-update', { detail: data }));
+          } else if (type === 'audio_output_selected') {
+            window.dispatchEvent(new CustomEvent('audio-output-updated', { detail: data }));
+          } else if (type === 'audio_live') {
+            window.dispatchEvent(new CustomEvent('audio-live-updated', { detail: data }));
+          } else if (type === 'audio_drone_mic') {
+            window.dispatchEvent(new CustomEvent('audio-drone-mic-updated', { detail: data }));
+          } else if (type === 'audio_tts') {
+            window.dispatchEvent(new CustomEvent('audio-tts-broadcast', { detail: data }));
+          } else if (type === 'audio_buzzer') {
+            window.dispatchEvent(new CustomEvent('audio-buzzer-played', { detail: data }));
+          }
+        } catch (e) {
+          // Ignore parse errors
+        }
+      };
+
+      ws.onclose = () => {
+        window.dispatchEvent(new CustomEvent('connection-lost', { detail: { source: 'websocket' } }));
+        if (tornDown) return;
+        const delay = Math.min(INITIAL_RECONNECT_DELAY_MS * Math.pow(2, attempt), MAX_RECONNECT_DELAY_MS);
+        reconnectTimeout = setTimeout(() => connect(attempt + 1), delay);
+      };
+
+      ws.onerror = () => { /* Handled in onclose */ };
+    };
+
+    connect();
+
+    return () => {
+      tornDown = true;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (currentWs) {
+        currentWs.onclose = () => {};
+        currentWs.close();
+        currentWs = null;
       }
     };
-    ws.onclose = () => {
-      window.dispatchEvent(new CustomEvent('connection-lost', { detail: { source: 'websocket' } }));
-    };
-    
-    return () => ws.close();
   }, [session.user?.id]);
 
   // Filter users and groups for @ mention autocomplete

@@ -8,7 +8,7 @@ import { MapErrorBoundary } from "@/components/map/MapErrorBoundary";
 const DEFAULT_LAT = 36.0957;
 const DEFAULT_LNG = -79.4378;
 
-import { Search, Map as MapIcon, Layers, ZoomIn, ZoomOut, RotateCcw, Crosshair, Plane, Battery, Signal, Radio, User } from "lucide-react";
+import { Search, Map as MapIcon, Layers, ZoomIn, ZoomOut, RotateCcw, Crosshair, Plane, Battery, Signal, Radio, User, WifiOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -20,6 +20,8 @@ import { NoFlyZoneOverlay } from "@/components/map/NoFlyZoneOverlay";
 import { NoFlyZoneLegend } from "@/components/map/NoFlyZoneLegend";
 import { RegulatoryGeoJsonOverlay } from "@/components/map/RegulatoryGeoJsonOverlay";
 import { useNoFlyZones } from "@/hooks/useNoFlyZones";
+import { missionsApi, waypointsApi, dronesApi } from "@/lib/api";
+import { useTelemetry } from "@/contexts/TelemetryContext";
 
 interface Waypoint {
   id: number;
@@ -313,7 +315,7 @@ export function MapInterface() {
     [currentLocation[0] + 0.0006, currentLocation[1] + 0.0012],
   ];
 
-  const [mapType, setMapType] = useState<'dark' | 'satellite' | 'street'>('dark');
+  const [mapType, setMapType] = useState<'dark' | 'satellite' | 'street' | 'offline'>('dark');
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [searchResult, setSearchResult] = useState<{lat: number; lon: number; name: string} | null>(null);
@@ -341,35 +343,41 @@ export function MapInterface() {
   
   const [selectedMissionId, setSelectedMissionId] = useState<number | null>(null);
   
-  // Fetch waypoints for selected mission
+  // Fetch waypoints for selected mission (uses shared cache with MissionPlanningPanel)
   const { data: missionWaypoints = [] } = useQuery<Waypoint[]>({
     queryKey: ["/api/missions", selectedMissionId, "waypoints"],
-    queryFn: async () => {
+    queryFn: async (): Promise<Waypoint[]> => {
       if (!selectedMissionId) return [];
-      const res = await fetch(`/api/missions/${selectedMissionId}/waypoints`);
-      if (!res.ok) return [];
-      return res.json();
+      try {
+        return (await waypointsApi.list(String(selectedMissionId))) as Waypoint[];
+      } catch {
+        return [];
+      }
     },
     enabled: !!selectedMissionId,
   });
   
-  // Fetch all missions to get the first one as default
+  // Fetch all missions (uses shared cache with MissionPlanningPanel, FlightPathOptimizerPanel)
   const { data: missions = [] } = useQuery<{ id: number; name: string }[]>({
     queryKey: ["/api/missions"],
-    queryFn: async () => {
-      const res = await fetch("/api/missions");
-      if (!res.ok) return [];
-      return res.json();
+    queryFn: async (): Promise<{ id: number; name: string }[]> => {
+      try {
+        return (await missionsApi.list()) as { id: number; name: string }[];
+      } catch {
+        return [];
+      }
     },
   });
 
-  // Fetch all drones for map display
+  // Fetch all drones for map display (uses shared cache with DroneSelectionPanel)
   const { data: allDrones = [] } = useQuery<Drone[]>({
     queryKey: ["/api/drones"],
-    queryFn: async () => {
-      const res = await fetch("/api/drones");
-      if (!res.ok) return [];
-      return res.json();
+    queryFn: async (): Promise<Drone[]> => {
+      try {
+        return (await dronesApi.list()) as Drone[];
+      } catch {
+        return [];
+      }
     },
     refetchInterval: 3000, // Refresh every 3 seconds for real-time positions
   });
@@ -398,20 +406,15 @@ export function MapInterface() {
   }, []);
 
   // Use live telemetry position for selected drone when available.
+  const telemetry = useTelemetry();
   useEffect(() => {
-    const handleTelemetry = (e: CustomEvent<{ position?: { lat: number; lng: number }; latitude?: number; longitude?: number }>) => {
-      const pos = e.detail?.position || (
-        typeof e.detail?.latitude === "number" && typeof e.detail?.longitude === "number"
-          ? { lat: e.detail.latitude, lng: e.detail.longitude }
-          : null
-      );
-      if (pos) {
-        setLiveTelemetryPosition([pos.lat, pos.lng]);
-      }
-    };
-    window.addEventListener("telemetry-update" as any, handleTelemetry);
-    return () => window.removeEventListener("telemetry-update" as any, handleTelemetry);
-  }, []);
+    const pos = telemetry?.position ?? (
+      typeof telemetry?.latitude === "number" && typeof telemetry?.longitude === "number"
+        ? { lat: telemetry.latitude, lng: telemetry.longitude }
+        : null
+    );
+    if (pos) setLiveTelemetryPosition([pos.lat, pos.lng]);
+  }, [telemetry]);
   
   // Auto-select first mission if none selected (only once)
   const [hasAutoSelected, setHasAutoSelected] = useState(false);
@@ -465,13 +468,15 @@ export function MapInterface() {
     return () => window.removeEventListener("gps-denied-position-update" as any, handleGpsDenied);
   }, []);
 
-  const getTileUrl = () => {
-    switch(mapType) {
-      case 'satellite':
+  const getTileUrl = (): string | null => {
+    switch (mapType) {
+      case "satellite":
         return "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
-      case 'street':
+      case "street":
         return "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
-      case 'dark':
+      case "offline":
+        return null; // No tiles when network-denied; positions, breadcrumbs, markers still work
+      case "dark":
       default:
         return "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
     }
@@ -479,17 +484,22 @@ export function MapInterface() {
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
-    
+
+    if (!navigator.onLine) {
+      toast.error("Search unavailable offline — enable network for geocoding");
+      return;
+    }
+
     setIsSearching(true);
     try {
       const response = await fetch(`/api/geocode?q=${encodeURIComponent(searchQuery)}`);
-      
+
       if (!response.ok) {
         throw new Error("Geocoding request failed");
       }
-      
+
       const results = await response.json();
-      
+
       if (results.length > 0) {
         const lat = parseFloat(results[0].lat);
         const lon = parseFloat(results[0].lon);
@@ -499,7 +509,7 @@ export function MapInterface() {
         toast.error("Location not found");
       }
     } catch (error) {
-      toast.error("Search failed - please try again");
+      toast.error("Search failed — try again when online");
     } finally {
       setIsSearching(false);
     }
@@ -572,10 +582,9 @@ export function MapInterface() {
         className="w-full h-full"
         style={{ background: '#0f172a' }}
       >
-        <TileLayer
-          attribution='&copy; OpenStreetMap'
-          url={getTileUrl()}
-        />
+        {getTileUrl() && (
+          <TileLayer attribution='&copy; OpenStreetMap' url={getTileUrl()!} />
+        )}
         <NoFlyZoneOverlay zones={noFlyZones} />
         <RegulatoryGeoJsonOverlay 
           controlClassName="top-20 left-4" 
@@ -930,6 +939,15 @@ export function MapInterface() {
             onClick={() => setMapType('street')}
            >
              <MapIcon className="w-3 h-3 mr-2" /> Street
+           </Button>
+           <Button 
+            variant={mapType === 'offline' ? "default" : "ghost"} 
+            size="sm" 
+            className="justify-start h-8 px-2 text-xs"
+            onClick={() => setMapType('offline')}
+            title="Offline mode — no network required (GPS-denied, network-denied ops)"
+           >
+             <WifiOff className="w-3 h-3 mr-2" /> Offline
            </Button>
         </div>
         <div className="bg-card/80 backdrop-blur-md px-3 py-2 rounded-lg border border-border shadow-lg text-xs">

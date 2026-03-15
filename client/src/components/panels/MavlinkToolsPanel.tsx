@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { usePermissions } from "@/hooks/usePermissions";
 import { toast } from "sonner";
+import { reportApiError } from "@/lib/apiErrors";
 import { Label } from "@/components/ui/label";
 import { dispatchBackendCommand } from "@/lib/commandService";
 import { Lock, Radio, PlugZap, RefreshCw, Gamepad2 } from "lucide-react";
@@ -62,7 +63,7 @@ export function MavlinkToolsPanel() {
       setSnapshot(data.snapshot || null);
       toast.success("MAVLink snapshot fetched");
     } catch (e: any) {
-      toast.error(e.message || "Snapshot failed");
+      reportApiError(e, "Snapshot failed");
     } finally {
       setBusy(false);
     }
@@ -105,7 +106,7 @@ export function MavlinkToolsPanel() {
       setPassthroughState(data.state);
       toast.success("Serial passthrough started");
     } catch (e: any) {
-      toast.error(e.message || "Failed to start passthrough");
+      reportApiError(e, "Failed to start passthrough");
     } finally {
       setBusy(false);
     }
@@ -120,7 +121,7 @@ export function MavlinkToolsPanel() {
       setPassthroughState(data.state);
       toast.success("Serial passthrough stopped");
     } catch (e: any) {
-      toast.error(e.message || "Failed to stop passthrough");
+      reportApiError(e, "Failed to stop passthrough");
     } finally {
       setBusy(false);
     }
@@ -136,7 +137,7 @@ export function MavlinkToolsPanel() {
       });
       toast.success(action === "set_mode" ? `Mode set to ${mode}` : `${action} command sent`);
     } catch (e: any) {
-      toast.error(e.message || "Vehicle action failed");
+      reportApiError(e, "Vehicle action failed");
     } finally {
       setBusy(false);
     }
@@ -162,7 +163,7 @@ export function MavlinkToolsPanel() {
       if (!res.ok || !data.success) throw new Error(data.error || "Manual control failed");
       toast.success("Manual control frame streamed");
     } catch (e: any) {
-      toast.error(e.message || "Manual control failed");
+      reportApiError(e, "Manual control failed");
     } finally {
       setBusy(false);
     }
@@ -179,7 +180,7 @@ export function MavlinkToolsPanel() {
       setRadioStatus(data.values || null);
       toast.success("Telemetry radio status loaded");
     } catch (e: any) {
-      toast.error(e.message || "Failed to load radio status");
+      reportApiError(e, "Failed to load radio status");
     } finally {
       setBusy(false);
     }
@@ -205,7 +206,7 @@ export function MavlinkToolsPanel() {
       }
       await loadRadioStatus();
     } catch (e: any) {
-      toast.error(e.message || "Failed to apply radio profile");
+      reportApiError(e, "Failed to apply radio profile");
     } finally {
       setBusy(false);
     }
@@ -231,7 +232,7 @@ export function MavlinkToolsPanel() {
       else toast.error(`Verification mismatches: ${data.mismatches?.length || 0}`);
       await loadRadioStatus();
     } catch (e: any) {
-      toast.error(e.message || "Failed to apply+verify radio profile");
+      reportApiError(e, "Failed to apply+verify radio profile");
     } finally {
       setBusy(false);
     }
@@ -253,7 +254,7 @@ export function MavlinkToolsPanel() {
       setModemResult(data);
       toast.success("SiK modem query complete");
     } catch (e: any) {
-      toast.error(e.message || "SiK modem query failed");
+      reportApiError(e, "SiK modem query failed");
     } finally {
       setBusy(false);
     }
@@ -289,7 +290,7 @@ export function MavlinkToolsPanel() {
       setModemApplyResult(data);
       toast.success(`Applied modem profile: ${modemProfileId}`);
     } catch (e: any) {
-      toast.error(e.message || "SiK modem profile apply failed");
+      reportApiError(e, "SiK modem profile apply failed");
     } finally {
       setBusy(false);
     }

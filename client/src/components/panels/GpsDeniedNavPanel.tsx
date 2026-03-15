@@ -11,6 +11,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
+import { reportApiError } from "@/lib/apiErrors";
 import { dispatchBackendCommand } from "@/lib/commandService";
 import {
   Navigation,
@@ -168,7 +169,7 @@ export function GpsDeniedNavPanel() {
       );
       toast.info("Backtrace mapped to RTL and acknowledged");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Backtrace command failed");
+      reportApiError(error, "Backtrace command failed");
     }
   };
 
@@ -210,6 +211,19 @@ export function GpsDeniedNavPanel() {
 
       <ScrollArea className="flex-1">
         <div className="p-3 space-y-3">
+          <Card className="bg-muted/50 border-dashed">
+            <CardContent className="p-3">
+              <div className="flex items-start gap-2 text-xs">
+                <WifiOff className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium text-foreground">Offline / Network-Denied Ops</p>
+                  <p className="text-muted-foreground mt-1">
+                    Use the <strong>Offline</strong> map type (Map layer controls) to avoid tile fetches. Keep GCS backend + frontend on the same machine when no network is available. Breadcrumbs persist locally for return-to-home across refresh.
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
           <Tabs defaultValue="status" className="w-full">
             <TabsList className="w-full grid grid-cols-3 h-8">
               <TabsTrigger value="status" className="text-xs" data-testid="tab-nav-status">Status</TabsTrigger>

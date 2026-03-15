@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { reportApiError } from "@/lib/apiErrors";
 import { usePermissions } from "@/hooks/usePermissions";
 
 interface AutomationScript {
@@ -156,7 +157,7 @@ export function AutomationPanel() {
         throw new Error(data?.run?.error || "Automation execution failed");
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Automation execution failed");
+      reportApiError(error, "Automation execution failed");
     }
   };
 

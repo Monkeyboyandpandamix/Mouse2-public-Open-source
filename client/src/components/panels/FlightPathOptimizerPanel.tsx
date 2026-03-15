@@ -158,20 +158,20 @@ export function FlightPathOptimizerPanel() {
     const fetchMissions = async () => {
       setMissionsLoading(true);
       try {
-        const response = await fetch('/api/missions');
-        if (!response.ok) {
-          throw new Error('Failed to fetch missions');
-        }
-        const missionData = await response.json();
-        
-        const missionsWithWaypoints = await Promise.all(
-          missionData.map(async (m: any) => {
+        const missionData = (await queryClient.fetchQuery({
+          queryKey: ['/api/missions'],
+        })) as unknown;
+        const missionsArray = Array.isArray(missionData) ? (missionData as Mission[]) : [];
+
+        const missionsWithWaypoints: Mission[] = await Promise.all(
+          missionsArray.map(async (m) => {
             try {
-              const wpResponse = await fetch(`/api/missions/${m.id}/waypoints`);
-              const waypoints = wpResponse.ok ? await wpResponse.json() : [];
-              return { ...m, waypoints };
+              const waypoints = (await queryClient.fetchQuery({
+                queryKey: ['/api/missions', m.id, 'waypoints'],
+              })) as unknown;
+              return { ...m, waypoints: Array.isArray(waypoints) ? (waypoints as Waypoint[]) : [] };
             } catch {
-              return { ...m, waypoints: [] };
+              return { ...m, waypoints: [] as Waypoint[] };
             }
           })
         );
@@ -184,7 +184,7 @@ export function FlightPathOptimizerPanel() {
       }
     };
     fetchMissions();
-  }, []);
+  }, [queryClient]);
 
   useEffect(() => {
     if (selectedMission) return;
@@ -595,21 +595,24 @@ export function FlightPathOptimizerPanel() {
 
       queryClient.invalidateQueries({ queryKey: ['/api/missions'] });
       queryClient.invalidateQueries({ queryKey: ['/api/missions', selectedMission.id, 'waypoints'] });
-      
-      window.dispatchEvent(new CustomEvent('mission-updated', { 
-        detail: { missionId: selectedMission.id } 
+
+      window.dispatchEvent(new CustomEvent('mission-updated', {
+        detail: { missionId: selectedMission.id }
       }));
 
       toast.success("Optimizations applied to mission successfully!");
-      
-      const updatedMissions = await fetch('/api/missions').then(r => r.json());
-      const updatedMission = updatedMissions.find((m: any) => m.id === selectedMission.id);
+
+      const updatedMissionsRaw = (await queryClient.fetchQuery({ queryKey: ['/api/missions'] })) as unknown;
+      const updatedMissions = Array.isArray(updatedMissionsRaw) ? (updatedMissionsRaw as Mission[]) : [];
+      const updatedMission = updatedMissions.find((m) => m.id === selectedMission.id);
       if (updatedMission) {
-        const wpResponse = await fetch(`/api/missions/${updatedMission.id}/waypoints`);
-        const updatedWaypoints = wpResponse.ok ? await wpResponse.json() : [];
-        setSelectedMission({ ...updatedMission, waypoints: updatedWaypoints });
-        setMissions(prev => prev.map(m => 
-          m.id === updatedMission.id ? { ...m, waypoints: updatedWaypoints } : m
+        const updatedWaypointsRaw = (await queryClient.fetchQuery({
+          queryKey: ['/api/missions', updatedMission.id, 'waypoints'],
+        })) as unknown;
+        const waypoints: Waypoint[] = Array.isArray(updatedWaypointsRaw) ? (updatedWaypointsRaw as Waypoint[]) : [];
+        setSelectedMission({ ...updatedMission, waypoints });
+        setMissions(prev => prev.map(m =>
+          m.id === updatedMission.id ? { ...m, waypoints } : m
         ));
       }
       

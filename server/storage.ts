@@ -926,7 +926,13 @@ export class FileStorage implements IStorage {
   // Sync data to Google Sheets/Drive
   async syncToGoogle(): Promise<void> {
     if (!this.syncPending) return;
-    
+    // Skip async work when Google integration is not configured (Replit env)
+    const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
+    const hasReplitToken = process.env.REPL_IDENTITY || process.env.WEB_REPL_RENEWAL;
+    if (!hostname || !hasReplitToken) {
+      this.syncPending = false;
+      return;
+    }
     try {
       const sheetsClient = await getGoogleSheetsClient();
       const driveClient = await getGoogleDriveClient();

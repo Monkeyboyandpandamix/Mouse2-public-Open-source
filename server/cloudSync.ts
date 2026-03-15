@@ -56,12 +56,13 @@ export function logCloudErr(err: unknown): void {
   console.error("[cloud sync]", err);
 }
 
-export async function syncCloudDocument(
+/** Internal: Firestore sync, throws on failure. Used by cloudRetryQueue only. */
+export async function syncCloudDocumentImpl(
   collection: string,
   docId: string,
   payload: any,
   meta?: SyncMeta,
-) {
+): Promise<void> {
   const db = getFirebaseAdminDb();
   if (!db) return;
   await db.collection(collection).doc(String(docId)).set(
@@ -73,11 +74,12 @@ export async function syncCloudDocument(
   );
 }
 
-export async function appendCloudDocument(
+/** Internal: direct Firestore add, throws on failure. Used by cloudRetryQueue only. */
+export async function appendCloudDocumentImpl(
   collection: string,
   payload: any,
   meta?: SyncMeta,
-) {
+): Promise<void> {
   const db = getFirebaseAdminDb();
   if (!db) return;
   await db.collection(collection).add({
@@ -86,13 +88,53 @@ export async function appendCloudDocument(
   });
 }
 
-export async function deleteCloudDocument(
-  collection: string,
-  docId: string,
-) {
+/** Internal: direct Firestore delete, throws on failure. Used by cloudRetryQueue only. */
+export async function deleteCloudDocumentImpl(collection: string, docId: string): Promise<void> {
   const db = getFirebaseAdminDb();
   if (!db) return;
   await db.collection(collection).doc(String(docId)).delete();
+}
+
+/** Sync document (merge). On failure, queues for retry when connection is restored. */
+export async function syncCloudDocument(
+  collection: string,
+  docId: string,
+  payload: any,
+  meta?: SyncMeta,
+) {
+  try {
+    await syncCloudDocumentImpl(collection, docId, payload, meta);
+  } catch (err) {
+    logCloudErr(err);
+    const { enqueueCloudOp } = await import("./cloudRetryQueue");
+    await enqueueCloudOp({ type: "sync", collection, docId, payload, meta }).catch(() => {});
+  }
+}
+
+/** Append document. On failure, queues for retry when connection is restored. */
+export async function appendCloudDocument(
+  collection: string,
+  payload: any,
+  meta?: SyncMeta,
+) {
+  try {
+    await appendCloudDocumentImpl(collection, payload, meta);
+  } catch (err) {
+    logCloudErr(err);
+    const { enqueueCloudOp } = await import("./cloudRetryQueue");
+    await enqueueCloudOp({ type: "append", collection, payload, meta }).catch(() => {});
+  }
+}
+
+/** Delete document. On failure, queues for retry when connection is restored. */
+export async function deleteCloudDocument(collection: string, docId: string) {
+  try {
+    await deleteCloudDocumentImpl(collection, docId);
+  } catch (err) {
+    logCloudErr(err);
+    const { enqueueCloudOp } = await import("./cloudRetryQueue");
+    await enqueueCloudOp({ type: "delete", collection, docId }).catch(() => {});
+  }
 }
 
 export async function publishCloudRealtime(channel: string, payload: any, meta?: SyncMeta) {

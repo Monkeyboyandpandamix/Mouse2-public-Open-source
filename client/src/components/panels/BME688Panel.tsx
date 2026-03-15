@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -18,7 +18,9 @@ import {
   Mountain
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useQueryClient } from "@tanstack/react-query";
 import { BME688_THRESHOLDS } from '@shared/schema';
+import { useBME688Read, useBME688Status } from "@/hooks/useBME688";
 
 interface BME688Reading {
   success: boolean;
@@ -48,77 +50,53 @@ interface BME688Status {
   message: string;
 }
 
+function transformToReading(data: any): BME688Reading | null {
+  if (!data?.success) return null;
+  return {
+    success: data.success,
+    simulated: data.simulated,
+    timestamp: data.timestamp,
+    tempC: data.tempC ?? data.temperature_c ?? 0,
+    tempF: data.tempF ?? data.temperature_f ?? 0,
+    humidity: data.humidity ?? 0,
+    pressure: data.pressure ?? 0,
+    gasOhms: data.gasOhms ?? data.gas_resistance ?? 0,
+    altitude: data.altitude ?? 0,
+    iaqScore: data.iaqScore ?? data.iaq_score ?? 0,
+    vocPpm: data.vocPpm ?? data.voc_level ?? 0,
+    vscPpb: data.vscPpb ?? data.vsc_level ?? 0,
+    co2Ppm: data.co2Ppm ?? data.co2_level ?? 0,
+    h2Ppm: data.h2Ppm ?? data.h2_level ?? 0,
+    coPpm: data.coPpm ?? data.co_level ?? 0,
+    ethanolPpm: data.ethanolPpm ?? data.ethanol_level ?? 0,
+    healthRisk: data.healthRisk ?? data.health_risk_level ?? 'GOOD',
+    healthRiskDesc: data.healthRiskDesc ?? data.health_risk_description ?? 'No data available'
+  };
+}
+
 export default function BME688Panel() {
-  const [reading, setReading] = useState<BME688Reading | null>(null);
-  const [status, setStatus] = useState<BME688Status | null>(null);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [history, setHistory] = useState<BME688Reading[]>([]);
 
-  const fetchReading = useCallback(async () => {
-    try {
-      const res = await fetch('/api/bme688/read');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success) {
-          const transformed: BME688Reading = {
-            success: data.success,
-            simulated: data.simulated,
-            timestamp: data.timestamp,
-            tempC: data.tempC ?? data.temperature_c ?? 0,
-            tempF: data.tempF ?? data.temperature_f ?? 0,
-            humidity: data.humidity ?? 0,
-            pressure: data.pressure ?? 0,
-            gasOhms: data.gasOhms ?? data.gas_resistance ?? 0,
-            altitude: data.altitude ?? 0,
-            iaqScore: data.iaqScore ?? data.iaq_score ?? 0,
-            vocPpm: data.vocPpm ?? data.voc_level ?? 0,
-            vscPpb: data.vscPpb ?? data.vsc_level ?? 0,
-            co2Ppm: data.co2Ppm ?? data.co2_level ?? 0,
-            h2Ppm: data.h2Ppm ?? data.h2_level ?? 0,
-            coPpm: data.coPpm ?? data.co_level ?? 0,
-            ethanolPpm: data.ethanolPpm ?? data.ethanol_level ?? 0,
-            healthRisk: data.healthRisk ?? data.health_risk_level ?? 'GOOD',
-            healthRiskDesc: data.healthRiskDesc ?? data.health_risk_description ?? 'No data available'
-          };
-          setReading(transformed);
-          setHistory(prev => [...prev.slice(-29), transformed]);
-        }
-      }
-    } catch (e) {
-      console.error('BME688 read error:', e);
-    }
-  }, []);
+  const { data: rawData, isLoading: readingLoading, refetch } = useBME688Read({
+    refetchInterval: autoRefresh ? 3000 : false,
+  });
+  const { data: status } = useBME688Status();
 
-  const fetchStatus = useCallback(async () => {
-    try {
-      const res = await fetch('/api/bme688/status');
-      if (res.ok) {
-        const data = await res.json();
-        setStatus(data);
-      }
-    } catch (e) {
-      console.error('BME688 status error:', e);
+  const reading = useMemo(() => (rawData ? transformToReading(rawData) : null), [rawData]);
+
+  useEffect(() => {
+    if (reading) {
+      setHistory(prev => [...prev.slice(-29), reading]);
     }
-  }, []);
+  }, [reading?.timestamp]);
 
   const handleManualRefresh = async () => {
-    setLoading(true);
-    await fetchReading();
-    setLoading(false);
+    await queryClient.invalidateQueries({ queryKey: ['/api/bme688/read'] });
+    await refetch();
     toast.success('Sensor data refreshed');
   };
-
-  useEffect(() => {
-    fetchStatus();
-    fetchReading();
-  }, [fetchStatus, fetchReading]);
-
-  useEffect(() => {
-    if (!autoRefresh) return;
-    const interval = setInterval(fetchReading, 3000);
-    return () => clearInterval(interval);
-  }, [autoRefresh, fetchReading]);
 
   const getHealthRiskColor = (risk: string) => {
     switch (risk) {
@@ -181,10 +159,10 @@ export default function BME688Panel() {
             variant="outline"
             size="sm"
             onClick={handleManualRefresh}
-            disabled={loading}
+            disabled={readingLoading}
             data-testid="button-refresh"
           >
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`h-4 w-4 ${readingLoading ? 'animate-spin' : ''}`} />
           </Button>
         </div>
       </div>
@@ -359,7 +337,7 @@ export default function BME688Panel() {
         </>
       )}
 
-      {!reading && !loading && (
+      {!reading && !readingLoading && (
         <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
           <Leaf className="h-12 w-12 mb-4 opacity-50" />
           <p>Waiting for sensor data...</p>

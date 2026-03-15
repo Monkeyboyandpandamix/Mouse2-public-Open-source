@@ -41,6 +41,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { usePermissions } from "@/hooks/usePermissions";
+import { flightSessionsApi } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, AreaChart, Area } from "recharts";
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from "react-leaflet";
 import L from "leaflet";
@@ -49,6 +50,7 @@ import { MapErrorBoundary } from "@/components/map/MapErrorBoundary";
 import { useNoFlyZones } from "@/hooks/useNoFlyZones";
 import { NoFlyZoneOverlay } from "@/components/map/NoFlyZoneOverlay";
 import { NoFlyZoneLegend } from "@/components/map/NoFlyZoneLegend";
+import { reportApiError } from "@/lib/apiErrors";
 
 interface FlightSession {
   id: string;
@@ -174,11 +176,7 @@ export function FlightLogsPanel() {
 
   const { data: flightSessions = [], isLoading: sessionsLoading, refetch: refetchSessions } = useQuery<FlightSession[]>({
     queryKey: ['/api/flight-sessions'],
-    queryFn: async () => {
-      const res = await fetch('/api/flight-sessions');
-      if (!res.ok) return [];
-      return res.json();
-    },
+    queryFn: () => flightSessionsApi.list() as Promise<FlightSession[]>,
     refetchInterval: 30000,
   });
 
@@ -201,10 +199,7 @@ export function FlightLogsPanel() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await fetch(`/api/flight-sessions/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Failed to delete session');
-    },
+    mutationFn: (id: string) => flightSessionsApi.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/flight-sessions'] });
       if (selectedSession?.id === deleteConfirmId) {
@@ -280,7 +275,7 @@ export function FlightLogsPanel() {
       setDataflashLogs(logs);
       toast.success(`Found ${logs.length} DataFlash logs`);
     } catch (e: any) {
-      toast.error(e.message || "Failed to list DataFlash logs");
+      reportApiError(e, "Failed to list DataFlash logs");
     } finally {
       setDataflashBusy(false);
     }
@@ -306,7 +301,7 @@ export function FlightLogsPanel() {
       }
       toast.success(`Downloaded DataFlash log ${logId}`);
     } catch (e: any) {
-      toast.error(e.message || "Failed to download DataFlash log");
+      reportApiError(e, "Failed to download DataFlash log");
     } finally {
       setDataflashBusy(false);
     }
@@ -329,7 +324,7 @@ export function FlightLogsPanel() {
       setAnalysisResult(data.analysis || null);
       toast.success("DataFlash analysis complete");
     } catch (e: any) {
-      toast.error(e.message || "Failed to analyze DataFlash log");
+      reportApiError(e, "Failed to analyze DataFlash log");
     } finally {
       setDataflashBusy(false);
     }
@@ -352,7 +347,7 @@ export function FlightLogsPanel() {
       setReplayResult(data.replay || null);
       toast.success("DataFlash replay generated");
     } catch (e: any) {
-      toast.error(e.message || "Failed to build replay");
+      reportApiError(e, "Failed to build replay");
     } finally {
       setDataflashBusy(false);
     }
@@ -386,7 +381,7 @@ export function FlightLogsPanel() {
       setGeotagReport(data.report || null);
       toast.success(writeExif ? "Geotag + EXIF write complete" : "Geotag analysis complete");
     } catch (e: any) {
-      toast.error(e.message || "Geotag pipeline failed");
+      reportApiError(e, "Geotag pipeline failed");
     } finally {
       setGeotagBusy(false);
     }

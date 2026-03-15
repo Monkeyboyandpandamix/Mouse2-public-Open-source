@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { usePermissions } from "@/hooks/usePermissions";
+import { reportApiError } from "@/lib/apiErrors";
 import { toast } from "sonner";
 import { Compass, SlidersHorizontal, Radio, AlertTriangle, Lock, StopCircle, RefreshCw } from "lucide-react";
 
@@ -95,7 +96,7 @@ export function CalibrationPanel() {
       const res = await fetch("/api/mavlink/calibration/status");
       const data = await res.json();
       if (!res.ok || !data.success) return;
-      setState(data.calibration || state);
+      setState((prev) => (data.calibration && typeof data.calibration === "object" ? data.calibration : prev));
     } catch {
       // ignore polling failures
     }
@@ -105,6 +106,28 @@ export function CalibrationPanel() {
     void refreshStatus();
     const t = window.setInterval(() => void refreshStatus(), 2500);
     return () => window.clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    const onDroneSelected = (e: CustomEvent<{ connectionString?: string }>) => {
+      const conn = e.detail?.connectionString;
+      if (typeof conn === "string" && conn.trim()) setConnectionString(conn.trim());
+    };
+    const onStorage = () => {
+      const saved = localStorage.getItem("mouse_selected_drone");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (parsed?.connectionString) setConnectionString(String(parsed.connectionString).trim());
+        } catch { /* ignore */ }
+      }
+    };
+    window.addEventListener("drone-selected" as any, onDroneSelected);
+    window.addEventListener("storage", onStorage);
+    return () => {
+      window.removeEventListener("drone-selected" as any, onDroneSelected);
+      window.removeEventListener("storage", onStorage);
+    };
   }, []);
 
   const startCalibration = async (mode: CalMode) => {
@@ -120,7 +143,7 @@ export function CalibrationPanel() {
       toast.success(`${CARD_META[mode].title} command sent`);
       await refreshStatus();
     } catch (e: any) {
-      toast.error(e.message || "Calibration failed");
+      reportApiError(e, "Calibration failed");
     } finally {
       setBusy(false);
     }
@@ -139,7 +162,7 @@ export function CalibrationPanel() {
       toast.success("Calibration reset/cancel sent");
       await refreshStatus();
     } catch (e: any) {
-      toast.error(e.message || "Cancel failed");
+      reportApiError(e, "Cancel failed");
     } finally {
       setBusy(false);
     }

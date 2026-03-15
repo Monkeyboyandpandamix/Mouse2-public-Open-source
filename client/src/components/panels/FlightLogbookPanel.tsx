@@ -56,6 +56,8 @@ import { FLIGHT_CATEGORIES } from "@shared/schema";
 import { useNoFlyZones } from "@/hooks/useNoFlyZones";
 import { NoFlyZoneOverlay } from "@/components/map/NoFlyZoneOverlay";
 import { NoFlyZoneLegend } from "@/components/map/NoFlyZoneLegend";
+import { flightSessionsApi } from "@/lib/api";
+import { reportApiError } from "@/lib/apiErrors";
 
 interface FlightSession {
   id: string;
@@ -171,9 +173,11 @@ export function FlightLogbookPanel() {
   const { data: flightSessions = [], isLoading: sessionsLoading, refetch: refetchSessions } = useQuery<FlightSession[]>({
     queryKey: ['/api/flight-sessions'],
     queryFn: async () => {
-      const res = await fetch('/api/flight-sessions');
-      if (!res.ok) return [];
-      return res.json();
+      try {
+        return await flightSessionsApi.list() as FlightSession[];
+      } catch {
+        return [];
+      }
     },
     refetchInterval: 60000,
   });
@@ -182,29 +186,25 @@ export function FlightLogbookPanel() {
     queryKey: ['/api/flight-sessions', selectedSession?.id, 'logs'],
     queryFn: async () => {
       if (!selectedSession?.id) return [];
-      const res = await fetch(`/api/flight-sessions/${selectedSession.id}/logs`);
-      return res.json();
+      try {
+        return await flightSessionsApi.getLogs(selectedSession.id) as FlightLog[];
+      } catch {
+        return [];
+      }
     },
     enabled: !!selectedSession?.id && replayDialog,
   });
 
   const updateMutation = useMutation({
-    mutationFn: async (data: { id: string; updates: Partial<FlightSession> }) => {
-      const res = await fetch(`/api/flight-sessions/${data.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data.updates),
-      });
-      if (!res.ok) throw new Error('Failed to update session');
-      return res.json();
-    },
+    mutationFn: async (data: { id: string; updates: Partial<FlightSession> }) =>
+      flightSessionsApi.update(data.id, data.updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['/api/flight-sessions'] });
       setEditDialog(false);
       toast.success("Flight record updated successfully");
     },
-    onError: () => {
-      toast.error("Failed to update flight record");
+    onError: (error) => {
+      reportApiError(error, "Failed to update flight record");
     }
   });
 

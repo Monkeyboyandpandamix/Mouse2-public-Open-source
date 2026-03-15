@@ -45,8 +45,8 @@ The M.O.U.S.E. drone platform is a complex, feature-rich GCS (Ground Control Sta
 | Issue | Severity | File(s) | Root cause | Fix |
 |-------|----------|---------|------------|-----|
 | **Camera Feeds page: drone streams not connected** | High | `home.tsx` (feeds tab), `VideoFeed.tsx` | "Camera Feeds" tab shows `CameraFeedView` (local webcam only). `VideoFeed` is on Map tab, not Feeds tab. RTSP/stream requires separate config; no end-to-end bridge. | Connect Feeds tab to same VideoFeed or a dedicated stream bridge; document RTSP/HLS/WebRTC requirements. |
-| **FlightPathOptimizerPanel mission sync** | Medium | `FlightPathOptimizerPanel.tsx` | Uses `/api/missions` and updates via POST; may not always refresh MissionPlanningPanel state. Two panels can edit same mission without shared invalidation. | Add `window.dispatchEvent('mission-updated')` or React Query invalidation when optimizer applies changes. |
-| **Storage sync runs even when Google not configured** | Low | `storage.ts` | `syncToGoogle()` returns early if `!sheetsClient && !driveClient`, but `syncPending` can stay true and interval runs every 5 min. `markSyncPending` called on writes; no harm if clients null but wastes ticks. | Check `syncPending` and short-circuit before any async work; or gate interval on config. |
+| **FlightPathOptimizerPanel mission sync** | Medium | `FlightPathOptimizerPanel.tsx` | Uses `/api/missions` and updates via POST; may not always refresh MissionPlanningPanel state. Two panels can edit same mission without shared invalidation. | **FIXED** – Optimizer dispatches `mission-updated` event and invalidates React Query; MissionPlanningPanel listens. |
+| **Storage sync runs even when Google not configured** | Low | `storage.ts` | `syncToGoogle()` returns early if `!sheetsClient && !driveClient`, but `syncPending` can stay true and interval runs every 5 min. | **FIXED** – Early gate when Replit env vars missing; clears syncPending before any async work. |
 
 ---
 
@@ -68,10 +68,10 @@ The M.O.U.S.E. drone platform is a complex, feature-rich GCS (Ground Control Sta
 
 | Item | Severity | Notes |
 |------|----------|-------|
-| **Central typed API client** | Medium | `client/src/lib/api.ts` removed. Components use raw `fetch`. No shared request/response typing or error contract. |
+| ~~Central typed API client~~ | Medium | **DONE** – `client/src/lib/api.ts` has missionsApi, waypointsApi, dronesApi, flightSessionsApi; MissionPlanningPanel, DroneSelectionPanel, FlightLogsPanel use it. |
 | **OpenAPI/contract spec** | Low | No OpenAPI file; contracts inferred from Zod schemas and routes. |
 | **Persistent session store** | High | `activeSessions` is in-memory. Server restart loses sessions; multi-instance deployment not supported. |
-| **MissionPlanningPanel ↔ FlightPathOptimizerPanel invalidation** | Medium | Optimizer can change missions; MissionPlanningPanel may show stale data until manual refresh. |
+| ~~MissionPlanningPanel ↔ FlightPathOptimizerPanel invalidation~~ | Medium | **FIXED** – Optimizer dispatches mission-updated; MissionPlanningPanel listens and invalidates. |
 | **E2E tests for critical flows** | Medium | `tests/critical/*` cover authStore, commandService, pluginToolRunner, offlineSyncIdempotency. No E2E for mission execute, fence upload, calibration. |
 | **Explicit rate limiting on commands** | Low | No per-user or per-connection rate limit on `/api/commands/dispatch` or `/api/mavlink/vehicle/action`. |
 
@@ -123,7 +123,7 @@ The M.O.U.S.E. drone platform is a complex, feature-rich GCS (Ground Control Sta
 | Issue | Severity | Location | Recommendation |
 |-------|----------|----------|----------------|
 | **Monolithic routes.ts** | Medium | `server/routes.ts` | Split into route modules (auth, mavlink, cloud, audio, etc.). |
-| **No typed API layer** | Medium | Client | Introduce `api` module with typed methods for each endpoint. |
+| ~~No typed API layer~~ | Medium | Client | **DONE** – `client/src/lib/api.ts` provides missionsApi, waypointsApi, dronesApi, flightSessionsApi. |
 | **Dual script dirs** | Low | `script/` vs `scripts/` | Clarify: `script/build.ts` for build; `scripts/` for Python tools. |
 | **Multiple sources of truth for "selected drone"** | Medium | localStorage `mouse_selected_drone`, TopBar, DroneSelectionPanel | Already centralized via events; ensure all consumers use `drone-selected` and not just localStorage. |
 | **Geofence vs airspace naming** | Low | GeofencingPanel, useNoFlyZones, airspace API | Geofence = user-defined zones (localStorage + FC). Airspace = external (OpenAIP, TFR). Document in code/README. |
@@ -135,7 +135,7 @@ The M.O.U.S.E. drone platform is a complex, feature-rich GCS (Ground Control Sta
 
 | Risk | Severity | Location | Root cause | Fix |
 |------|----------|----------|------------|-----|
-| **Silent fetch failures** | Medium | Multiple | `.catch(() => {})` in useDeviceContext, useOfflineSync, TopBar, SpeakerPanel, SettingsPanel, firebaseAdmin. | Replace with `.catch(err => console.warn("[context]", err))` or similar for diagnostics. |
+| **Silent fetch failures** | Medium | Multiple | `.catch(() => {})` in useDeviceContext, useOfflineSync, TopBar, SpeakerPanel, SettingsPanel. | **FIXED** – useDeviceContext, useOfflineSync log; VideoFeed mapping backend logs; remaining `.catch(() => ({}))` for JSON parse only. |
 | **Mission run poll stops without clear UX** | Medium | `MissionPlanningPanel.tsx` | After 3 failures, `toast.error`; interval keeps running. `setActiveRunId(null)` clears. Ensure interval cleaned when `activeRunId` null. | Verify `useEffect` cleanup clears interval when `activeRunId` becomes null. |
 | **Audio output select debounce** | Low | `SpeakerPanel.tsx` | Single debounced effect; races possible if user changes device rapidly. | 150ms debounce in place; consider 300ms if duplicates observed. |
 | **Cloud sync errors** | Fixed | `server/routes.ts`, `cloudSync.ts` | Now uses `logCloudErr` instead of `.catch(() => {})`. | None. |
@@ -146,7 +146,7 @@ The M.O.U.S.E. drone platform is a complex, feature-rich GCS (Ground Control Sta
 
 ## K. High-Priority Fixes
 
-1. **Replace remaining silent `.catch(() => {})`** in frontend (useDeviceContext, useOfflineSync, TopBar, SpeakerPanel, SettingsPanel) with logging.
+1. ~~Replace remaining silent `.catch(() => {})`~~ **DONE** – useDeviceContext, useOfflineSync, VideoFeed log; logWarn in lib/logErr.ts available.
 2. **Persistent session store** – Redis or DB for `activeSessions` before multi-instance or production.
 3. **Mission / Optimizer invalidation** – When FlightPathOptimizerPanel applies changes, invalidate MissionPlanningPanel (event or query invalidation).
 4. **Camera Feeds tab** – Either wire to real stream bridge or clearly label as "Local Preview Only"; document RTSP/WebRTC path.
@@ -173,11 +173,11 @@ The M.O.U.S.E. drone platform is a complex, feature-rich GCS (Ground Control Sta
 |---|-------|----------|
 | 1 | Session store in memory | Critical |
 | 2 | Camera Feeds tab not wired to drone streams | High |
-| 3 | Silent `.catch(() => {})` in frontend | High |
-| 4 | MissionPlanningPanel ↔ FlightPathOptimizerPanel no invalidation | Medium |
+| 3 | ~~Silent `.catch(() => {})` in frontend~~ | **FIXED** |
+| 4 | ~~MissionPlanningPanel ↔ FlightPathOptimizerPanel no invalidation~~ | **FIXED** |
 | 5 | TelemetryPanel triple polling | Medium |
 | 6 | Mission run poll cleanup on unmount | Medium |
-| 7 | Storage sync interval when Google not configured | Low |
+| 7 | ~~Storage sync interval when Google not configured~~ | **FIXED** |
 | 8 | Plugin/exec security audit | Medium |
 
 ---
@@ -185,9 +185,9 @@ The M.O.U.S.E. drone platform is a complex, feature-rich GCS (Ground Control Sta
 ## Appendix 2: Missing Implementations List
 
 - Persistent session store
-- Typed API client
+- ~~Typed API client~~ **DONE** – api.ts with missionsApi, waypointsApi, dronesApi, flightSessionsApi
 - OpenAPI spec
-- Mission/waypoint cache invalidation between panels
+- ~~Mission/waypoint cache invalidation between panels~~ **FIXED** – mission-updated event
 - E2E tests for mission, fence, calibration
 - Rate limiting on command APIs
 - `beforeunload` handler for flight session
@@ -243,12 +243,13 @@ The M.O.U.S.E. drone platform is a complex, feature-rich GCS (Ground Control Sta
 
 ## Appendix 7: Code Paths That May Fail Silently
 
-- `useDeviceContext` fetch `/api/runtime-config` – `.catch(() => {})`
-- `useOfflineSync` backlog fetch – `.catch(() => {})`
-- `TopBar` session/logout – `.catch(() => {})`
-- `SettingsPanel` fetchEvents – `.catch(() => {})`
-- `SpeakerPanel` loadAudioStatus, live/stop, session join/leave, drone-mic – multiple `.catch(() => {})`
-- `firebaseAdmin` app delete – `.catch(() => {})`
+- ~~`useDeviceContext` fetch `/api/runtime-config`~~ **FIXED** – logs on catch
+- ~~`useOfflineSync` backlog fetch~~ **FIXED** – logs + toast on failure
+- `TopBar` session/logout – uses `.catch(() => ({}))` for JSON parse fallback; fetch errors handled
+- `SettingsPanel` fetchEvents – uses `.catch(() => ({}))` for JSON parse fallback
+- `SpeakerPanel` – uses `.catch(() => ({}))` for JSON parse fallback
+- ~~`VideoFeed` mapping backend~~ **FIXED** – console.warn on catch
+- `firebaseAdmin` app delete – server-side; low priority
 - Mission run poll – after 3 failures shows toast but continues polling
 
 ---

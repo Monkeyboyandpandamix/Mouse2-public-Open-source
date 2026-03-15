@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { cn } from "@/lib/utils";
+import { useTelemetry } from "@/contexts/TelemetryContext";
 
 interface TelemetryState {
   altitude: number;
@@ -74,46 +75,46 @@ export function ARHudOverlay({ visible, gimbalPitch = -45, gimbalYaw = 0, detect
 
   const prevAltRef = useRef(0);
   const prevTimeRef = useRef(Date.now());
+  const rawTelemetry = useTelemetry();
 
-  const handleTelemetry = useCallback((e: Event) => {
-    const data = (e as CustomEvent).detail;
+  useEffect(() => {
+    if (!rawTelemetry) return;
+    const data = rawTelemetry as Record<string, unknown>;
     const now = Date.now();
     const dt = (now - prevTimeRef.current) / 1000;
     prevTimeRef.current = now;
 
     setTelemetry(prev => {
-      const newAlt = data.altitude ?? prev.altitude;
+      const newAlt = (data.altitude as number) ?? prev.altitude;
       const vs = dt > 0 ? (newAlt - prevAltRef.current) / dt : prev.verticalSpeed;
       prevAltRef.current = newAlt;
+      const att = data.attitude as { pitch?: number; roll?: number; yaw?: number } | undefined;
+      const pos = data.position as { lat?: number; lng?: number } | undefined;
+      const home = data.homePosition as { lat?: number; lng?: number } | undefined;
 
       return {
         altitude: newAlt,
-        groundSpeed: data.groundSpeed ?? data.speed ?? prev.groundSpeed,
-        heading: data.heading ?? data.yaw ?? prev.heading,
-        pitch: data.attitude?.pitch ?? prev.pitch,
-        roll: data.attitude?.roll ?? prev.roll,
-        yaw: data.attitude?.yaw ?? prev.yaw,
-        latitude: data.position?.lat ?? data.latitude ?? prev.latitude,
-        longitude: data.position?.lng ?? data.longitude ?? prev.longitude,
-        batteryPercent: data.batteryPercent ?? prev.batteryPercent,
-        batteryVoltage: data.batteryVoltage ?? prev.batteryVoltage,
-        gpsSatellites: data.gpsSatellites ?? prev.gpsSatellites,
-        gpsStatus: data.gpsStatus ?? prev.gpsStatus,
-        flightMode: data.flightMode ?? prev.flightMode,
-        homeLatitude: data.homePosition?.lat ?? prev.homeLatitude,
-        homeLongitude: data.homePosition?.lng ?? prev.homeLongitude,
+        groundSpeed: (data.groundSpeed as number) ?? (data.speed as number) ?? prev.groundSpeed,
+        heading: (data.heading as number) ?? (data.yaw as number) ?? prev.heading,
+        pitch: att?.pitch ?? prev.pitch,
+        roll: att?.roll ?? prev.roll,
+        yaw: att?.yaw ?? prev.yaw,
+        latitude: pos?.lat ?? (data.latitude as number) ?? prev.latitude,
+        longitude: pos?.lng ?? (data.longitude as number) ?? prev.longitude,
+        batteryPercent: (data.batteryPercent as number) ?? prev.batteryPercent,
+        batteryVoltage: (data.batteryVoltage as number) ?? prev.batteryVoltage,
+        gpsSatellites: (data.gpsSatellites as number) ?? prev.gpsSatellites,
+        gpsStatus: (data.gpsStatus as string) ?? prev.gpsStatus,
+        flightMode: (data.flightMode as string) ?? prev.flightMode,
+        homeLatitude: home?.lat ?? prev.homeLatitude,
+        homeLongitude: home?.lng ?? prev.homeLongitude,
         verticalSpeed: Math.abs(vs) < 0.05 ? 0 : vs,
-        airSpeed: data.airSpeed ?? prev.airSpeed,
-        windSpeed: data.windSpeed ?? prev.windSpeed,
-        windDirection: data.windDirection ?? prev.windDirection,
+        airSpeed: (data.airSpeed as number) ?? prev.airSpeed,
+        windSpeed: (data.windSpeed as number) ?? prev.windSpeed,
+        windDirection: (data.windDirection as number) ?? prev.windDirection,
       };
     });
-  }, []);
-
-  useEffect(() => {
-    window.addEventListener("telemetry-update", handleTelemetry);
-    return () => window.removeEventListener("telemetry-update", handleTelemetry);
-  }, [handleTelemetry]);
+  }, [rawTelemetry]);
 
   useEffect(() => {
     const handleCommandAck = (e: Event) => {

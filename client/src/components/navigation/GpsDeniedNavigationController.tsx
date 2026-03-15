@@ -45,6 +45,8 @@ const DEFAULT_CONFIG: GpsDeniedConfig = {
 
 const EARTH_RADIUS_M = 6371000;
 const MAX_BREADCRUMBS = 500;
+const BREADCRUMB_PERSIST_KEY = "mouse_gps_denied_breadcrumbs";
+const BREADCRUMB_MAX_AGE_MS = 6 * 60 * 60 * 1000; // 6h - restore only if from current/recent flight
 
 function metersToLatLonDelta(northM: number, eastM: number, atLat: number) {
   const dLat = (northM / EARTH_RADIUS_M) * (180 / Math.PI);
@@ -65,6 +67,25 @@ export function GpsDeniedNavigationController() {
   const lastVioRef = useRef<VisualOdomUpdate | null>(null);
   const backtraceIndexRef = useRef<number | null>(null);
   const backtraceLastStepTsRef = useRef<number>(0);
+  const lastPersistedLenRef = useRef<number>(0);
+  const lastPersistTsRef = useRef<number>(0);
+
+  // Restore breadcrumbs from localStorage on mount (only if from current/recent flight)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(BREADCRUMB_PERSIST_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { breadcrumbs?: Pose[]; savedAt?: number };
+      const bc = Array.isArray(parsed?.breadcrumbs) ? parsed.breadcrumbs : [];
+      const savedAt = Number(parsed?.savedAt || 0);
+      if (bc.length < 2 || Date.now() - savedAt > BREADCRUMB_MAX_AGE_MS) return;
+      breadcrumbsRef.current = bc.slice(-MAX_BREADCRUMBS);
+      const last = bc[bc.length - 1];
+      if (last && !poseRef.current) poseRef.current = last;
+    } catch {
+      // ignore invalid stored data
+    }
+  }, []);
 
   useEffect(() => {
     const loadConfig = () => {
@@ -243,6 +264,26 @@ export function GpsDeniedNavigationController() {
           backtraceIndexRef.current = idx > 0 ? idx - 1 : null;
         } else {
           backtraceIndexRef.current = null;
+        }
+      }
+
+      // Persist breadcrumbs for return-path survival across page refresh/restart (GPS-denied RTH)
+      const bc = breadcrumbsRef.current;
+      if (bc.length >= 2) {
+        const lenChanged = bc.length !== lastPersistedLenRef.current;
+        const persistInterval = 3000;
+        const shouldPersist = lenChanged || now - lastPersistTsRef.current > persistInterval;
+        if (shouldPersist) {
+          try {
+            localStorage.setItem(
+              BREADCRUMB_PERSIST_KEY,
+              JSON.stringify({ breadcrumbs: bc, savedAt: now }),
+            );
+            lastPersistedLenRef.current = bc.length;
+            lastPersistTsRef.current = now;
+          } catch {
+            // ignore quota/access errors
+          }
         }
       }
 

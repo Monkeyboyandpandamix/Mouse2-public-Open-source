@@ -8,6 +8,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { reportApiError } from "@/lib/apiErrors";
 import { Lock, Plus, Trash2, Users2 } from "lucide-react";
 import type { Drone } from "@shared/schema";
 
@@ -127,7 +128,7 @@ export function SwarmOpsPanel() {
       setResults(list);
       toast.success(`Sync ${syncAction} complete`);
     } catch (e: any) {
-      toast.error(e.message || "Sync action failed");
+      reportApiError(e, "Sync action failed");
     } finally {
       setBusy(false);
     }
@@ -158,7 +159,7 @@ export function SwarmOpsPanel() {
       setFormationSlots(Array.isArray(data.slots) ? data.slots : []);
       toast.success(`Built ${data.formation} formation plan`);
     } catch (e: any) {
-      toast.error(e.message || "Formation planning failed");
+      reportApiError(e, "Formation planning failed");
     } finally {
       setBusy(false);
     }
@@ -190,7 +191,7 @@ export function SwarmOpsPanel() {
       setFormationMissions(Array.isArray(data.missions) ? data.missions : []);
       toast.success(`Generated ${data.count} formation missions`);
     } catch (e: any) {
-      toast.error(e.message || "Formation mission generation failed");
+      reportApiError(e, "Formation mission generation failed");
     } finally {
       setBusy(false);
     }

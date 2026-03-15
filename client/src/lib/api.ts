@@ -36,45 +36,71 @@ async function apiFetch<T = unknown>(
   return res.json() as Promise<T>;
 }
 
-// Missions
+// Missions (GET /api/missions returns array directly)
 export const missionsApi = {
-  list: () => apiFetch<{ missions: unknown[] }>("/api/missions"),
+  list: () => apiFetch<unknown[]>("/api/missions"),
   get: (id: string) =>
-    apiFetch<{ mission: unknown }>(`/api/missions/${id}`),
+    apiFetch<unknown>(`/api/missions/${id}`),
   create: (data: unknown) =>
-    apiFetch<{ mission: unknown }>("/api/missions", {
+    apiFetch<unknown>("/api/missions", {
       method: "POST",
       body: JSON.stringify(data),
     }),
   update: (id: string, data: unknown) =>
-    apiFetch<{ mission: unknown }>(`/api/missions/${id}`, {
+    apiFetch<unknown>(`/api/missions/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
   delete: (id: string) =>
     apiFetch<{ success: boolean }>(`/api/missions/${id}`, { method: "DELETE" }),
-  execute: (id: string) =>
-    apiFetch<{ success: boolean; run?: unknown }>(`/api/missions/${id}/execute`, {
+  execute: (id: string, options?: { connectionString?: string; armBeforeStart?: boolean; routePolicy?: unknown }) =>
+    apiFetch<{ success: boolean; run?: { id: string; status?: string; error?: string } }>(`/api/missions/${id}/execute`, {
+      method: "POST",
+      body: JSON.stringify(options ?? {}),
+    }),
+  stopRun: (runId: string) =>
+    apiFetch<{ success: boolean; run?: unknown }>(`/api/missions/runs/${runId}/stop`, {
       method: "POST",
     }),
+  getRun: (runId: string) =>
+    apiFetch<{ success: boolean; run?: { id: string; status?: string; error?: string } }>(`/api/missions/runs/${runId}`),
 };
 
-// Waypoints
+// Waypoints (GET /api/missions/:id/waypoints returns array directly)
 export const waypointsApi = {
   list: (missionId: string) =>
-    apiFetch<{ waypoints: unknown[] }>(`/api/missions/${missionId}/waypoints`),
+    apiFetch<unknown[]>(`/api/missions/${missionId}/waypoints`),
   create: (data: unknown) =>
-    apiFetch<{ waypoint: unknown }>("/api/waypoints", {
+    apiFetch<unknown>("/api/waypoints", {
       method: "POST",
       body: JSON.stringify(data),
     }),
   update: (id: string, data: unknown) =>
-    apiFetch<{ waypoint: unknown }>(`/api/waypoints/${id}`, {
+    apiFetch<unknown>(`/api/waypoints/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
   delete: (id: string) =>
     apiFetch<{ success: boolean }>(`/api/waypoints/${id}`, { method: "DELETE" }),
+};
+
+// Drones (GET /api/drones returns array directly)
+export const dronesApi = {
+  list: () => apiFetch<unknown[]>("/api/drones"),
+  get: (id: string) =>
+    apiFetch<unknown>(`/api/drones/${id}`),
+  create: (data: unknown) =>
+    apiFetch<unknown>("/api/drones", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  update: (id: string, data: unknown) =>
+    apiFetch<unknown>(`/api/drones/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
+  delete: (id: string) =>
+    apiFetch<{ success: boolean }>(`/api/drones/${id}`, { method: "DELETE" }),
 };
 
 // Commands
@@ -93,6 +119,13 @@ export const commandsApi = {
 
 // Flight sessions
 export const flightSessionsApi = {
+  list: () => apiFetch<unknown[]>("/api/flight-sessions"),
+  getActive: (droneId: string) =>
+    apiFetch<{ session?: { id: string; startTime: string } }>(
+      `/api/flight-sessions/active?droneId=${encodeURIComponent(droneId)}`
+    ),
+  getLogs: (sessionId: string) =>
+    apiFetch<unknown[]>(`/api/flight-sessions/${sessionId}/logs`),
   start: (droneId: string) =>
     apiFetch<{ success: boolean; session?: { id: string } }>(
       "/api/flight-sessions/start",
@@ -109,6 +142,13 @@ export const flightSessionsApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  update: (id: string, updates: Record<string, unknown>) =>
+    apiFetch<unknown>(`/api/flight-sessions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(updates),
+    }),
+  delete: (id: string) =>
+    apiFetch<{ success: boolean }>(`/api/flight-sessions/${id}`, { method: "DELETE" }),
 };
 
 // Generic fetch for untyped endpoints

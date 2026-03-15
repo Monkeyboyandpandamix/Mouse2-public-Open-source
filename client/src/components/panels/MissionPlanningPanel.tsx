@@ -19,6 +19,8 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { useNoFlyZones } from "@/hooks/useNoFlyZones";
 import { segmentIntersectsNoFlyZones } from "@/lib/noFlyZones";
 import type { NoFlyZone } from "@/lib/noFlyZones";
+import { missionsApi, waypointsApi } from "@/lib/api";
+import { reportApiError } from "@/lib/apiErrors";
 
 interface Mission {
   id: string;
@@ -279,28 +281,17 @@ export function MissionPlanningPanel() {
   });
   const getNextWaypointOrder = () => orderedWaypoints.reduce((max, wp) => Math.max(max, wp.order || 0), 0) + 1;
 
-  const createMission = useMutation({
-    mutationFn: async (mission: any) => {
-      const res = await fetch("/api/missions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(mission),
-      });
-      if (!res.ok) throw new Error("Failed to create mission");
-      return res.json();
-    },
+  const createMission = useMutation<{ id: string }, Error, any>({
+    mutationFn: async (mission: any) => missionsApi.create(mission) as Promise<{ id: string }>,
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/missions"] });
-      setSelectedMission(data.id);
+      if (data?.id) setSelectedMission(String(data.id));
       toast.success("Mission created");
     },
   });
 
   const deleteMission = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await fetch(`/api/missions/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete mission");
-    },
+    mutationFn: async (id: string) => missionsApi.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/missions"] });
       setSelectedMission(null);
@@ -310,22 +301,15 @@ export function MissionPlanningPanel() {
   });
 
   const saveMission = useMutation({
-    mutationFn: async (mission: Mission) => {
-      const res = await fetch(`/api/missions/${mission.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: mission.name,
-          description: mission.description,
-          homeLatitude: mission.homeLatitude,
-          homeLongitude: mission.homeLongitude,
-          homeAltitude: mission.homeAltitude,
-          status: mission.status,
-        }),
-      });
-      if (!res.ok) throw new Error("Failed to save mission");
-      return res.json();
-    },
+    mutationFn: async (mission: Mission) =>
+      missionsApi.update(mission.id, {
+        name: mission.name,
+        description: mission.description,
+        homeLatitude: mission.homeLatitude,
+        homeLongitude: mission.homeLongitude,
+        homeAltitude: mission.homeAltitude,
+        status: mission.status,
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/missions"] });
       if (selectedMission) {
@@ -339,50 +323,23 @@ export function MissionPlanningPanel() {
   });
 
   const updateWaypoint = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: any }) => {
-      const res = await fetch(`/api/waypoints/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) throw new Error("Failed to update waypoint");
-      return res.json();
-    },
+    mutationFn: async ({ id, data }: { id: string; data: any }) => waypointsApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/missions", selectedMission, "waypoints"] });
     },
   });
 
   const deleteWaypoint = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await fetch(`/api/waypoints/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete waypoint");
-    },
+    mutationFn: async (id: string) => waypointsApi.delete(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/missions", selectedMission, "waypoints"] });
       toast.success("Waypoint removed");
     },
   });
 
-  const createWaypointDirect = async (payload: any) => {
-    const res = await fetch("/api/waypoints", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      throw new Error("Failed to add waypoint");
-    }
-  };
+  const createWaypointDirect = async (payload: any) => waypointsApi.create(payload);
 
-  const patchWaypointDirect = async (id: string, data: any) => {
-    const res = await fetch(`/api/waypoints/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
-    if (!res.ok) throw new Error("Failed to update waypoint");
-  };
+  const patchWaypointDirect = async (id: string, data: any) => waypointsApi.update(id, data);
 
   const metersToLat = (meters: number) => meters / 111320;
   const metersToLng = (meters: number, atLat: number) => meters / (111320 * Math.cos((atLat * Math.PI) / 180));
@@ -957,22 +914,17 @@ export function MissionPlanningPanel() {
         toast.error("Please provide an override reason (min 10 characters) for audit when bypassing no-fly zones");
         return;
       }
-      const response = await fetch(`/api/missions/${selectedMissionData.id}/execute`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          connectionString: fcConnectionString,
-          armBeforeStart: false,
-          routePolicy: {
-            overrideNoFlyRestrictions,
-            overrideReason: overrideReason.trim(),
-            partTimeRestrictionsActive: partTimeRestrictedZones.length > 0,
-          },
-        }),
+      const data = await missionsApi.execute(selectedMissionData.id, {
+        connectionString: fcConnectionString,
+        armBeforeStart: false,
+        routePolicy: {
+          overrideNoFlyRestrictions,
+          overrideReason: overrideReason.trim(),
+          partTimeRestrictionsActive: partTimeRestrictedZones.length > 0,
+        },
       });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data?.success || !data?.run?.id) {
-        throw new Error(data?.error || data?.run?.error || "Mission execution failed");
+      if (!data?.success || !data?.run?.id) {
+        throw new Error(data?.run?.error || "Mission execution failed");
       }
       setActiveRunId(data.run.id);
       toast.success(`Executing mission: ${selectedMissionData.name}`, {
@@ -981,7 +933,7 @@ export function MissionPlanningPanel() {
     } catch (error) {
       setIsExecuting(false);
       setActiveRunId(null);
-      toast.error(error instanceof Error ? error.message : "Mission execution failed");
+      reportApiError(error, "Mission execution failed");
     }
   };
 
@@ -991,18 +943,13 @@ export function MissionPlanningPanel() {
       return;
     }
     try {
-      const response = await fetch(`/api/missions/runs/${activeRunId}/stop`, {
-        method: "POST",
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data?.success) {
-        throw new Error(data?.error || data?.run?.error || "Failed to stop mission");
-      }
+      const data = await missionsApi.stopRun(activeRunId);
+      if (!data?.success) throw new Error("Failed to stop mission");
       setIsExecuting(false);
       setActiveRunId(null);
       toast.info("Mission stop acknowledged");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to stop mission");
+      reportApiError(error, "Failed to stop mission");
     }
   };
 
@@ -1011,9 +958,8 @@ export function MissionPlanningPanel() {
     let pollFailures = 0;
     const timer = window.setInterval(async () => {
       try {
-        const response = await fetch(`/api/missions/runs/${activeRunId}`);
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok || !data?.run) {
+        const data = await missionsApi.getRun(activeRunId);
+        if (!data?.run) {
           pollFailures += 1;
           if (pollFailures >= 3) {
             toast.error("Mission status polling failed repeatedly");
@@ -1080,8 +1026,8 @@ export function MissionPlanningPanel() {
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error || "Mission upload failed");
       toast.success(`Mission uploaded to FC (${data.uploadedItems || 0} items)`);
-    } catch (e: any) {
-      toast.error(e.message || "Mission upload failed");
+    } catch (e) {
+      reportApiError(e, "Mission upload failed");
     } finally {
       setSyncBusy(false);
     }
@@ -1128,7 +1074,7 @@ export function MissionPlanningPanel() {
       queryClient.invalidateQueries({ queryKey: ["/api/missions", selectedMission, "waypoints"] });
       toast.success(`Downloaded ${list.length} waypoints from FC`);
     } catch (e: any) {
-      toast.error(e.message || "Mission download failed");
+      reportApiError(e, "Mission download failed");
     } finally {
       setSyncBusy(false);
     }
@@ -1159,7 +1105,7 @@ export function MissionPlanningPanel() {
       if (!res.ok || !data.success) throw new Error(data.error || "Rally upload failed");
       toast.success(`Uploaded ${data.uploadedRallyPoints || 0} rally point(s)`);
     } catch (e: any) {
-      toast.error(e.message || "Rally upload failed");
+      reportApiError(e, "Rally upload failed");
     } finally {
       setSyncBusy(false);
     }
@@ -1189,7 +1135,7 @@ export function MissionPlanningPanel() {
       });
       toast.success("Mission home updated from FC rally point");
     } catch (e: any) {
-      toast.error(e.message || "Rally download failed");
+      reportApiError(e, "Rally download failed");
     } finally {
       setSyncBusy(false);
     }

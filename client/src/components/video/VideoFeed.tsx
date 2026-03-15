@@ -778,9 +778,7 @@ export function VideoFeed() {
             isMoving: obj.isMoving,
           })),
         }),
-      }).catch(() => {
-        // Mapping backend can be offline; video feed should continue.
-      });
+      }).catch(logWarn("VideoFeed-mapping"));
     }
     
     prevFrameRef.current = currentFrame;

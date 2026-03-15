@@ -5,7 +5,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { spawn } from "child_process";
 import { existsSync, mkdirSync } from "fs";
 import { randomBytes } from "crypto";
-import { readFile, writeFile, appendFile, mkdir, readdir, chmod } from "fs/promises";
+import { readFile, writeFile, appendFile, mkdir, readdir, chmod, stat, unlink } from "fs/promises";
 import path from "path";
 import os from "os";
 import net from "net";
@@ -91,6 +91,7 @@ import {
   syncCloudDocument,
   uploadCloudStorageObject,
 } from "./cloudSync";
+import { startCloudRetryQueue } from "./cloudRetryQueue";
 import { getFirebaseAdminDb, getFirebaseAdminRtdb, getFirebaseAdminStorage, resetFirebaseAdminApp } from "./firebaseAdmin";
 import {
   getSession,
@@ -891,7 +892,43 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
   await loadRuntimeState();
-  
+  startCloudRetryQueue();
+
+  // DataFlash 48-hour cleanup: remove GROUND-STATION copies only.
+  // These are .bin files downloaded from the FC for post-flight analysis. The flight controller
+  // (Pixhawk/ArduPilot) keeps its own DataFlash logs on the FC's SD card — we never touch those.
+  // This cleanup does NOT affect: flight_logs, sensor_data, telemetry, or any data used by
+  // GPS-denied navigation, dead reckoning, or return-to-home. The drone's local onboard storage
+  // (FC SD card) is entirely independent and retains all flight data for GPS-denied operation.
+  const DATAFLASH_AGE_MS = 48 * 60 * 60 * 1000;
+  const dataflashLogsDir = path.resolve(process.env.DATA_DIR || "./data", "dataflash");
+  const runDataflashCleanup = async () => {
+    try {
+      if (!existsSync(dataflashLogsDir)) return;
+      const files = await readdir(dataflashLogsDir);
+      const cutoff = Date.now() - DATAFLASH_AGE_MS;
+      let removed = 0;
+      for (const name of files) {
+        if (!name.endsWith(".bin")) continue;
+        const fp = path.join(dataflashLogsDir, name);
+        try {
+          const s = await stat(fp);
+          if (s.mtimeMs < cutoff) {
+            await unlink(fp);
+            removed++;
+          }
+        } catch {
+          // skip unreadable or missing files
+        }
+      }
+      if (removed > 0) console.log(`[dataflash-cleanup] removed ${removed} log(s) older than 48h`);
+    } catch (err) {
+      console.warn("[dataflash-cleanup]", (err as any)?.message || err);
+    }
+  };
+  setInterval(() => void runDataflashCleanup(), 60 * 60 * 1000);
+  void runDataflashCleanup();
+
   // WebSocket server for real-time telemetry streaming
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
   
@@ -3569,6 +3606,12 @@ export async function registerRoutes(
       }
       if (action === "set_mode" && !mode) {
         return res.status(400).json({ success: false, error: "mode is required for set_mode" });
+      }
+      if (action === "takeoff") {
+        const alt = Number(req.body?.altitude ?? 20);
+        if (!Number.isFinite(alt) || alt <= 0) {
+          return res.status(400).json({ success: false, error: "altitude must be a positive number for takeoff" });
+        }
       }
       const altitude = Number(req.body?.altitude ?? 20);
       const pitch = Number(req.body?.pitch ?? -45);
@@ -6488,14 +6531,29 @@ export async function registerRoutes(
       providerUrl.searchParams.set("bbox", `${bbox.minLng},${bbox.minLat},${bbox.maxLng},${bbox.maxLat}`);
       providerUrl.searchParams.set("limit", "250");
 
-      const providerResp = await fetch(providerUrl.toString(), {
-        headers: {
-          "Accept": "application/json",
-          "User-Agent": "MOUSE-GCS/1.0 (Ground Control Station)",
-          "x-openaip-api-key": apiKey,
-          "apiKey": apiKey,
-        },
-      });
+      let providerResp: Response;
+      try {
+        providerResp = await fetch(providerUrl.toString(), {
+          headers: {
+            "Accept": "application/json",
+            "User-Agent": "MOUSE-GCS/1.0 (Ground Control Station)",
+            "x-openaip-api-key": apiKey,
+            "apiKey": apiKey,
+          },
+          signal: AbortSignal.timeout(8000),
+        });
+      } catch (networkErr) {
+        // Offline / network-denied — return empty zones so client can operate
+        console.warn("[airspace] Provider unreachable (offline):", (networkErr as Error)?.message);
+        return res.json({
+          provider: "openaip",
+          configured: true,
+          offline: true,
+          bbox: bbox!,
+          zones: [],
+          message: "Airspace data unavailable offline; using local/cached zones only",
+        });
+      }
 
       if (!providerResp.ok) {
         const body = await providerResp.text();
@@ -6700,15 +6758,23 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Query parameter 'q' is required" });
       }
 
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`,
-        {
-          headers: {
-            'User-Agent': 'MOUSE-GCS/1.0 (Ground Control Station)',
-            'Accept': 'application/json',
-          },
-        }
-      );
+      let response: Response;
+      try {
+        response = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`,
+          {
+            headers: {
+              'User-Agent': 'MOUSE-GCS/1.0 (Ground Control Station)',
+              'Accept': 'application/json',
+            },
+            signal: AbortSignal.timeout(5000),
+          }
+        );
+      } catch (networkErr) {
+        // Offline / network-denied — return empty so client can continue
+        console.warn("[geocode] Nominatim unreachable (offline):", (networkErr as Error)?.message);
+        return res.json([]);
+      }
 
       if (!response.ok) {
         throw new Error(`Nominatim returned ${response.status}`);
@@ -7036,8 +7102,38 @@ export async function registerRoutes(
   // Drones API
   app.get("/api/drones", async (req, res) => {
     try {
-      const drones = await storage.getAllDrones();
-      res.json(drones);
+      const localDrones = await storage.getAllDrones();
+      if (!cloudSyncEnabled()) {
+        return res.json(localDrones);
+      }
+      try {
+        const cloudDrones = await getRecentCloudDocs("drones", 200);
+        const byId = new Map<string, any>();
+        for (const d of localDrones) {
+          if (d?.id != null) byId.set(String(d.id), { ...d, __source: "local" });
+        }
+        for (const d of cloudDrones) {
+          if (d?.id != null) {
+            const dAny = d as { id: string; __meta?: { updatedAt?: string }; [k: string]: unknown };
+            const cloudUpdated = new Date(dAny?.__meta?.updatedAt || 0).getTime();
+            const existing = byId.get(String(d.id));
+            const localUpdated = existing?.__source === "local" ? (existing?.updatedAt ? new Date(existing.updatedAt).getTime() : 0) : 0;
+            if (!existing || cloudUpdated >= localUpdated) {
+              const { __meta, ...rest } = dAny;
+              byId.set(String(d.id), rest);
+            }
+          }
+        }
+        const merged = Array.from(byId.values()).map((d) => {
+          const { __source, ...rest } = d;
+          return rest;
+        });
+        return res.json(merged);
+      } catch (cloudErr) {
+        // Cloud unreachable (offline/network-denied): return local drones only
+        logCloudErr(cloudErr);
+        return res.json(localDrones);
+      }
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch drones" });
     }

@@ -510,20 +510,15 @@ export default function Home() {
           <div className="flex-1 relative bg-background p-3 sm:p-6 overflow-auto">
             <div className="flex items-center gap-3 mb-3">
               <h2 className="text-xl sm:text-2xl font-bold">Camera Feeds & 3D Mapping</h2>
-              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/50">
-                LOCAL PREVIEW ONLY
+              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/50">
+                DRONE FEED PIPELINE
               </span>
             </div>
             <p className="text-xs text-muted-foreground mb-3">
-              Tiles show your laptop/device camera. Configure RTSP or a stream bridge for real drone feeds.
+              Feeds use the same camera module as map view, including gimbal/thermal modes and RTSP stream configuration.
             </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-              <div className="bg-black rounded-lg border-2 border-primary/50 aspect-video flex items-center justify-center relative overflow-hidden">
-                <CameraFeedView label="GIMBAL CAM" sublabel="2K HD (2560x1440)" borderColor="border-primary/50" />
-              </div>
-              <div className="bg-black rounded-lg border-2 border-amber-500/50 aspect-video flex items-center justify-center relative overflow-hidden">
-                <CameraFeedView label="THERMAL" sublabel="384x288 IR" borderColor="border-amber-500/50" />
-              </div>
+            <div className="relative min-h-[320px] sm:min-h-[460px] rounded-lg border-2 border-primary/40 bg-black/90 overflow-hidden">
+              <VideoFeed />
             </div>
             
             {/* 3D Mapping Section */}

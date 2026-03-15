@@ -6,7 +6,9 @@ import { ArrowUp, Navigation, Gauge, Thermometer, Zap, Activity, AlertTriangle }
 import { AttitudeIndicator } from "./AttitudeIndicator";
 import { GyroscopeIndicator } from "./GyroscopeIndicator";
 import { useState, useEffect, useRef } from "react";
+import { useTelemetry } from "@/contexts/TelemetryContext";
 import { Badge } from "@/components/ui/badge";
+import { useBME688Read } from "@/hooks/useBME688";
 
 interface MotorData {
   rpm: number;
@@ -69,7 +71,10 @@ export function TelemetryPanel() {
     trigger: string;
     at: number;
   } | null>(null);
-  
+
+  const { data: bme688Data } = useBME688Read({ refetchInterval: 3000 });
+  const rawTelemetry = useTelemetry();
+
   // Flight state
   const [altitude, setAltitude] = useState(0);
   const [groundSpeed, setGroundSpeed] = useState(0);
@@ -131,6 +136,7 @@ export function TelemetryPanel() {
   const batteryPercentRef = useRef(100);
   const [guidedTarget, setGuidedTarget] = useState<{ lat: number; lng: number } | null>(null);
   const [externalTelemetryLive, setExternalTelemetryLive] = useState(false);
+  const externalTelemetryStaleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [allowLocalTelemetryFallback] = useState(() => {
     try {
       return localStorage.getItem("mouse_enable_telemetry_sim") === "1";
@@ -155,7 +161,7 @@ export function TelemetryPanel() {
   useEffect(() => {
     batteryPercentRef.current = batteryPercent;
   }, [batteryPercent]);
-  
+
   // Calculate distance between two points in meters
   const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number) => {
     const R = 6371000; // Earth's radius in meters
@@ -275,122 +281,95 @@ export function TelemetryPanel() {
     setMotors(newMotors);
   }, [motorCount]);
 
-  // Listen for real telemetry data from WebSocket/MAVLink
-  // This will be populated when connected to an actual drone
+  // Listen for real telemetry data from WebSocket/MAVLink via TelemetryProvider
   useEffect(() => {
-    const handleTelemetryUpdate = (e: CustomEvent<{
-      attitude?: { pitch: number; roll: number; yaw: number };
-      heading?: number;
-      altitude?: number;
-      groundSpeed?: number;
-      position?: { lat: number; lng: number };
-      motors?: MotorData[];
-      cpuTemp?: number;
-      vibrationX?: number;
-      vibrationY?: number;
-      vibrationZ?: number;
-      pressure?: number;
-      lidarRange?: number;
-      source?: string;
-      batteryPercent?: number;
-      batteryVoltage?: number;
-      batteryCurrent?: number;
-      gpsFixType?: number | string;
-      gpsStatus?: string;
-      gpsSatellites?: number;
-    }>) => {
-      const data = e.detail;
-      (window as any).__currentTelemetry = { ...(window as any).__currentTelemetry, ...data };
-      if (data.source !== 'sim') {
-        lastExternalTelemetryTsRef.current = Date.now();
-        setExternalTelemetryLive(true);
+    const data = rawTelemetry as Record<string, unknown> | null | undefined;
+    if (!data || typeof data !== "object") return;
+    (window as any).__currentTelemetry = { ...(window as any).__currentTelemetry, ...data };
+    if (data.source !== "sim") {
+      lastExternalTelemetryTsRef.current = Date.now();
+      setExternalTelemetryLive(true);
+      if (externalTelemetryStaleTimerRef.current) {
+        clearTimeout(externalTelemetryStaleTimerRef.current);
       }
-      if (data.attitude) setAttitude(data.attitude);
-      if (data.heading !== undefined) setHeading(data.heading);
-      if (data.altitude !== undefined) setAltitude(data.altitude);
-      if (data.groundSpeed !== undefined) setGroundSpeed(data.groundSpeed);
-      if (data.position) setPosition(data.position);
-      if (data.motors) setMotors(data.motors);
-      if (typeof data.batteryPercent === "number") {
-        setBatteryPercent(clamp(data.batteryPercent, 0, 100));
-      } else if (typeof data.batteryVoltage === "number") {
-        const inferred = clamp(((data.batteryVoltage - 13.2) / (16.8 - 13.2)) * 100, 0, 100);
-        setBatteryPercent(inferred);
-      }
-      if (typeof data.batteryVoltage === "number") {
-        setBatteryVoltage(data.batteryVoltage);
-      } else {
-        setBatteryVoltage(13.2 + (batteryPercentRef.current / 100) * (16.8 - 13.2));
-      }
-      if (typeof data.batteryCurrent === "number") setBatteryCurrent(Math.max(0, data.batteryCurrent));
-      if (typeof data.gpsSatellites === "number") setGpsSatellites(Math.max(0, Math.round(data.gpsSatellites)));
-      if (data.gpsStatus === "3d_fix" || data.gpsStatus === "2d_fix" || data.gpsStatus === "no_fix") {
-        setGpsStatus(data.gpsStatus);
-      } else if (data.gpsFixType === 3) {
-        setGpsStatus("3d_fix");
-      } else if (data.gpsFixType === 2) {
-        setGpsStatus("2d_fix");
-      } else if (data.gpsFixType === 0 || data.gpsFixType === "no_fix") {
-        setGpsStatus("no_fix");
-      }
-      setSensorHealth((prev) => {
-        const escTempFromMotors = data.motors?.length
-          ? Math.max(...data.motors.map((m) => m.temp ?? 0))
-          : prev.escTemp;
-        const vibrationMagnitude =
-          typeof data.vibrationX === "number" &&
-          typeof data.vibrationY === "number" &&
-          typeof data.vibrationZ === "number"
-            ? Math.sqrt(data.vibrationX ** 2 + data.vibrationY ** 2 + data.vibrationZ ** 2)
-            : prev.vibration;
-        return {
-          lidarRange: typeof data.lidarRange === "number" ? data.lidarRange : prev.lidarRange,
-          cpuTemp: typeof data.cpuTemp === "number" ? data.cpuTemp : prev.cpuTemp,
-          escTemp: typeof escTempFromMotors === "number" ? escTempFromMotors : prev.escTemp,
-          vibration: typeof vibrationMagnitude === "number" ? vibrationMagnitude : prev.vibration,
-          barometer: typeof data.pressure === "number" ? data.pressure : prev.barometer,
-          imuStatus: data.attitude ? "OK" : prev.imuStatus,
-          compassStatus: typeof data.heading === "number" ? "OK" : prev.compassStatus,
-        };
-      });
-    };
+      externalTelemetryStaleTimerRef.current = setTimeout(() => {
+        setExternalTelemetryLive(false);
+        externalTelemetryStaleTimerRef.current = null;
+      }, 3000);
+    }
+    if (data.attitude) setAttitude(data.attitude as { pitch: number; roll: number; yaw: number });
+    if (data.heading !== undefined) setHeading(data.heading as number);
+    if (data.altitude !== undefined) setAltitude(data.altitude as number);
+    if (data.groundSpeed !== undefined) setGroundSpeed(data.groundSpeed as number);
+    if (data.position) setPosition(data.position as { lat: number; lng: number });
+    if (data.motors) setMotors(data.motors as MotorData[]);
+    if (typeof data.batteryPercent === "number") {
+      setBatteryPercent(clamp(data.batteryPercent, 0, 100));
+    } else if (typeof data.batteryVoltage === "number") {
+      const inferred = clamp(((data.batteryVoltage - 13.2) / (16.8 - 13.2)) * 100, 0, 100);
+      setBatteryPercent(inferred);
+    }
+    if (typeof data.batteryVoltage === "number") {
+      setBatteryVoltage(data.batteryVoltage);
+    } else {
+      setBatteryVoltage(13.2 + (batteryPercentRef.current / 100) * (16.8 - 13.2));
+    }
+    if (typeof data.batteryCurrent === "number") setBatteryCurrent(Math.max(0, data.batteryCurrent));
+    if (typeof data.gpsSatellites === "number") setGpsSatellites(Math.max(0, Math.round(data.gpsSatellites)));
+    if (data.gpsStatus === "3d_fix" || data.gpsStatus === "2d_fix" || data.gpsStatus === "no_fix") {
+      setGpsStatus(data.gpsStatus as "no_fix" | "2d_fix" | "3d_fix");
+    } else if (data.gpsFixType === 3) {
+      setGpsStatus("3d_fix");
+    } else if (data.gpsFixType === 2) {
+      setGpsStatus("2d_fix");
+    } else if (data.gpsFixType === 0 || data.gpsFixType === "no_fix") {
+      setGpsStatus("no_fix");
+    }
+    setSensorHealth((prev) => {
+      const motors = data.motors as MotorData[] | undefined;
+      const escTempFromMotors = motors?.length
+        ? Math.max(...motors.map((m) => m.temp ?? 0))
+        : prev.escTemp;
+      const vibrationMagnitude =
+        typeof data.vibrationX === "number" &&
+        typeof data.vibrationY === "number" &&
+        typeof data.vibrationZ === "number"
+          ? Math.sqrt(
+              (data.vibrationX as number) ** 2 +
+                (data.vibrationY as number) ** 2 +
+                (data.vibrationZ as number) ** 2,
+            )
+          : prev.vibration;
+      return {
+        lidarRange: typeof data.lidarRange === "number" ? data.lidarRange : prev.lidarRange,
+        cpuTemp: typeof data.cpuTemp === "number" ? data.cpuTemp : prev.cpuTemp,
+        escTemp: typeof escTempFromMotors === "number" ? escTempFromMotors : prev.escTemp,
+        vibration: typeof vibrationMagnitude === "number" ? vibrationMagnitude : prev.vibration,
+        barometer: typeof data.pressure === "number" ? data.pressure : prev.barometer,
+        imuStatus: data.attitude ? "OK" : prev.imuStatus,
+        compassStatus: typeof data.heading === "number" ? "OK" : prev.compassStatus,
+      };
+    });
+  }, [rawTelemetry]);
 
-    window.addEventListener('telemetry-update' as any, handleTelemetryUpdate);
-    return () => window.removeEventListener('telemetry-update' as any, handleTelemetryUpdate);
-  }, []);
-
-  // Consolidated server poll: freshness check + BME688 (replaces separate 1s and 8s intervals)
   useEffect(() => {
-    let cancelled = false;
-    let tickCount = 0;
-    const poll = async () => {
-      const fresh = Date.now() - lastExternalTelemetryTsRef.current < 3000;
-      setExternalTelemetryLive(fresh);
-      tickCount += 1;
-      if (tickCount % 4 === 0) {
-        try {
-          const res = await fetch("/api/bme688/read");
-          if (!res.ok || cancelled) return;
-          const data = await res.json();
-          if (cancelled) return;
-          setSensorHealth((prev) => ({
-            ...prev,
-            barometer: typeof data.pressure === "number" ? data.pressure : prev.barometer,
-            cpuTemp:
-              typeof data.temperature_c === "number"
-                ? Math.max(prev.cpuTemp ?? 0, data.temperature_c)
-                : prev.cpuTemp,
-          }));
-        } catch (err) {
-          console.warn("[TelemetryPanel] BME688 poll failed:", err);
-        }
-      }
-    };
-    poll();
-    const timer = setInterval(poll, 2000);
+    if (!bme688Data) return;
+    setSensorHealth((prev) => ({
+      ...prev,
+      barometer: typeof bme688Data.pressure === "number" ? bme688Data.pressure : prev.barometer,
+      cpuTemp:
+        typeof bme688Data.temperature_c === "number"
+          ? Math.max(prev.cpuTemp ?? 0, bme688Data.temperature_c)
+          : prev.cpuTemp,
+    }));
+  }, [bme688Data?.pressure, bme688Data?.temperature_c]);
+
+  useEffect(() => {
     return () => {
-      cancelled = true;
-      clearInterval(timer);
+      if (externalTelemetryStaleTimerRef.current) {
+        clearTimeout(externalTelemetryStaleTimerRef.current);
+        externalTelemetryStaleTimerRef.current = null;
+      }
     };
   }, []);
 

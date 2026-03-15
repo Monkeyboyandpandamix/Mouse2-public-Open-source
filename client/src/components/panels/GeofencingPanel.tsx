@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
+import { reportApiError } from "@/lib/apiErrors";
 import { usePermissions } from "@/hooks/usePermissions";
 import { Lock } from "lucide-react";
 import { MapContainer, TileLayer, Circle as LeafletCircle, Polygon, Marker, useMapEvents, useMap } from "react-leaflet";
@@ -418,7 +419,7 @@ export function GeofencingPanel() {
       setMapCenter(points[0]);
       toast.success(`Imported ${points.length} fence points from FC`);
     } catch (e: any) {
-      toast.error(e.message || "Failed to download fence from FC");
+      reportApiError(e, "Failed to download fence from FC");
     } finally {
       setFcSyncBusy(false);
     }

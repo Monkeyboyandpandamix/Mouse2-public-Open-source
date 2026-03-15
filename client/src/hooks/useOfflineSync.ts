@@ -26,6 +26,12 @@ const HEARTBEAT_INTERVAL = 5000;
 const MAX_RETRY_ATTEMPTS = 3;
 const LOCAL_STORAGE_KEY = 'mouse_offline_backlog';
 
+/**
+ * Offline sync hook for telemetry, media, and events.
+ * When network/internet is unavailable (GPS-denied, WiFi-denied ops), data is queued to localStorage.
+ * isOnline = backend reachability (fetch to /api); when GCS backend runs locally, it works without internet.
+ * Queued items sync automatically when connection is restored.
+ */
 function makeClientRequestId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
@@ -46,6 +52,7 @@ export function useOfflineSync(droneId?: number) {
   const localBacklog = useRef<BacklogItem[]>([]);
   const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
+  const lastImmediatePostFailureToastRef = useRef<number>(0);
 
   const loadLocalBacklog = useCallback(() => {
     try {
@@ -90,7 +97,14 @@ export function useOfflineSync(droneId?: number) {
           syncStatus: 'pending',
           syncAttempts: 0,
         }),
-      }).catch((err) => console.warn("[useOfflineSync] backlog POST failed:", err));
+      }).catch((err) => {
+        console.warn("[useOfflineSync] backlog POST failed:", err);
+        const now = Date.now();
+        if (!lastImmediatePostFailureToastRef.current || now - lastImmediatePostFailureToastRef.current > 15000) {
+          lastImmediatePostFailureToastRef.current = now;
+          toast.warning("Data saved locally - will sync when connection is stable");
+        }
+      });
     }
     
     return newItem;
@@ -170,6 +184,9 @@ export function useOfflineSync(droneId?: number) {
         if (syncedCount > 0) {
           toast.success(`Synced ${syncedCount} backlog items`);
         }
+        if (failedItems.length > 0) {
+          toast.error(`${failedItems.length} item(s) failed to sync - will retry later`);
+        }
         
         setSyncState(prev => ({
           ...prev,
@@ -182,6 +199,7 @@ export function useOfflineSync(droneId?: number) {
         throw new Error('Sync failed');
       }
     } catch (error) {
+      toast.error('Failed to sync backlog - will retry when connection is stable');
       setSyncState(prev => ({
         ...prev,
         isSyncing: false,

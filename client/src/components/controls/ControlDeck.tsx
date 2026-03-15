@@ -4,7 +4,9 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
-import { apiRequest } from "@/lib/queryClient";
+import { useTelemetry } from "@/contexts/TelemetryContext";
+import { flightSessionsApi } from "@/lib/api";
+import { queryClient } from "@/lib/queryClient";
 import { dispatchBackendCommand } from "@/lib/commandService";
 
 interface BaseLocation {
@@ -78,8 +80,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
   const startFlightSession = async () => {
     try {
       const droneId = getCurrentDroneId();
-      const response = await apiRequest('POST', '/api/flight-sessions/start', { droneId });
-      const data = await response.json();
+      const data = await flightSessionsApi.start(droneId);
       if (data.success && data.session) {
         setActiveSessionId(data.session.id);
         setIsRecording(true);
@@ -88,6 +89,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
         totalDistanceRef.current = 0;
         lastPositionRef.current = null;
         toast.success("Flight recording started");
+        queryClient.invalidateQueries({ queryKey: ['/api/flight-sessions'] });
         console.log(`[FLIGHT] Session started: ${data.session.id}`);
       }
     } catch (error) {
@@ -106,20 +108,20 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
         ? Math.round((Date.now() - flightStartTime.current.getTime()) / 1000)
         : 0;
       
-      const response = await apiRequest('POST', '/api/flight-sessions/end', { 
+      const data = await flightSessionsApi.end({
         sessionId: activeSessionId,
         droneId,
         maxAltitude: maxAltitudeRef.current,
         totalDistance: totalDistanceRef.current,
-        totalFlightTime
+        totalFlightTime,
       });
-      const data = await response.json();
       if (data.success) {
         setActiveSessionId(null);
         setIsRecording(false);
         flightStartTime.current = null;
         toast.success(`Flight recording saved (${Math.round(totalFlightTime / 60)}m ${totalFlightTime % 60}s)`);
-        console.log(`[FLIGHT] Session ended: ${data.session?.id}`);
+        queryClient.invalidateQueries({ queryKey: ['/api/flight-sessions'] });
+        console.log(`[FLIGHT] Session ended`);
       }
     } catch (error) {
       console.error("Failed to end flight session:", error);
@@ -127,30 +129,27 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
     }
   };
 
-  // Track telemetry for session stats
+  // Track telemetry for session stats (uses shared TelemetryProvider)
+  const telemetry = useTelemetry();
   useEffect(() => {
-    if (!isRecording) return;
-    
-    const handleTelemetry = (e: CustomEvent) => {
-      const { altitude, latitude, longitude } = e.detail || {};
-      if (altitude && altitude > maxAltitudeRef.current) {
-        maxAltitudeRef.current = altitude;
-      }
-      if (latitude && longitude && lastPositionRef.current) {
-        const dist = calculateDistance(
-          lastPositionRef.current.lat, lastPositionRef.current.lng,
-          latitude, longitude
-        );
-        totalDistanceRef.current += dist;
-      }
-      if (latitude && longitude) {
-        lastPositionRef.current = { lat: latitude, lng: longitude };
-      }
-    };
-    
-    window.addEventListener('telemetry-update' as any, handleTelemetry);
-    return () => window.removeEventListener('telemetry-update' as any, handleTelemetry);
-  }, [isRecording]);
+    if (!isRecording || !telemetry) return;
+    const altitude = (telemetry as any).altitude;
+    const latitude = (telemetry as any).position?.lat ?? (telemetry as any).latitude;
+    const longitude = (telemetry as any).position?.lng ?? (telemetry as any).longitude;
+    if (altitude && altitude > maxAltitudeRef.current) {
+      maxAltitudeRef.current = altitude;
+    }
+    if (latitude != null && longitude != null && lastPositionRef.current) {
+      const dist = calculateDistance(
+        lastPositionRef.current.lat, lastPositionRef.current.lng,
+        latitude, longitude
+      );
+      totalDistanceRef.current += dist;
+    }
+    if (latitude != null && longitude != null) {
+      lastPositionRef.current = { lat: latitude, lng: longitude };
+    }
+  }, [telemetry, isRecording]);
 
   // Haversine distance calculation
   const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -178,8 +177,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
     const checkActiveSession = async () => {
       try {
         const droneId = getCurrentDroneId();
-        const response = await fetch(`/api/flight-sessions/active?droneId=${droneId}`);
-        const data = await response.json();
+        const data = await flightSessionsApi.getActive(droneId);
         if (data.session) {
           setActiveSessionId(data.session.id);
           setIsRecording(true);
