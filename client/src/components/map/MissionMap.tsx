@@ -178,7 +178,7 @@ export function MissionMap({ waypoints, homePosition, onMapClick, clickEnabled =
         <MapClickHandler onClick={handleMapClick} enabled={clickEnabled} />
         <ZoomControls />
         <NoFlyZoneOverlay zones={noFlyZones} />
-        <RegulatoryGeoJsonOverlay />
+        <RegulatoryGeoJsonOverlay operatorPosition={homePosition || currentLocation || undefined} />
 
         {homePosition && (
           <Marker position={homePosition} icon={HomeIcon} />

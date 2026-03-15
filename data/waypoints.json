@@ -1,1 +1,182 @@
-[]
+[
+  {
+    "id": "1773541819718-658thrz3i",
+    "missionId": "1773541817054-et608dzti",
+    "order": 0,
+    "latitude": 36.09048232705974,
+    "longitude": -79.42503690719606,
+    "altitude": 50,
+    "speed": 5,
+    "action": "flythrough",
+    "actionParams": {
+      "altitudeFrame": "relative",
+      "terrainFollow": false
+    },
+    "address": null
+  },
+  {
+    "id": "1773541824519-b6gbhkj96",
+    "missionId": "1773541817054-et608dzti",
+    "order": 1,
+    "latitude": 36.07508318140675,
+    "longitude": -79.4196939468384,
+    "altitude": 50,
+    "speed": 5,
+    "action": "flythrough",
+    "actionParams": {
+      "altitudeFrame": "relative",
+      "terrainFollow": false
+    },
+    "address": null
+  },
+  {
+    "id": "1773541829542-dl0jerygs",
+    "missionId": "1773541817054-et608dzti",
+    "order": 3,
+    "latitude": 36.08704899505808,
+    "longitude": -79.47595596313478,
+    "altitude": 50,
+    "speed": 5,
+    "action": "flythrough",
+    "actionParams": {
+      "altitudeFrame": "relative",
+      "terrainFollow": false
+    },
+    "address": null
+  },
+  {
+    "id": "1773541832310-9idbc3w5i",
+    "missionId": "1773541817054-et608dzti",
+    "order": 2,
+    "latitude": 36.09842350016392,
+    "longitude": -79.46917533874513,
+    "altitude": 50,
+    "speed": 5,
+    "action": "flythrough",
+    "actionParams": {
+      "altitudeFrame": "relative",
+      "terrainFollow": false
+    },
+    "address": null
+  },
+  {
+    "id": "1773541882649-0q2s5bdsa",
+    "missionId": "1773541817054-et608dzti",
+    "order": 4,
+    "latitude": 36.066948856987295,
+    "longitude": -79.46046352386476,
+    "altitude": 50,
+    "speed": 5,
+    "action": "flythrough",
+    "actionParams": {
+      "altitudeFrame": "relative",
+      "terrainFollow": false
+    },
+    "address": null
+  },
+  {
+    "id": "1773541885486-noc2vb3na",
+    "missionId": "1773541817054-et608dzti",
+    "order": 5,
+    "latitude": 36.06176256927918,
+    "longitude": -79.4478464126587,
+    "altitude": 50,
+    "speed": 5,
+    "action": "flythrough",
+    "actionParams": {
+      "altitudeFrame": "relative",
+      "terrainFollow": false
+    },
+    "address": null
+  },
+  {
+    "id": "1773541885489-fo89av1dg",
+    "missionId": "1773541817054-et608dzti",
+    "order": 6,
+    "latitude": 36.06176256927918,
+    "longitude": -79.4478464126587,
+    "altitude": 50,
+    "speed": 5,
+    "action": "flythrough",
+    "actionParams": {
+      "altitudeFrame": "relative",
+      "terrainFollow": false
+    },
+    "address": null
+  },
+  {
+    "id": "1773541886225-jl4mysmbd",
+    "missionId": "1773541817054-et608dzti",
+    "order": 6,
+    "latitude": 36.051458361443004,
+    "longitude": -79.42256927490236,
+    "altitude": 50,
+    "speed": 5,
+    "action": "flythrough",
+    "actionParams": {
+      "altitudeFrame": "relative",
+      "terrainFollow": false
+    },
+    "address": null
+  },
+  {
+    "id": "1773541909483-sujnwkeaq",
+    "missionId": "1773541817054-et608dzti",
+    "order": 9,
+    "latitude": 36.066844787685724,
+    "longitude": -79.46052789688112,
+    "altitude": 50,
+    "speed": 5,
+    "action": "flythrough",
+    "actionParams": {
+      "altitudeFrame": "relative",
+      "terrainFollow": false
+    },
+    "address": null
+  },
+  {
+    "id": "1773541911174-xsi5jhb3j",
+    "missionId": "1773541817054-et608dzti",
+    "order": 9,
+    "latitude": 36.061554416817295,
+    "longitude": -79.44793224334718,
+    "altitude": 50,
+    "speed": 5,
+    "action": "flythrough",
+    "actionParams": {
+      "altitudeFrame": "relative",
+      "terrainFollow": false
+    },
+    "address": null
+  },
+  {
+    "id": "1773541911176-rqmuxdda4",
+    "missionId": "1773541817054-et608dzti",
+    "order": 9,
+    "latitude": 36.05104200145644,
+    "longitude": -79.42274093627931,
+    "altitude": 50,
+    "speed": 5,
+    "action": "flythrough",
+    "actionParams": {
+      "altitudeFrame": "relative",
+      "terrainFollow": false
+    },
+    "address": null
+  },
+  {
+    "id": "1773541911917-wn0pbyh0g",
+    "missionId": "1773541817054-et608dzti",
+    "order": 9,
+    "latitude": 36.061554416817295,
+    "longitude": -79.44797515869142,
+    "altitude": 50,
+    "speed": 5,
+    "action": "flythrough",
+    "actionParams": {
+      "altitudeFrame": "relative",
+      "terrainFollow": false
+    },
+    "address": null
+  }
+]

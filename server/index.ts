@@ -107,21 +107,41 @@ app.use((req, res, next) => {
     await setupVite(httpServer, app);
   }
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const port = parseInt(process.env.PORT || "5000", 10);
+  // Serve the app on PORT when provided, otherwise default to 5000.
+  // If default port is busy, automatically move to the next available port.
+  const requestedPort = parseInt(process.env.PORT || "5000", 10);
+  const portExplicitlySet = Boolean(process.env.PORT);
+  const maxAutoPort = portExplicitlySet ? requestedPort : requestedPort + 20;
   // Use 127.0.0.1 for Electron to avoid conflicts with Mac AirPlay on 0.0.0.0:5000
   const host = process.env.ELECTRON_APP ? "127.0.0.1" : "0.0.0.0";
-  httpServer.listen(
-    {
-      port,
-      host,
-      reusePort: true,
-    },
-    () => {
-      log(`serving on ${host}:${port}`);
-    },
-  );
+
+  const startListening = (port: number) => {
+    const onListenError = (error: any) => {
+      if (error?.code === "EADDRINUSE" && !portExplicitlySet && port < maxAutoPort) {
+        log(`port ${port} is in use, retrying on ${port + 1}`);
+        startListening(port + 1);
+        return;
+      }
+      throw error;
+    };
+
+    httpServer.once("error", onListenError);
+    httpServer.listen(
+      {
+        port,
+        host,
+        reusePort: true,
+      },
+      () => {
+        httpServer.off("error", onListenError);
+        if (port !== requestedPort) {
+          log(`default port ${requestedPort} unavailable, serving on ${host}:${port}`);
+        } else {
+          log(`serving on ${host}:${port}`);
+        }
+      },
+    );
+  };
+
+  startListening(requestedPort);
 })();

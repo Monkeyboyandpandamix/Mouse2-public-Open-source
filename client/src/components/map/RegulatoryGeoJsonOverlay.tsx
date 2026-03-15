@@ -3,6 +3,9 @@ import { GeoJSON } from "react-leaflet";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 
+const RADIUS_MILES = 30;
+const RADIUS_METERS = RADIUS_MILES * 1609.344;
+
 type FeatureCollection = {
   type: "FeatureCollection";
   features: any[];
@@ -23,7 +26,7 @@ const LAYERS: LayerConfig[] = [
     label: "FAA UAS Facility Map",
     file: "/airspace/FAA_UAS_FacilityMap_Data.geojson",
     color: "#22c55e",
-    defaultOn: false,
+    defaultOn: true,
     maxBytes: 50 * 1024 * 1024,
   },
   {
@@ -49,14 +52,73 @@ const LAYERS: LayerConfig[] = [
   },
 ];
 
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000;
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function getGeometryCenter(geom: any): [number, number] | null {
+  if (!geom) return null;
+  if (geom.type === "Point") return geom.coordinates ? [geom.coordinates[1], geom.coordinates[0]] : null;
+  if (geom.type === "Polygon" && geom.coordinates?.[0]?.length) {
+    const coords = geom.coordinates[0];
+    let lat = 0, lon = 0;
+    for (const c of coords) {
+      lon += c[0];
+      lat += c[1];
+    }
+    return [lat / coords.length, lon / coords.length];
+  }
+  if (geom.type === "MultiPolygon" && geom.coordinates?.length) {
+    const first = geom.coordinates[0]?.[0];
+    if (!first?.length) return null;
+    let lat = 0, lon = 0;
+    for (const c of first) {
+      lon += c[0];
+      lat += c[1];
+    }
+    return [lat / first.length, lon / first.length];
+  }
+  return null;
+}
+
+function filterByRadius(
+  fc: FeatureCollection | null,
+  dronePos: [number, number] | null,
+  operatorPos: [number, number] | null
+): FeatureCollection | null {
+  if (!fc?.features?.length) return fc;
+  const refs = [dronePos, operatorPos].filter(Boolean) as [number, number][];
+  if (refs.length === 0) return fc;
+  const filtered = fc.features.filter((f) => {
+    const center = getGeometryCenter(f.geometry);
+    if (!center) return true;
+    const [lat, lon] = center;
+    return refs.some(([refLat, refLon]) => haversineMeters(lat, lon, refLat, refLon) <= RADIUS_METERS);
+  });
+  return { ...fc, features: filtered };
+}
+
 interface RegulatoryGeoJsonOverlayProps {
   showControl?: boolean;
   controlClassName?: string;
+  dronePosition?: [number, number] | null;
+  operatorPosition?: [number, number] | null;
 }
 
 export function RegulatoryGeoJsonOverlay({
   showControl = true,
   controlClassName = "",
+  dronePosition = null,
+  operatorPosition = null,
 }: RegulatoryGeoJsonOverlayProps) {
   const [enabled, setEnabled] = useState<Record<string, boolean>>(
     () => Object.fromEntries(LAYERS.map((l) => [l.id, l.defaultOn])),
@@ -64,6 +126,16 @@ export function RegulatoryGeoJsonOverlay({
   const [data, setData] = useState<Record<string, FeatureCollection | null>>({});
   const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const onSession = (e: CustomEvent<{ isLoggedIn?: boolean }>) => {
+      if (e.detail?.isLoggedIn) {
+        setEnabled(Object.fromEntries(LAYERS.map((l) => [l.id, true])));
+      }
+    };
+    window.addEventListener("session-change" as any, onSession);
+    return () => window.removeEventListener("session-change" as any, onSession);
+  }, []);
 
   useEffect(() => {
     const layersToLoad = LAYERS.filter((layer) => enabled[layer.id] && !data[layer.id] && !loading[layer.id]);
@@ -77,14 +149,6 @@ export function RegulatoryGeoJsonOverlay({
           if (layer.maxBytes) {
             const head = await fetch(layer.file, { method: "HEAD" });
             const len = Number(head.headers.get("content-length") || "0");
-            if (!Number.isFinite(len) || len <= 0) {
-              setErrors((prev) => ({
-                ...prev,
-                [layer.id]: "Layer size unknown. Loading blocked for safety.",
-              }));
-              setData((prev) => ({ ...prev, [layer.id]: null }));
-              continue;
-            }
             if (Number.isFinite(len) && len > layer.maxBytes) {
               setErrors((prev) => ({
                 ...prev,
@@ -118,21 +182,43 @@ export function RegulatoryGeoJsonOverlay({
 
   const activeLayers = useMemo(() => LAYERS.filter((l) => enabled[l.id] && data[l.id]), [enabled, data]);
 
+  const filteredData = useMemo(() => {
+    const out: Record<string, FeatureCollection | null> = {};
+    for (const layer of activeLayers) {
+      const raw = data[layer.id];
+      out[layer.id] = filterByRadius(raw, dronePosition, operatorPosition);
+    }
+    return out;
+  }, [activeLayers, data, dronePosition, operatorPosition]);
+
+  const totalVisibleFeatures = useMemo(
+    () =>
+      activeLayers.reduce((sum, layer) => {
+        const count = filteredData[layer.id]?.features?.length || 0;
+        return sum + count;
+      }, 0),
+    [activeLayers, filteredData],
+  );
+
   return (
     <>
-      {activeLayers.map((layer) => (
-        <GeoJSON
-          key={layer.id}
-          data={data[layer.id] as any}
-          style={() => ({
-            color: layer.color,
-            weight: 2,
-            opacity: 0.9,
-            fillColor: layer.color,
-            fillOpacity: 0.15,
-          })}
-        />
-      ))}
+      {activeLayers.map((layer) => {
+        const fc = filteredData[layer.id];
+        if (!fc?.features?.length) return null;
+        return (
+          <GeoJSON
+            key={layer.id}
+            data={fc as any}
+            style={() => ({
+              color: layer.color,
+              weight: 2,
+              opacity: 0.9,
+              fillColor: layer.color,
+              fillOpacity: 0.15,
+            })}
+          />
+        );
+      })}
 
       {showControl && (
         <div
@@ -155,7 +241,10 @@ export function RegulatoryGeoJsonOverlay({
             </div>
           ))}
           <p className="text-[10px] text-muted-foreground">
-            FAA Facility Map is large and is loaded on demand when enabled.
+            Visible within {RADIUS_MILES}mi of drone/operator: {totalVisibleFeatures} feature(s).
+          </p>
+          <p className="text-[10px] text-muted-foreground">
+            FAA Facility Map is very large and may stay disabled if the file is too heavy for real-time client rendering.
           </p>
         </div>
       )}

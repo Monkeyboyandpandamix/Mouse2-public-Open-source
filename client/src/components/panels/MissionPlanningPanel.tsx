@@ -16,7 +16,7 @@ import { toast } from "sonner";
 import { MissionMap } from "@/components/map/MissionMap";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useNoFlyZones } from "@/hooks/useNoFlyZones";
-import { planRouteAvoidingNoFlyZones, segmentIntersectsNoFlyZones } from "@/lib/noFlyZones";
+import { segmentIntersectsNoFlyZones } from "@/lib/noFlyZones";
 import type { NoFlyZone } from "@/lib/noFlyZones";
 
 interface Mission {
@@ -169,12 +169,7 @@ export function MissionPlanningPanel() {
       return "serial:/dev/ttyACM0:57600";
     }
   });
-  const [autoAvoidNoFlyZones, setAutoAvoidNoFlyZones] = useState(true);
   const [overrideNoFlyRestrictions, setOverrideNoFlyRestrictions] = useState(false);
-  const [hasRestrictedAirspaceAuthorization, setHasRestrictedAirspaceAuthorization] = useState(false);
-  const [authorizationCode, setAuthorizationCode] = useState("");
-  const [authorizationExpiresAt, setAuthorizationExpiresAt] = useState<string | null>(null);
-  const [validatingAuthorization, setValidatingAuthorization] = useState(false);
   const [partTimeRestrictedZones, setPartTimeRestrictedZones] = useState<NoFlyZone[]>([]);
   const noFlyZones = useNoFlyZones();
 
@@ -245,32 +240,11 @@ export function MissionPlanningPanel() {
   }, []);
 
   useEffect(() => {
-    if (!hasRestrictedAirspaceAuthorization || !authorizationExpiresAt) return;
-    const expiresMs = new Date(authorizationExpiresAt).getTime();
-    if (!Number.isFinite(expiresMs)) return;
-
-    const remaining = expiresMs - Date.now();
-    if (remaining <= 0) {
-      setHasRestrictedAirspaceAuthorization(false);
-      setOverrideNoFlyRestrictions(false);
-      setAuthorizationExpiresAt(null);
-      toast.warning("Restricted-airspace authorization expired.");
-      return;
-    }
-
-    const timer = setTimeout(() => {
-      setHasRestrictedAirspaceAuthorization(false);
-      setOverrideNoFlyRestrictions(false);
-      setAuthorizationExpiresAt(null);
-      toast.warning("Restricted-airspace authorization expired.");
-    }, remaining + 200);
-
-    return () => clearTimeout(timer);
-  }, [hasRestrictedAirspaceAuthorization, authorizationExpiresAt, setOverrideNoFlyRestrictions]);
-
-  useEffect(() => {
     const handleMissionUpdated = (e: Event) => {
       const customEvent = e as CustomEvent<{ missionId?: number }>;
+      if (customEvent.detail?.missionId) {
+        setSelectedMission(customEvent.detail.missionId);
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/missions"] });
       if (customEvent.detail?.missionId) {
         queryClient.invalidateQueries({ queryKey: ["/api/missions", customEvent.detail.missionId, "waypoints"] });
@@ -617,39 +591,6 @@ export function MissionPlanningPanel() {
     }
   };
 
-  const validateAuthorizationCode = async () => {
-    if (!authorizationCode.trim()) {
-      toast.error("Authorization code is required");
-      return;
-    }
-    setValidatingAuthorization(true);
-    try {
-      const res = await fetch("/api/airspace/authorization/validate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: authorizationCode.trim() }),
-      });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok || !payload.authorized) {
-        setHasRestrictedAirspaceAuthorization(false);
-        setAuthorizationExpiresAt(null);
-        setOverrideNoFlyRestrictions(false);
-        toast.error(payload.error || "Authorization validation failed");
-        return;
-      }
-      setHasRestrictedAirspaceAuthorization(true);
-      setAuthorizationExpiresAt(payload.expiresAt || null);
-      toast.success("Restricted-airspace authorization granted");
-    } catch {
-      setHasRestrictedAirspaceAuthorization(false);
-      setAuthorizationExpiresAt(null);
-      setOverrideNoFlyRestrictions(false);
-      toast.error("Authorization validation failed");
-    } finally {
-      setValidatingAuthorization(false);
-    }
-  };
-
   const createWaypointsForDestination = useCallback(async (lat: number, lng: number, address?: string | null) => {
     if (!selectedMission || !selectedMissionData) return;
 
@@ -677,39 +618,19 @@ export function MissionPlanningPanel() {
     const staticData = staticResp && staticResp.ok ? await staticResp.json().catch(() => null) : null;
     const staticZones = Array.isArray(staticData?.zones) ? staticData.zones : [];
     const effectiveZones = [...noFlyZones, ...partTimeRestrictedZones, ...staticZones, ...liveZones];
-    const authStillValid =
-      Boolean(authorizationExpiresAt) && new Date(authorizationExpiresAt as string).getTime() > Date.now();
-    const authorizedForRestrictedAirspace =
-      hasRestrictedAirspaceAuthorization && authStillValid && overrideNoFlyRestrictions;
 
     if (liveResp && !liveResp.ok && effectiveZones.length === 0) {
       toast.error("Restricted-airspace provider unavailable. Routing aborted for safety.");
       return;
     }
 
-    if (overrideNoFlyRestrictions && !authorizedForRestrictedAirspace) {
-      toast.error("Restricted-airspace override requires authorization.");
+    const directPathCrossesRestricted = segmentIntersectsNoFlyZones(startPoint, destination, effectiveZones);
+    if (directPathCrossesRestricted && !overrideNoFlyRestrictions) {
+      toast.error("Route blocked by restricted/no-fly airspace. Enable 'Override Restrictions' to continue.");
       return;
     }
 
-    const directPathCrossesRestricted = segmentIntersectsNoFlyZones(startPoint, destination, effectiveZones);
-
-    let path = [startPoint, destination];
-    if (autoAvoidNoFlyZones && !authorizedForRestrictedAirspace) {
-      const routed = planRouteAvoidingNoFlyZones(startPoint, destination, effectiveZones, {
-        clearanceMeters: 40,
-        angularSamples: 14,
-      });
-
-      if (!routed || routed.length < 2) {
-        toast.error("No safe route found around no-fly zones. Enable override to allow direct routing.");
-        return;
-      }
-      path = routed;
-    }
-
-    const intermediate = path.slice(1, -1);
-    const pointsToCreate = [...intermediate, destination];
+    const pointsToCreate = [destination];
     const baseOrder = waypoints.length + 1;
 
     for (let idx = 0; idx < pointsToCreate.length; idx++) {
@@ -780,16 +701,12 @@ export function MissionPlanningPanel() {
 
     queryClient.invalidateQueries({ queryKey: ["/api/missions", selectedMission, "waypoints"] });
 
-    if (authorizedForRestrictedAirspace && directPathCrossesRestricted) {
+    if (overrideNoFlyRestrictions && directPathCrossesRestricted) {
       toast.warning("Route override active: direct path enters no-fly airspace.");
       return;
     }
 
-    if (intermediate.length > 0) {
-      toast.success(`Route planned around restricted airspace with ${intermediate.length} detour waypoint(s).`);
-    } else {
-      toast.success("Waypoint added");
-    }
+    toast.success("Waypoint added");
   }, [
     selectedMission,
     selectedMissionData,
@@ -797,9 +714,7 @@ export function MissionPlanningPanel() {
     coordAlt,
     noFlyZones,
     partTimeRestrictedZones,
-    autoAvoidNoFlyZones,
     overrideNoFlyRestrictions,
-    hasRestrictedAirspaceAuthorization,
     selectedAction,
     hoverTime,
     patrolRadius,
@@ -1038,9 +953,7 @@ export function MissionPlanningPanel() {
           alt: selectedMissionData.homeAltitude
         },
         routePolicy: {
-          autoAvoidNoFlyZones,
           overrideNoFlyRestrictions,
-          hasRestrictedAirspaceAuthorization,
           partTimeRestrictionsActive: partTimeRestrictedZones.length > 0,
         },
       }
@@ -1468,48 +1381,18 @@ export function MissionPlanningPanel() {
 
                   <div className="space-y-2 rounded-md border border-border p-2">
                     <div className="flex items-center justify-between">
-                      <Label className="text-xs">Auto-Avoid No-Fly Zones</Label>
-                      <Switch checked={autoAvoidNoFlyZones} onCheckedChange={setAutoAvoidNoFlyZones} />
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs">Restricted-Airspace Authorization Code</Label>
-                      <div className="flex gap-1">
-                        <Input
-                          value={authorizationCode}
-                          onChange={(e) => setAuthorizationCode(e.target.value)}
-                          placeholder="Enter authorization code"
-                          className="h-8 text-xs"
-                        />
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-8 text-xs"
-                          onClick={validateAuthorizationCode}
-                          disabled={validatingAuthorization}
-                        >
-                          {validatingAuthorization ? "Validating..." : "Validate"}
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between">
                       <Label className="text-xs">Override Restrictions</Label>
                       <Switch
                         checked={overrideNoFlyRestrictions}
-                        disabled={!hasRestrictedAirspaceAuthorization}
                         onCheckedChange={setOverrideNoFlyRestrictions}
                       />
                     </div>
                     <p className="text-[10px] text-muted-foreground">
-                      With auto-avoid enabled, destination entry inserts detour waypoints around restricted and no-fly airspace.
+                      Destination planning blocks restricted/no-fly routes by default. Enable override to allow direct routing through restricted airspace.
                     </p>
                     {partTimeRestrictedZones.length > 0 && (
                       <Badge variant="secondary" className="text-[10px]">
                         Part-time restrictions active now: {partTimeRestrictedZones.length}
-                      </Badge>
-                    )}
-                    {hasRestrictedAirspaceAuthorization && (
-                      <Badge variant="secondary" className="text-[10px]">
-                        Authorization active{authorizationExpiresAt ? ` until ${new Date(authorizationExpiresAt).toLocaleString()}` : ""}
                       </Badge>
                     )}
                     {overrideNoFlyRestrictions && (

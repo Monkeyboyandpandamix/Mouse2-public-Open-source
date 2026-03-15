@@ -6,8 +6,10 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Lock, Plus, Trash2, Users2 } from "lucide-react";
+import type { Drone } from "@shared/schema";
 
 interface SwarmResult {
   connectionString: string;
@@ -34,6 +36,10 @@ export function SwarmOpsPanel() {
   const [formationSlots, setFormationSlots] = useState<Array<{ idx: number; lat: number; lng: number; offsetNorthM: number; offsetEastM: number }>>([]);
   const [formationMissions, setFormationMissions] = useState<any[]>([]);
   const [results, setResults] = useState<SwarmResult[]>([]);
+  const { data: drones = [] } = useQuery<Drone[]>({
+    queryKey: ["/api/drones"],
+    refetchInterval: 5000,
+  });
 
   const addConnection = () => {
     const value = connectionInput.trim();
@@ -44,6 +50,30 @@ export function SwarmOpsPanel() {
     }
     setConnections((prev) => [...prev, value]);
     setConnectionInput("");
+  };
+
+  const addConnectionValue = (value: string) => {
+    const normalized = String(value || "").trim();
+    if (!normalized) return;
+    setConnections((prev) => (prev.includes(normalized) ? prev : [...prev, normalized]));
+  };
+
+  const addFromRegistry = (onlineOnly: boolean) => {
+    const source = drones.filter((d) => {
+      if (!d.connectionString) return false;
+      if (!onlineOnly) return true;
+      return String(d.status || "").toLowerCase() === "online" || String(d.status || "").toLowerCase() === "armed" || String(d.status || "").toLowerCase() === "flying";
+    });
+    if (source.length === 0) {
+      toast.error(onlineOnly ? "No online drones with connection strings found" : "No drones with connection strings found");
+      return;
+    }
+    setConnections((prev) => {
+      const next = new Set(prev);
+      source.forEach((d) => next.add(String(d.connectionString).trim()));
+      return Array.from(next);
+    });
+    toast.success(`Added ${source.length} drone connection(s) from registry`);
   };
 
   const runAction = async (action: "arm" | "disarm" | "set_mode") => {
@@ -188,6 +218,45 @@ export function SwarmOpsPanel() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
+          <div className="rounded border p-2 space-y-2">
+            <Label className="text-xs">Connect Drones Using This App</Label>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" onClick={() => addFromRegistry(false)} disabled={busy}>
+                Add All Registered
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => addFromRegistry(true)} disabled={busy}>
+                Add Online Only
+              </Button>
+            </div>
+            <ScrollArea className="h-28 rounded border">
+              <div className="divide-y">
+                {drones.length === 0 && (
+                  <p className="px-2 py-2 text-xs text-muted-foreground">No registered drones found.</p>
+                )}
+                {drones.map((drone) => (
+                  <div key={drone.id} className="flex items-center justify-between gap-2 px-2 py-2">
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium truncate">
+                        {drone.name} ({drone.callsign})
+                      </p>
+                      <p className="text-[11px] text-muted-foreground truncate font-mono">
+                        {drone.connectionString || "No connection string configured"}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!drone.connectionString || busy}
+                      onClick={() => addConnectionValue(String(drone.connectionString || ""))}
+                    >
+                      Add
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          </div>
+
           <div className="flex gap-2">
             <Input
               value={connectionInput}

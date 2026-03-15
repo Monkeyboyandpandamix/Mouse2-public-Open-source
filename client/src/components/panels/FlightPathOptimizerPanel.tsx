@@ -59,7 +59,7 @@ interface TerrainPoint {
 }
 
 interface Waypoint {
-  id: number;
+  id: string | number;
   order: number;
   latitude: number;
   longitude: number;
@@ -75,7 +75,7 @@ interface OptimizationResult {
   originalBattery: number;
   optimizedBattery: number;
   suggestions: OptimizationSuggestion[];
-  reorderedWaypoints?: { id: number; newOrder: number }[];
+  reorderedWaypoints?: { id: string | number; newOrder: number }[];
   altitudeAdjustments?: { waypointId: number; newAltitude: number; reason: string }[];
   droneConnected: boolean;
   droneSpecs?: {
@@ -95,13 +95,13 @@ interface OptimizationSuggestion {
   savings?: string;
   applied: boolean;
   data?: {
-    reorderedWaypoints?: { id: number; newOrder: number }[];
+    reorderedWaypoints?: { id: string | number; newOrder: number }[];
     altitudeAdjustments?: { waypointId: number; newAltitude: number }[];
   };
 }
 
 interface Mission {
-  id: number;
+  id: string | number;
   name: string;
   waypoints: Waypoint[];
 }
@@ -186,6 +186,14 @@ export function FlightPathOptimizerPanel() {
     fetchMissions();
   }, []);
 
+  useEffect(() => {
+    if (selectedMission) return;
+    const preferred = missions.find((m) => (m.waypoints?.length || 0) >= 2) || missions[0];
+    if (preferred) {
+      setSelectedMission(preferred);
+    }
+  }, [missions, selectedMission]);
+
   const fetchWeatherData = useCallback(async () => {
     setWeatherLoading(true);
     try {
@@ -253,8 +261,13 @@ export function FlightPathOptimizerPanel() {
   };
 
   const optimizePath = async () => {
-    if (!selectedMission || selectedMission.waypoints.length < 2) {
-      toast.error("Please select a mission with at least 2 waypoints");
+    if (!selectedMission) {
+      toast.error("Please select a mission first");
+      return;
+    }
+    const waypoints = [...(selectedMission.waypoints || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    if (waypoints.length < 2) {
+      toast.error("Mission must have at least 2 waypoints to optimize");
       return;
     }
 
@@ -262,7 +275,6 @@ export function FlightPathOptimizerPanel() {
     setAnalysisProgress(0);
 
     const suggestions: OptimizationSuggestion[] = [];
-    const waypoints = [...selectedMission.waypoints].sort((a, b) => a.order - b.order);
 
     await new Promise(r => setTimeout(r, 300));
     setAnalysisProgress(15);
@@ -388,7 +400,7 @@ export function FlightPathOptimizerPanel() {
 
       const distanceSaved = totalOriginalDistance - optimizedDistance;
       if (distanceSaved > 50) {
-        const reorderedWaypoints = optimizedOrder.map((id, idx) => ({ id, newOrder: idx }));
+        const reorderedWaypoints = optimizedOrder.map((id, idx) => ({ id, newOrder: idx + 1 }));
         suggestions.push({
           id: 'route-reorder',
           type: 'route',
@@ -811,7 +823,7 @@ export function FlightPathOptimizerPanel() {
           <Button 
             className="w-full" 
             onClick={optimizePath}
-            disabled={!selectedMission || isAnalyzing}
+            disabled={isAnalyzing}
             data-testid="button-analyze-path"
           >
             {isAnalyzing ? (

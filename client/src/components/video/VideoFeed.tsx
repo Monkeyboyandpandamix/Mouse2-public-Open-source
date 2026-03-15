@@ -140,15 +140,28 @@ export function VideoFeed() {
       
       const updateDimensions = () => {
         if (videoRef.current && videoRef.current.videoWidth > 0) {
-          setVideoDimensions({
-            width: videoRef.current.videoWidth,
-            height: videoRef.current.videoHeight
+          const nextWidth = videoRef.current.videoWidth;
+          const nextHeight = videoRef.current.videoHeight;
+          setVideoDimensions((prev) => {
+            if (prev.width === nextWidth && prev.height === nextHeight) {
+              return prev;
+            }
+            return {
+              width: nextWidth,
+              height: nextHeight,
+            };
           });
         }
       };
       
       videoRef.current.onloadedmetadata = updateDimensions;
       videoRef.current.onresize = updateDimensions;
+      return () => {
+        if (videoRef.current) {
+          videoRef.current.onloadedmetadata = null;
+          videoRef.current.onresize = null;
+        }
+      };
     }
   }, [webcamStream]);
 

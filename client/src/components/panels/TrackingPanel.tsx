@@ -378,6 +378,13 @@ export function TrackingPanel() {
   const startWebcam = async () => {
     try {
       setWebcamError(null);
+
+      if (!navigator.mediaDevices?.getUserMedia) {
+        const msg = "Camera access requires HTTPS or localhost. Your browser may block getUserMedia on insecure connections.";
+        setWebcamError(msg);
+        toast.error(msg);
+        return;
+      }
       
       // Start loading model in parallel
       loadModel();

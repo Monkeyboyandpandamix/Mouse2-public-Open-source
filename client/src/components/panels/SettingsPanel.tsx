@@ -15,6 +15,11 @@ import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cabl
 import { operationsLog, LogEntry, LogType } from "@/lib/operationsLog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { usePermissions } from "@/hooks/usePermissions";
+import { FlightModeMappingPanel } from "@/components/panels/FlightModeMappingPanel";
+import { MavlinkToolsPanel } from "@/components/panels/MavlinkToolsPanel";
+import { RtkNtripPanel } from "@/components/panels/RtkNtripPanel";
+import { PluginToolchainPanel } from "@/components/panels/PluginToolchainPanel";
+import { MissionPlannerParityPanel } from "@/components/panels/MissionPlannerParityPanel";
 import {
   getDefaultSerialPort,
   getDefaultUsbCamera,
@@ -274,6 +279,17 @@ export function SettingsPanel() {
   
   const queryClient = useQueryClient();
   const [unsavedChanges, setUnsavedChanges] = useState(false);
+  const [activeSettingsTab, setActiveSettingsTab] = useState("connections");
+  const [activeAdvancedSetup, setActiveAdvancedSetup] = useState("modesetup");
+  const setupSteps: Array<{ id: string; title: string; tab: string; description: string }> = [
+    { id: "hardware", title: "Hardware", tab: "hardware", description: "Set airframe, motor count, and hardware profile." },
+    { id: "links", title: "Connections", tab: "connections", description: "Configure Cube Orange+ and onboard link transport." },
+    { id: "radio", title: "Radio", tab: "connections", description: "Enable telemetry radio and tune RF/serial parameters." },
+    { id: "sensors", title: "Sensors", tab: "sensors", description: "Assign sensor ports and peripheral buses." },
+    { id: "input", title: "Input", tab: "input", description: "Configure RC/gamepad input and failsafe behavior." },
+    { id: "verify", title: "Verify", tab: "operations", description: "Run connection checks and confirm system health." },
+  ];
+  const [setupStepIndex, setSetupStepIndex] = useState(0);
   const [firmwareFile, setFirmwareFile] = useState<File | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
@@ -300,6 +316,15 @@ export function SettingsPanel() {
     canBitrate: "1000000",
     canBusId: "1",
     canSplitterEnabled: false,
+    radioEnabled: false,
+    radioType: "sik",
+    radioSerialPort: "none",
+    radioFrequencyMHz: "915.000",
+    radioChannelSpacingKHz: "25",
+    radioAirRateKbps: "64",
+    radioTxPowerDbm: "20",
+    radioNetId: "25",
+    radioTelemetryBaud: "57600",
   });
 
   const [sensorSettings, setSensorSettings] = useState({
@@ -513,6 +538,7 @@ export function SettingsPanel() {
     motors: "Mad Motors XP6S Arms (x4)",
     pdb: "Matek PDB-HEX X Class 12S (6-60V, 5A, 264A sense)",
     motorCount: "4",
+    airframe: "quad_x",
   });
 
   const [editingHardware, setEditingHardware] = useState(false);
@@ -521,18 +547,42 @@ export function SettingsPanel() {
     const saved = localStorage.getItem('mouse_hardware_config');
     if (saved) {
       try {
-        setHardwareConfig(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        setHardwareConfig((prev) => ({ ...prev, ...parsed }));
       } catch {}
     }
   }, []);
 
+  useEffect(() => {
+    const tab = setupSteps[setupStepIndex]?.tab;
+    if (tab) setActiveSettingsTab(tab);
+  }, [setupStepIndex]);
+
   const saveHardwareConfig = () => {
     localStorage.setItem('mouse_hardware_config', JSON.stringify(hardwareConfig));
     localStorage.setItem('mouse_motor_count', hardwareConfig.motorCount);
+    localStorage.setItem('mouse_airframe_profile', hardwareConfig.airframe);
     window.dispatchEvent(new CustomEvent('motor-count-changed', { detail: parseInt(hardwareConfig.motorCount) }));
+    const selectedDroneRaw = localStorage.getItem("mouse_selected_drone");
+    if (selectedDroneRaw) {
+      try {
+        const selectedDrone = JSON.parse(selectedDroneRaw);
+        selectedDrone.motorCount = parseInt(hardwareConfig.motorCount);
+        selectedDrone.model = hardwareConfig.airframe;
+        localStorage.setItem("mouse_selected_drone", JSON.stringify(selectedDrone));
+        window.dispatchEvent(new CustomEvent("drone-selected", { detail: selectedDrone }));
+      } catch {
+        // ignore parse errors
+      }
+    }
     setEditingHardware(false);
     toast.success("Hardware configuration saved");
   };
+
+  useEffect(() => {
+    localStorage.setItem("mouse_input_settings", JSON.stringify(inputSettings));
+    window.dispatchEvent(new CustomEvent("input-settings-changed", { detail: inputSettings }));
+  }, [inputSettings]);
 
   const { data: savedConnectionSettings } = useQuery({
     queryKey: ["/api/settings/connection"],
@@ -622,6 +672,15 @@ export function SettingsPanel() {
       canBitrate: "1000000",
       canBusId: "1",
       canSplitterEnabled: false,
+      radioEnabled: false,
+      radioType: "sik",
+      radioSerialPort: "none",
+      radioFrequencyMHz: "915.000",
+      radioChannelSpacingKHz: "25",
+      radioAirRateKbps: "64",
+      radioTxPowerDbm: "20",
+      radioNetId: "25",
+      radioTelemetryBaud: "57600",
     });
     setSensorSettings({
       lidarAddress: "0x62",
@@ -692,6 +751,24 @@ export function SettingsPanel() {
 
   const updateSetting = (setter: any, key: string, value: any) => {
     setter((prev: any) => ({ ...prev, [key]: value }));
+    setUnsavedChanges(true);
+  };
+
+  const deriveAirframe = (motorCount: string) => {
+    if (motorCount === "4") return "quad_x";
+    if (motorCount === "5") return "penta_x";
+    if (motorCount === "6") return "hex_x";
+    if (motorCount === "8") return "octo_x";
+    return "quad_x";
+  };
+
+  const handleMotorCountChange = (motorCount: string) => {
+    const airframe = deriveAirframe(motorCount);
+    setHardwareConfig((prev) => ({ ...prev, motorCount, airframe }));
+    setSensorSettings((prev) => ({ ...prev, pwmOutputs: motorCount === "8" ? "8" : motorCount }));
+    localStorage.setItem("mouse_motor_count", motorCount);
+    localStorage.setItem("mouse_airframe_profile", airframe);
+    window.dispatchEvent(new CustomEvent("motor-count-changed", { detail: parseInt(motorCount, 10) }));
     setUnsavedChanges(true);
   };
 
@@ -1026,14 +1103,56 @@ export function SettingsPanel() {
           )}
         </div>
 
+        <Card className="mb-4 border-primary/30 bg-primary/5">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Guided Setup Workflow</CardTitle>
+            <CardDescription>
+              Step {setupStepIndex + 1} of {setupSteps.length}: {setupSteps[setupStepIndex]?.description}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Progress value={((setupStepIndex + 1) / setupSteps.length) * 100} className="h-2" />
+            <div className="flex flex-wrap gap-2">
+              {setupSteps.map((step, idx) => (
+                <Button
+                  key={step.id}
+                  variant={idx === setupStepIndex ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setSetupStepIndex(idx)}
+                >
+                  {idx + 1}. {step.title}
+                </Button>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={setupStepIndex === 0}
+                onClick={() => setSetupStepIndex((v) => Math.max(0, v - 1))}
+              >
+                Previous
+              </Button>
+              <Button
+                size="sm"
+                disabled={setupStepIndex >= setupSteps.length - 1}
+                onClick={() => setSetupStepIndex((v) => Math.min(setupSteps.length - 1, v + 1))}
+              >
+                Next
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
         <Tabs
-          defaultValue="connections"
+          value={activeSettingsTab}
           className="w-full"
           onValueChange={(value) => {
+            setActiveSettingsTab(value);
             setOperationsActive(value === "operations");
           }}
         >
-          <TabsList className="grid w-full grid-cols-11">
+          <TabsList className="grid w-full grid-cols-12">
             <TabsTrigger value="hardware">Hardware</TabsTrigger>
             <TabsTrigger value="connections">Connections</TabsTrigger>
             <TabsTrigger value="sensors">Sensors</TabsTrigger>
@@ -1045,6 +1164,7 @@ export function SettingsPanel() {
             <TabsTrigger value="storage">Storage</TabsTrigger>
             <TabsTrigger value="firmware">Firmware</TabsTrigger>
             <TabsTrigger value="operations">Console</TabsTrigger>
+            <TabsTrigger value="advanced">Advanced</TabsTrigger>
           </TabsList>
 
           <TabsContent value="hardware" className="space-y-4 mt-4">
@@ -1168,7 +1288,7 @@ export function SettingsPanel() {
                       <Label className="text-xs text-muted-foreground">Motor Count</Label>
                       <Select 
                         value={hardwareConfig.motorCount}
-                        onValueChange={(v) => setHardwareConfig(prev => ({ ...prev, motorCount: v }))}
+                        onValueChange={handleMotorCountChange}
                         disabled={!editingHardware}
                       >
                         <SelectTrigger className="mt-1" data-testid="select-motor-count">
@@ -1178,10 +1298,32 @@ export function SettingsPanel() {
                           <SelectItem value="4">4 Motors (Quadcopter)</SelectItem>
                           <SelectItem value="5">5 Motors (Pentacopter)</SelectItem>
                           <SelectItem value="6">6 Motors (Hexacopter)</SelectItem>
+                          <SelectItem value="8">8 Motors (Octocopter)</SelectItem>
                         </SelectContent>
                       </Select>
                       <p className="text-[10px] text-muted-foreground mt-1">
                         Telemetry will display controls for selected motor count
+                      </p>
+                    </div>
+                    <div className="p-3 bg-primary/10 rounded-lg border border-primary/30">
+                      <Label className="text-xs text-muted-foreground">Copter Airframe</Label>
+                      <Select
+                        value={hardwareConfig.airframe}
+                        onValueChange={(v) => setHardwareConfig((prev) => ({ ...prev, airframe: v }))}
+                        disabled={!editingHardware}
+                      >
+                        <SelectTrigger className="mt-1">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="quad_x">Quad X</SelectItem>
+                          <SelectItem value="penta_x">Penta X</SelectItem>
+                          <SelectItem value="hex_x">Hex X</SelectItem>
+                          <SelectItem value="octo_x">Octo X</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[10px] text-muted-foreground mt-1">
+                        Auto-synced from motor count; override available if needed.
                       </p>
                     </div>
                   </div>
@@ -1672,6 +1814,63 @@ export function SettingsPanel() {
             </Card>
           </TabsContent>
 
+          <TabsContent value="advanced" className="space-y-4 mt-4">
+            <Card className="border-2 border-primary/40">
+              <CardHeader>
+                <CardTitle>Advanced Flight Stack Setup</CardTitle>
+                <CardDescription>
+                  Configure one-time drone stack integrations here. These modules were moved from sidebar into Settings.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant={activeAdvancedSetup === "modesetup" ? "default" : "outline"}
+                    onClick={() => setActiveAdvancedSetup("modesetup")}
+                  >
+                    Mode Setup
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={activeAdvancedSetup === "mavtools" ? "default" : "outline"}
+                    onClick={() => setActiveAdvancedSetup("mavtools")}
+                  >
+                    MAVLink Tools
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={activeAdvancedSetup === "rtk" ? "default" : "outline"}
+                    onClick={() => setActiveAdvancedSetup("rtk")}
+                  >
+                    RTK / NTRIP
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={activeAdvancedSetup === "plugins" ? "default" : "outline"}
+                    onClick={() => setActiveAdvancedSetup("plugins")}
+                  >
+                    Plugins
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={activeAdvancedSetup === "mp-parity" ? "default" : "outline"}
+                    onClick={() => setActiveAdvancedSetup("mp-parity")}
+                  >
+                    MP Parity
+                  </Button>
+                </div>
+                <div className="rounded-lg border border-border bg-card overflow-hidden min-h-[620px]">
+                  {activeAdvancedSetup === "modesetup" && <FlightModeMappingPanel />}
+                  {activeAdvancedSetup === "mavtools" && <MavlinkToolsPanel />}
+                  {activeAdvancedSetup === "rtk" && <RtkNtripPanel />}
+                  {activeAdvancedSetup === "plugins" && <PluginToolchainPanel />}
+                  {activeAdvancedSetup === "mp-parity" && <MissionPlannerParityPanel />}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           <TabsContent value="connections" className="space-y-4 mt-4">
             <Card>
               <CardHeader>
@@ -1698,6 +1897,122 @@ export function SettingsPanel() {
                     </Button>
                   ))}
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Telemetry Radio Link</CardTitle>
+                <CardDescription>
+                  Enable RF telemetry configuration (frequency, channeling, power, and serial bridge).
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Enable Radio Connection</Label>
+                    <p className="text-xs text-muted-foreground">Required for SiK/ELRS telemetry radio setup.</p>
+                  </div>
+                  <Switch
+                    checked={Boolean(connectionSettings.radioEnabled)}
+                    onCheckedChange={(v) => updateSetting(setConnectionSettings, "radioEnabled", v)}
+                  />
+                </div>
+
+                {connectionSettings.radioEnabled && (
+                  <>
+                    <Separator />
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>Radio Type</Label>
+                        <Select
+                          value={connectionSettings.radioType}
+                          onValueChange={(v) => updateSetting(setConnectionSettings, "radioType", v)}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="sik">SiK</SelectItem>
+                            <SelectItem value="elrs">ELRS Telemetry</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>USB Radio Port</Label>
+                        <Select
+                          value={connectionSettings.radioSerialPort}
+                          onValueChange={(v) => updateSetting(setConnectionSettings, "radioSerialPort", v)}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {usbRadioPortOptions.map((port) => (
+                              <SelectItem key={port.value} value={port.value}>
+                                {port.label ?? port.value}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label>Frequency (MHz)</Label>
+                        <Input
+                          value={connectionSettings.radioFrequencyMHz}
+                          onChange={(e) => updateSetting(setConnectionSettings, "radioFrequencyMHz", e.target.value)}
+                          placeholder="915.000"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Channel Spacing (kHz)</Label>
+                        <Input
+                          value={connectionSettings.radioChannelSpacingKHz}
+                          onChange={(e) => updateSetting(setConnectionSettings, "radioChannelSpacingKHz", e.target.value)}
+                          placeholder="25"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Air Data Rate (kbps)</Label>
+                        <Input
+                          value={connectionSettings.radioAirRateKbps}
+                          onChange={(e) => updateSetting(setConnectionSettings, "radioAirRateKbps", e.target.value)}
+                          placeholder="64"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label>TX Power (dBm)</Label>
+                        <Input
+                          value={connectionSettings.radioTxPowerDbm}
+                          onChange={(e) => updateSetting(setConnectionSettings, "radioTxPowerDbm", e.target.value)}
+                          placeholder="20"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>NETID</Label>
+                        <Input
+                          value={connectionSettings.radioNetId}
+                          onChange={(e) => updateSetting(setConnectionSettings, "radioNetId", e.target.value)}
+                          placeholder="25"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Telemetry Baud</Label>
+                        <Select
+                          value={connectionSettings.radioTelemetryBaud}
+                          onValueChange={(v) => updateSetting(setConnectionSettings, "radioTelemetryBaud", v)}
+                        >
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="57600">57600</SelectItem>
+                            <SelectItem value="115200">115200</SelectItem>
+                            <SelectItem value="230400">230400</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
 

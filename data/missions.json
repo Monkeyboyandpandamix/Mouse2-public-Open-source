@@ -1,13 +1,13 @@
 [
   {
-    "id": "1772408959081-f7gfr3rrf",
+    "id": "1773541817054-et608dzti",
     "name": "Mission 1",
     "description": "New mission",
     "status": "planned",
-    "homeLatitude": 36.07196039722399,
-    "homeLongitude": -79.4731727854915,
+    "homeLatitude": 36.072113213187414,
+    "homeLongitude": -79.47310617104037,
     "homeAltitude": 0,
-    "createdAt": "2026-03-01T23:49:19.081Z",
-    "updatedAt": "2026-03-01T23:49:19.081Z"
+    "createdAt": "2026-03-15T02:30:17.054Z",
+    "updatedAt": "2026-03-15T02:30:17.054Z"
   }
 ]

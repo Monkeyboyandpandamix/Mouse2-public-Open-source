@@ -544,6 +544,22 @@ export function MapInterface() {
       ? [selectedDrone.latitude, selectedDrone.longitude] 
       : null;
 
+  useEffect(() => {
+    // If operator geolocation is unavailable and we have drone telemetry,
+    // use drone position as operator reference for 30-mile overlay filtering.
+    if (
+      selectedDronePosition &&
+      currentLocation[0] === DEFAULT_LAT &&
+      currentLocation[1] === DEFAULT_LNG
+    ) {
+      // Avoid update loops when selectedDronePosition is the same as current/default.
+      const [nextLat, nextLng] = selectedDronePosition;
+      if (Math.abs(currentLocation[0] - nextLat) > 1e-9 || Math.abs(currentLocation[1] - nextLng) > 1e-9) {
+        setCurrentLocation(selectedDronePosition);
+      }
+    }
+  }, [selectedDronePosition, currentLocation]);
+
   return (
     <div className="w-full h-full relative z-0 bg-background group">
       <MapContainer 
@@ -558,7 +574,11 @@ export function MapInterface() {
           url={getTileUrl()}
         />
         <NoFlyZoneOverlay zones={noFlyZones} />
-        <RegulatoryGeoJsonOverlay controlClassName="top-20 left-4" />
+        <RegulatoryGeoJsonOverlay 
+          controlClassName="top-20 left-4" 
+          dronePosition={selectedDronePosition}
+          operatorPosition={currentLocation}
+        />
         
         <ZoomControls dronePosition={selectedDronePosition} operatorPosition={currentLocation} />
         <MapCenterPersist />

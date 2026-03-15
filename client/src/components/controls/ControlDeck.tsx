@@ -43,10 +43,15 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
   const [customWidgets, setCustomWidgets] = useState<CustomWidget[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [inputConfig, setInputConfig] = useState<{ gamepadDevice: string; joystickDeadzone: string }>({
+    gamepadDevice: "none",
+    joystickDeadzone: "5",
+  });
   const flightStartTime = useRef<Date | null>(null);
   const maxAltitudeRef = useRef<number>(0);
   const totalDistanceRef = useRef<number>(0);
   const lastPositionRef = useRef<{lat: number, lng: number} | null>(null);
+  const gamepadArmLatchRef = useRef(false);
 
   // Get current drone ID from localStorage
   const getCurrentDroneId = () => {
@@ -159,6 +164,81 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
     };
     checkActiveSession();
   }, []);
+
+  useEffect(() => {
+    const onArmState = (e: CustomEvent<{ armed?: boolean }>) => {
+      if (typeof e.detail?.armed === "boolean") {
+        setIsArmed(e.detail.armed);
+      }
+    };
+    window.addEventListener("arm-state-changed" as any, onArmState);
+    return () => window.removeEventListener("arm-state-changed" as any, onArmState);
+  }, []);
+
+  useEffect(() => {
+    const loadInputConfig = () => {
+      const raw = localStorage.getItem("mouse_input_settings");
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw);
+        setInputConfig({
+          gamepadDevice: String(parsed?.gamepadDevice || "none"),
+          joystickDeadzone: String(parsed?.joystickDeadzone || "5"),
+        });
+      } catch {
+        // ignore parse errors
+      }
+    };
+    loadInputConfig();
+    window.addEventListener("input-settings-changed" as any, loadInputConfig);
+    return () => window.removeEventListener("input-settings-changed" as any, loadInputConfig);
+  }, []);
+
+  useEffect(() => {
+    if (inputConfig.gamepadDevice === "none") return;
+    const deadzone = Math.max(0, Math.min(0.25, Number(inputConfig.joystickDeadzone || "5") / 100));
+    const applyDeadzone = (v: number) => (Math.abs(v) < deadzone ? 0 : v);
+    const timer = window.setInterval(() => {
+      const gamepads = navigator.getGamepads?.();
+      const gp = gamepads?.find(Boolean);
+      if (!gp) return;
+
+      const armButtonPressed = Boolean(gp.buttons?.[0]?.pressed);
+      if (armButtonPressed && !gamepadArmLatchRef.current && canArmDisarm) {
+        const newArmed = !isArmed;
+        setIsArmed(newArmed);
+        localStorage.setItem("mouse_drone_armed", JSON.stringify(newArmed));
+        window.dispatchEvent(new CustomEvent("arm-state-changed", { detail: { armed: newArmed, source: "gamepad" } }));
+      }
+      gamepadArmLatchRef.current = armButtonPressed;
+
+      if (!isArmed || !canFlightControl) return;
+
+      const rollAxis = applyDeadzone(gp.axes?.[0] ?? 0);
+      const pitchAxis = applyDeadzone(gp.axes?.[1] ?? 0);
+      const yawAxis = applyDeadzone(gp.axes?.[2] ?? 0);
+      const throttleAxis = applyDeadzone(gp.axes?.[3] ?? 0);
+      if (!rollAxis && !pitchAxis && !yawAxis && !throttleAxis) return;
+
+      window.dispatchEvent(
+        new CustomEvent("flight-command", {
+          detail: {
+            command: "stabilize_adjust",
+            source: "gamepad",
+            corrections: {
+              roll: rollAxis * 2.2,
+              pitch: -pitchAxis * 2.2,
+              yaw: yawAxis * 2.6,
+              throttle: -throttleAxis * 0.8,
+              forward: -pitchAxis * 0.5,
+              lateral: rollAxis * 0.5,
+            },
+          },
+        }),
+      );
+    }, 140);
+    return () => window.clearInterval(timer);
+  }, [inputConfig, isArmed, canArmDisarm, canFlightControl]);
 
   // Load custom widgets from localStorage
   useEffect(() => {

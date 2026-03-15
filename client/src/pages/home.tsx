@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from "react";
+import { useState, useEffect, lazy, Suspense, type ComponentType } from "react";
 import { TopBar } from "@/components/layout/TopBar";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { AutoStabilizationController } from "@/components/controls/AutoStabilizationController";
@@ -8,13 +8,37 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { AlertTriangle, X, Eye, ArrowLeft, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { Card, CardContent } from "@/components/ui/card";
 import type { Drone } from "@shared/schema";
 
+function lazyWithRetry<T extends ComponentType<any>>(
+  importer: () => Promise<{ default: T }>,
+  key: string,
+) {
+  return lazy(async () => {
+    try {
+      return await importer();
+    } catch (error) {
+      if (typeof window !== "undefined") {
+        const marker = `mouse_lazy_retry_${key}`;
+        const tried = sessionStorage.getItem(marker) === "1";
+        if (!tried) {
+          sessionStorage.setItem(marker, "1");
+          window.location.reload();
+          await new Promise<never>(() => {});
+        }
+        sessionStorage.removeItem(marker);
+      }
+      throw error;
+    }
+  });
+}
+
 // Lazy-loaded heavy components for code splitting
-const MapInterface = lazy(() => import("@/components/map/MapInterface").then(m => ({ default: m.MapInterface })));
-const VideoFeed = lazy(() => import("@/components/video/VideoFeed").then(m => ({ default: m.VideoFeed })));
-const ControlDeck = lazy(() => import("@/components/controls/ControlDeck").then(m => ({ default: m.ControlDeck })));
-const TelemetryPanel = lazy(() => import("@/components/telemetry/TelemetryPanel").then(m => ({ default: m.TelemetryPanel })));
+const MapInterface = lazyWithRetry(() => import("@/components/map/MapInterface").then(m => ({ default: m.MapInterface })), "map");
+const VideoFeed = lazyWithRetry(() => import("@/components/video/VideoFeed").then(m => ({ default: m.VideoFeed })), "video");
+const ControlDeck = lazyWithRetry(() => import("@/components/controls/ControlDeck").then(m => ({ default: m.ControlDeck })), "controls");
+const TelemetryPanel = lazyWithRetry(() => import("@/components/telemetry/TelemetryPanel").then(m => ({ default: m.TelemetryPanel })), "telemetry");
 
 const UserAccessPanel = lazy(() => import("@/components/panels/UserAccessPanel").then(m => ({ default: m.UserAccessPanel })));
 const DroneSelectionPanel = lazy(() => import("@/components/panels/DroneSelectionPanel").then(m => ({ default: m.DroneSelectionPanel })));
@@ -29,14 +53,8 @@ const BME688Panel = lazy(() => import("@/components/panels/BME688Panel"));
 const AutomationPanel = lazy(() => import("@/components/panels/AutomationPanel").then(m => ({ default: m.AutomationPanel })));
 const TerminalCommandsPanel = lazy(() => import("@/components/panels/TerminalCommandsPanel").then(m => ({ default: m.TerminalCommandsPanel })));
 const FlightControllerParamsPanel = lazy(() => import("@/components/panels/FlightControllerParamsPanel").then(m => ({ default: m.FlightControllerParamsPanel })));
-const FlightModeMappingPanel = lazy(() => import("@/components/panels/FlightModeMappingPanel").then(m => ({ default: m.FlightModeMappingPanel })));
 const CalibrationPanel = lazy(() => import("@/components/panels/CalibrationPanel").then(m => ({ default: m.CalibrationPanel })));
-const MavlinkToolsPanel = lazy(() => import("@/components/panels/MavlinkToolsPanel").then(m => ({ default: m.MavlinkToolsPanel })));
-const RtkNtripPanel = lazy(() => import("@/components/panels/RtkNtripPanel").then(m => ({ default: m.RtkNtripPanel })));
-const VehicleSetupPanel = lazy(() => import("@/components/panels/VehicleSetupPanel").then(m => ({ default: m.VehicleSetupPanel })));
 const SwarmOpsPanel = lazy(() => import("@/components/panels/SwarmOpsPanel").then(m => ({ default: m.SwarmOpsPanel })));
-const PluginToolchainPanel = lazy(() => import("@/components/panels/PluginToolchainPanel").then(m => ({ default: m.PluginToolchainPanel })));
-const MissionPlannerParityPanel = lazy(() => import("@/components/panels/MissionPlannerParityPanel").then(m => ({ default: m.MissionPlannerParityPanel })));
 const GeofencingPanel = lazy(() => import("@/components/panels/GeofencingPanel").then(m => ({ default: m.GeofencingPanel })));
 const GUIConfigPanel = lazy(() => import("@/components/panels/GUIConfigPanel").then(m => ({ default: m.GUIConfigPanel })));
 
@@ -118,6 +136,15 @@ export default function Home() {
     lastModelGeneratedAt: null,
   });
   const [mappingBusy, setMappingBusy] = useState(false);
+  const [showPageHelp, setShowPageHelp] = useState(true);
+  const pageHelp: Record<string, { title: string; body: string }> = {
+    map: { title: "Map Guide", body: "Use zoom controls to center on drone/operator, verify FAA overlays (enabled by default), and confirm waypoint/telemetry tracks before arming." },
+    mission: { title: "Mission Guide", body: "Select or create a mission, add destination/waypoints, validate authorization if restricted-airspace override is needed, then execute/upload to FC." },
+    optimizer: { title: "Optimizer Guide", body: "Choose a mission with 2+ waypoints, set optimization preferences, run Analyze, then apply suggested reorder/altitude updates back to the mission." },
+    tracking: { title: "Tracking Guide", body: "Switch to webcam or feed mode, lock target boxes, and monitor confidence/motion vectors while stabilization and obstacle events update in real time." },
+    logs: { title: "Flight Logs Guide", body: "Open a session to inspect map replay and telemetry charts, then export CSV bundles or review DataFlash/analysis artifacts." },
+    settings: { title: "Settings Guide", body: "Follow Guided Setup top-to-bottom: Hardware -> Connections/Radio -> Sensors -> Input -> Verify, then Save All and run connection tests." },
+  };
 
   // Listen for session changes (logout from TopBar or UserAccessPanel)
   useEffect(() => {
@@ -158,6 +185,13 @@ export default function Home() {
     window.addEventListener("navigate-tab" as any, handleNavigateTab);
     return () => window.removeEventListener("navigate-tab" as any, handleNavigateTab);
   }, []);
+
+  useEffect(() => {
+    const movedToSettings = new Set(["modesetup", "mavtools", "rtk", "plugins", "mp-parity", "vehiclesetup"]);
+    if (movedToSettings.has(activeTab)) {
+      setActiveTab("settings");
+    }
+  }, [activeTab]);
 
   // Listen for real system errors from MAVLink/sensors
   useEffect(() => {
@@ -508,52 +542,16 @@ export default function Home() {
             <FlightControllerParamsPanel />
           </div>
         );
-      case "modesetup":
-        return (
-          <div className="flex-1 relative overflow-hidden">
-            <FlightModeMappingPanel />
-          </div>
-        );
       case "calibration":
         return (
           <div className="flex-1 relative overflow-hidden">
             <CalibrationPanel />
           </div>
         );
-      case "mavtools":
-        return (
-          <div className="flex-1 relative overflow-hidden">
-            <MavlinkToolsPanel />
-          </div>
-        );
-      case "rtk":
-        return (
-          <div className="flex-1 relative overflow-hidden">
-            <RtkNtripPanel />
-          </div>
-        );
-      case "vehiclesetup":
-        return (
-          <div className="flex-1 relative overflow-hidden">
-            <VehicleSetupPanel />
-          </div>
-        );
       case "swarm":
         return (
           <div className="flex-1 relative overflow-hidden">
             <SwarmOpsPanel />
-          </div>
-        );
-      case "plugins":
-        return (
-          <div className="flex-1 relative overflow-hidden">
-            <PluginToolchainPanel />
-          </div>
-        );
-      case "mp-parity":
-        return (
-          <div className="flex-1 relative overflow-hidden">
-            <MissionPlannerParityPanel />
           </div>
         );
       case "users":
@@ -669,6 +667,31 @@ export default function Home() {
         <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
         
         <main className="flex-1 relative flex flex-col overflow-hidden">
+          {showPageHelp ? (
+            <div className="p-2 sm:p-3 border-b border-border/50">
+              <Card className="bg-muted/20 border-primary/20">
+                <CardContent className="py-2 px-3 flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold text-primary">
+                      {pageHelp[activeTab]?.title || "Page Guide"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {pageHelp[activeTab]?.body || "Use this page to configure and monitor drone operations."}
+                    </p>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={() => setShowPageHelp(false)} className="h-6 px-2 text-xs">
+                    Hide
+                  </Button>
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
+            <div className="p-2 border-b border-border/40">
+              <Button variant="ghost" size="sm" onClick={() => setShowPageHelp(true)} className="h-6 px-2 text-xs">
+                Show Page Guide
+              </Button>
+            </div>
+          )}
           <Suspense fallback={<PanelFallback />}>
             {renderMainContent()}
           </Suspense>

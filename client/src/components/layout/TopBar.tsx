@@ -230,6 +230,16 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
           window.dispatchEvent(new CustomEvent('motor-telemetry-update', { detail: data }));
         } else if (type === 'adsb' || type === 'adsb_update') {
           window.dispatchEvent(new CustomEvent('adsb-update', { detail: data }));
+        } else if (type === 'audio_output_selected') {
+          window.dispatchEvent(new CustomEvent('audio-output-updated', { detail: data }));
+        } else if (type === 'audio_live') {
+          window.dispatchEvent(new CustomEvent('audio-live-updated', { detail: data }));
+        } else if (type === 'audio_drone_mic') {
+          window.dispatchEvent(new CustomEvent('audio-drone-mic-updated', { detail: data }));
+        } else if (type === 'audio_tts') {
+          window.dispatchEvent(new CustomEvent('audio-tts-broadcast', { detail: data }));
+        } else if (type === 'audio_buzzer') {
+          window.dispatchEvent(new CustomEvent('audio-buzzer-played', { detail: data }));
         }
       } catch (e) {
         // Ignore parse errors

@@ -778,6 +778,10 @@ export async function registerRoutes(
 
   app.post("/api/audio/live/start", async (req, res) => {
     const source = String(req.body?.source || "operator-mic");
+    const requestedDeviceType = String(req.body?.deviceType || "").trim();
+    if (["gpio", "usb", "buzzer"].includes(requestedDeviceType)) {
+      audioState.deviceType = requestedDeviceType as "gpio" | "usb" | "buzzer";
+    }
     audioState.live = {
       active: true,
       source,

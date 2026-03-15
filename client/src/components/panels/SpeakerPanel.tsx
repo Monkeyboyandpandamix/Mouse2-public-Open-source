@@ -81,6 +81,16 @@ export function SpeakerPanel() {
   const [droneMicStatus, setDroneMicStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const micStreamRef = useRef<MediaStream | null>(null);
 
+  const applyAudioState = (state: AudioStatusResponse["state"]) => {
+    setAudioDevice(state.deviceType);
+    setVolume([state.volume]);
+    setIsRecording(state.live.active);
+    setDroneMicEnabled(state.droneMic.enabled);
+    setIsListeningFromDrone(state.droneMic.listening);
+    setDroneMicVolume([state.droneMic.volume]);
+    setDroneMicStatus(state.droneMic.enabled ? "connected" : "disconnected");
+  };
+
   const apiJson = async (url: string, init?: RequestInit) => {
     const response = await fetch(url, init);
     if (!response.ok) {
@@ -92,13 +102,7 @@ export function SpeakerPanel() {
 
   const loadAudioStatus = async () => {
     const status = await apiJson("/api/audio/status") as AudioStatusResponse;
-    setAudioDevice(status.state.deviceType);
-    setVolume([status.state.volume]);
-    setIsRecording(status.state.live.active);
-    setDroneMicEnabled(status.state.droneMic.enabled);
-    setIsListeningFromDrone(status.state.droneMic.listening);
-    setDroneMicVolume([status.state.droneMic.volume]);
-    setDroneMicStatus(status.state.droneMic.enabled ? "connected" : "disconnected");
+    applyAudioState(status.state);
   };
 
   const playBuzzerTone = async (toneId: string) => {
@@ -151,10 +155,52 @@ export function SpeakerPanel() {
       // no-op for offline fallback
     });
     return () => {
+      speechSynthesis.onvoiceschanged = null;
       if (micStreamRef.current) {
         micStreamRef.current.getTracks().forEach((track) => track.stop());
         micStreamRef.current = null;
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    const poll = window.setInterval(() => {
+      loadAudioStatus().catch(() => {});
+    }, 3000);
+    return () => window.clearInterval(poll);
+  }, []);
+
+  useEffect(() => {
+    const onOutput = (event: Event) => {
+      const custom = event as CustomEvent<any>;
+      if (custom.detail && typeof custom.detail === "object") {
+        setAudioDevice(custom.detail.deviceType || "gpio");
+        setVolume([Number(custom.detail.volume ?? 80)]);
+      }
+    };
+    const onLive = (event: Event) => {
+      const custom = event as CustomEvent<any>;
+      if (custom.detail && typeof custom.detail === "object") {
+        setIsRecording(Boolean(custom.detail.active));
+      }
+    };
+    const onDroneMic = (event: Event) => {
+      const custom = event as CustomEvent<any>;
+      if (custom.detail && typeof custom.detail === "object") {
+        setDroneMicEnabled(Boolean(custom.detail.enabled));
+        setIsListeningFromDrone(Boolean(custom.detail.listening));
+        setDroneMicVolume([Number(custom.detail.volume ?? 70)]);
+        setDroneMicStatus(custom.detail.enabled ? "connected" : "disconnected");
+      }
+    };
+
+    window.addEventListener("audio-output-updated", onOutput as any);
+    window.addEventListener("audio-live-updated", onLive as any);
+    window.addEventListener("audio-drone-mic-updated", onDroneMic as any);
+    return () => {
+      window.removeEventListener("audio-output-updated", onOutput as any);
+      window.removeEventListener("audio-live-updated", onLive as any);
+      window.removeEventListener("audio-drone-mic-updated", onDroneMic as any);
     };
   }, []);
 
@@ -317,17 +363,29 @@ export function SpeakerPanel() {
 
   const handleStartRecording = async () => {
     try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        toast.error("Microphone API unavailable in this browser/environment");
+        return;
+      }
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       micStreamRef.current = stream;
-      await apiJson("/api/audio/live/start", {
+      const result = await apiJson("/api/audio/live/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ source: "operator-mic", deviceType: audioDevice }),
       });
-      setIsRecording(true);
+      if (result?.live?.active === true) {
+        setIsRecording(true);
+      } else {
+        throw new Error("Audio backend did not enter live mode");
+      }
       toast.success("Live broadcast started - speak into microphone");
-    } catch (error) {
-      toast.error("Microphone access denied");
+    } catch (error: any) {
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach((track) => track.stop());
+        micStreamRef.current = null;
+      }
+      toast.error(error?.message || "Microphone access denied");
     }
   };
 
@@ -339,6 +397,7 @@ export function SpeakerPanel() {
     await apiJson("/api/audio/live/stop", { method: "POST" }).catch(() => {});
     setIsRecording(false);
     toast.info("Live broadcast stopped");
+    loadAudioStatus().catch(() => {});
   };
 
   const handleAddQuickMessage = () => {

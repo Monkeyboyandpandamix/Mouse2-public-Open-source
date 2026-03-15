@@ -66,17 +66,11 @@ const defaultTabs: TabConfig[] = [
   { id: "scripts", name: "Automation", icon: "Code", visible: true, order: 10, isCustom: false },
   { id: "terminal", name: "Commands", icon: "Terminal", visible: true, order: 11, isCustom: false },
   { id: "fcparams", name: "FC Params", icon: "SlidersHorizontal", visible: true, order: 12, isCustom: false },
-  { id: "modesetup", name: "Mode Setup", icon: "Sliders", visible: true, order: 13, isCustom: false },
-  { id: "calibration", name: "Calibration", icon: "Wrench", visible: true, order: 14, isCustom: false },
-  { id: "mavtools", name: "MAVLink Tools", icon: "Radio", visible: true, order: 15, isCustom: false },
-  { id: "rtk", name: "RTK / NTRIP", icon: "Satellite", visible: true, order: 16, isCustom: false },
-  { id: "vehiclesetup", name: "Vehicle Setup", icon: "Car", visible: true, order: 17, isCustom: false },
-  { id: "swarm", name: "Swarm Ops", icon: "Users2", visible: true, order: 18, isCustom: false },
-  { id: "plugins", name: "Plugins", icon: "Puzzle", visible: true, order: 19, isCustom: false },
-  { id: "mp-parity", name: "MP Parity", icon: "ListChecks", visible: true, order: 20, isCustom: false },
-  { id: "users", name: "User Access", icon: "Users", visible: true, order: 21, isCustom: false },
-  { id: "guiconfig", name: "GUI Config", icon: "LayoutDashboard", visible: true, order: 22, isCustom: false },
-  { id: "settings", name: "Settings", icon: "Settings", visible: true, order: 23, isCustom: false },
+  { id: "calibration", name: "Calibration", icon: "Wrench", visible: true, order: 13, isCustom: false },
+  { id: "swarm", name: "Swarm Ops", icon: "Users2", visible: true, order: 14, isCustom: false },
+  { id: "users", name: "User Access", icon: "Users", visible: true, order: 15, isCustom: false },
+  { id: "guiconfig", name: "GUI Config", icon: "LayoutDashboard", visible: true, order: 16, isCustom: false },
+  { id: "settings", name: "Settings", icon: "Settings", visible: true, order: 17, isCustom: false },
 ];
 
 const defaultPanels: PanelConfig[] = [
@@ -93,7 +87,10 @@ export function GUIConfigPanel() {
   const [tabs, setTabs] = useState<TabConfig[]>(() => {
     const saved = localStorage.getItem('mouse_gui_tabs');
     if (saved) {
-      const savedTabs: TabConfig[] = JSON.parse(saved);
+      const allowedDefaultIds = new Set(defaultTabs.map((t) => t.id));
+      const savedTabs: TabConfig[] = (JSON.parse(saved) as TabConfig[]).filter((tab) =>
+        tab.isCustom ? true : allowedDefaultIds.has(tab.id),
+      );
       // Merge any missing default tabs into saved config
       const savedIds = new Set(savedTabs.map(t => t.id));
       const missingTabs = defaultTabs.filter(t => !savedIds.has(t.id));
