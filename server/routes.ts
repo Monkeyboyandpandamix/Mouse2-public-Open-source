@@ -764,6 +764,23 @@ export async function registerRoutes(
     mkdirSync(DATA_DIR, { recursive: true });
     await writeFile(CLOUD_RUNTIME_CONFIG_FILE, JSON.stringify(cfg, null, 2), "utf-8");
   };
+
+  const hasOperatorControlPermission = (session: ServerSession | null) => {
+    if (!session) return activeSessions.size === 0;
+    const role = String(session.role || "").toLowerCase();
+    return role === "admin" || role === "operator";
+  };
+
+  const hasTelemetryReadPermission = (session: ServerSession | null) => {
+    if (!session) return activeSessions.size === 0;
+    return hasServerPermission(session, "view_telemetry") || hasOperatorControlPermission(session);
+  };
+
+  const hasValidAdminKey = (req: any) => {
+    const adminKey = process.env.ADMIN_API_KEY;
+    const authHeader = String(req.headers.authorization || "");
+    return Boolean(adminKey && authHeader === `Bearer ${adminKey}`);
+  };
   
   wss.on("connection", (ws) => {
     // Initially, user is not authenticated
@@ -5698,6 +5715,190 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to sync messages" });
+    }
+  });
+
+  app.post("/api/cloud/commands/dispatch", async (req, res) => {
+    try {
+      const session = requestSession(req);
+      if (!hasOperatorControlPermission(session)) {
+        return res.status(403).json({ success: false, error: "Operator or admin permissions required" });
+      }
+      if (!cloudSyncEnabled()) {
+        return res.status(503).json({ success: false, error: "Cloud sync is not enabled" });
+      }
+
+      const droneId = String(req.body?.droneId || "").trim();
+      const commandType = String(req.body?.commandType || "").trim().toLowerCase();
+      const payload = req.body?.payload && typeof req.body.payload === "object" ? req.body.payload : {};
+      const priority = Math.max(0, Math.min(10, Number(req.body?.priority ?? 5)));
+      const ttlSec = Math.max(5, Math.min(3600, Number(req.body?.ttlSec ?? 90)));
+      if (!droneId) return res.status(400).json({ success: false, error: "droneId is required" });
+      if (!commandType) return res.status(400).json({ success: false, error: "commandType is required" });
+
+      const commandId = `${Date.now()}-${randomBytes(4).toString("hex")}`;
+      const nowIso = new Date().toISOString();
+      const command = {
+        id: commandId,
+        droneId,
+        commandType,
+        payload,
+        priority,
+        ttlSec,
+        status: "queued",
+        queuedAt: nowIso,
+        expiresAt: new Date(Date.now() + ttlSec * 1000).toISOString(),
+        issuedBy: {
+          userId: session?.userId || "preview",
+          name: session?.name || "Preview User",
+          role: session?.role || "admin",
+        },
+      };
+
+      await syncCloudDocument("cloud_commands", commandId, command, { session });
+      const rtdb = getFirebaseAdminRtdb();
+      if (rtdb) {
+        await rtdb.ref(`commands/${droneId}/${commandId}`).set(command);
+      }
+      await publishCloudRealtime("cloud_command", command, { session });
+      pushDebugEvent("success", "cloud.command_dispatch", "Cloud command queued", {
+        commandId,
+        droneId,
+        commandType,
+        priority,
+      });
+      res.json({ success: true, command });
+    } catch (error: any) {
+      pushDebugEvent("error", "cloud.command_dispatch", "Failed to queue cloud command", {
+        error: error?.message || String(error),
+      });
+      res.status(500).json({ success: false, error: error?.message || "Failed to queue cloud command" });
+    }
+  });
+
+  app.post("/api/cloud/commands/:id/ack", async (req, res) => {
+    try {
+      const session = requestSession(req);
+      if (!hasOperatorControlPermission(session) && !hasValidAdminKey(req)) {
+        return res.status(403).json({ success: false, error: "Operator/admin permissions or admin API key required" });
+      }
+      if (!cloudSyncEnabled()) {
+        return res.status(503).json({ success: false, error: "Cloud sync is not enabled" });
+      }
+
+      const commandId = String(req.params.id || "").trim();
+      const droneId = String(req.body?.droneId || "").trim();
+      const status = String(req.body?.status || "acknowledged").trim().toLowerCase();
+      const result = req.body?.result ?? null;
+      const allowedStatuses = new Set(["acknowledged", "in_progress", "completed", "failed", "rejected", "expired"]);
+      if (!commandId) return res.status(400).json({ success: false, error: "command id is required" });
+      if (!droneId) return res.status(400).json({ success: false, error: "droneId is required" });
+      if (!allowedStatuses.has(status)) return res.status(400).json({ success: false, error: "Invalid status" });
+
+      const ackPayload = {
+        status,
+        result,
+        acknowledgedAt: new Date().toISOString(),
+        acknowledgedBy: {
+          droneId,
+          userId: session?.userId || null,
+          name: session?.name || null,
+          role: session?.role || null,
+        },
+      };
+
+      await syncCloudDocument("cloud_commands", commandId, ackPayload, { session });
+      const rtdb = getFirebaseAdminRtdb();
+      if (rtdb) {
+        await rtdb.ref(`commands/${droneId}/${commandId}/ack`).set(ackPayload);
+      }
+      await publishCloudRealtime("cloud_command_ack", { commandId, droneId, ...ackPayload }, { session });
+      pushDebugEvent(status === "failed" || status === "rejected" ? "warn" : "success", "cloud.command_ack", "Cloud command acknowledged", {
+        commandId,
+        droneId,
+        status,
+      });
+      res.json({ success: true, commandId, droneId, status });
+    } catch (error: any) {
+      pushDebugEvent("error", "cloud.command_ack", "Failed to acknowledge cloud command", {
+        error: error?.message || String(error),
+      });
+      res.status(500).json({ success: false, error: error?.message || "Failed to acknowledge cloud command" });
+    }
+  });
+
+  app.get("/api/cloud/commands", async (req, res) => {
+    try {
+      const session = requestSession(req);
+      if (!hasOperatorControlPermission(session)) {
+        return res.status(403).json({ success: false, error: "Operator or admin permissions required" });
+      }
+      const droneId = String(req.query.droneId || "").trim();
+      const status = String(req.query.status || "").trim().toLowerCase();
+      const limit = Math.max(1, Math.min(500, Number(req.query.limit || 200)));
+      const records = await getRecentCloudDocs("cloud_commands", Math.max(limit * 2, 200));
+      const filtered = records.filter((r: any) => {
+        if (droneId && String(r?.droneId || "") !== droneId) return false;
+        if (status && String(r?.status || "").toLowerCase() !== status) return false;
+        return true;
+      }).slice(0, limit);
+      res.json({ success: true, commands: filtered, total: filtered.length });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to fetch cloud commands" });
+    }
+  });
+
+  app.post("/api/cloud/telemetry/ingest", async (req, res) => {
+    try {
+      const session = requestSession(req);
+      if (!hasOperatorControlPermission(session) && !hasValidAdminKey(req)) {
+        return res.status(403).json({ success: false, error: "Operator/admin permissions or admin API key required" });
+      }
+      if (!cloudSyncEnabled()) {
+        return res.status(503).json({ success: false, error: "Cloud sync is not enabled" });
+      }
+      const droneId = String(req.body?.droneId || "").trim();
+      const telemetry = req.body?.telemetry && typeof req.body.telemetry === "object" ? req.body.telemetry : {};
+      if (!droneId) return res.status(400).json({ success: false, error: "droneId is required" });
+
+      const capturedAt = new Date().toISOString();
+      const telemetryId = `${droneId}-${Date.now()}-${randomBytes(3).toString("hex")}`;
+      const payload = { id: telemetryId, droneId, telemetry, capturedAt };
+      await appendCloudDocument("drone_telemetry", payload, { session });
+      await syncCloudDocument("drone_telemetry_latest", droneId, payload, { session });
+      const rtdb = getFirebaseAdminRtdb();
+      if (rtdb) {
+        await rtdb.ref(`telemetry/${droneId}/latest`).set(payload);
+      }
+      await publishCloudRealtime("drone_telemetry", payload, { session });
+      res.json({ success: true, telemetryId, capturedAt });
+    } catch (error: any) {
+      pushDebugEvent("error", "cloud.telemetry_ingest", "Failed telemetry ingest", {
+        error: error?.message || String(error),
+      });
+      res.status(500).json({ success: false, error: error?.message || "Failed telemetry ingest" });
+    }
+  });
+
+  app.get("/api/cloud/telemetry/live", async (req, res) => {
+    try {
+      const session = requestSession(req);
+      if (!hasTelemetryReadPermission(session)) {
+        return res.status(403).json({ success: false, error: "Telemetry read permission required" });
+      }
+      const droneId = String(req.query.droneId || "").trim();
+      const limit = Math.max(1, Math.min(300, Number(req.query.limit || 100)));
+      const latest = await getRecentCloudDocs("drone_telemetry_latest", 500);
+      const history = await getRecentCloudDocs("drone_telemetry", Math.max(limit * 2, 200));
+      const latestFiltered = latest.filter((item: any) => !droneId || item?.droneId === droneId);
+      const historyFiltered = history.filter((item: any) => !droneId || item?.droneId === droneId).slice(0, limit);
+      res.json({
+        success: true,
+        latest: latestFiltered,
+        history: historyFiltered,
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to fetch live telemetry" });
     }
   });
 
