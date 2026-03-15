@@ -352,11 +352,18 @@ interface AirspaceZone {
   id: string;
   name: string;
   type: "circle" | "polygon" | "custom";
-  enabled: boolean;
-  action: "rtl" | "land" | "hover" | "warn";
+  enabled?: boolean;
+  action?: "rtl" | "land" | "hover" | "warn";
   center?: { lat: number; lng: number };
   radius?: number;
   points?: { lat: number; lng: number }[];
+  altMin?: number;
+  altMax?: number;
+  active?: boolean;
+  source?: string;
+  description?: string;
+  effectiveDate?: string | null;
+  expirationDate?: string | null;
 }
 
 const RESTRICTED_MATCH = /(restrict|prohibit|danger|tfr|temporary flight restriction|no[-\s]?fly)/i;
@@ -399,6 +406,19 @@ function zoneBbox(points: { lat: number; lng: number }[]) {
 
 function bboxesOverlap(a: { minLng: number; minLat: number; maxLng: number; maxLat: number }, b: { minLng: number; minLat: number; maxLng: number; maxLat: number }) {
   return !(a.maxLng < b.minLng || a.minLng > b.maxLng || a.maxLat < b.minLat || a.minLat > b.maxLat);
+}
+
+function generateCirclePoints(lat: number, lng: number, radiusNm: number): { lat: number; lng: number }[] {
+  const radiusDeg = (radiusNm * 1.852) / 111.32;
+  const points: { lat: number; lng: number }[] = [];
+  for (let i = 0; i < 32; i++) {
+    const angle = (i / 32) * 2 * Math.PI;
+    points.push({
+      lat: lat + radiusDeg * Math.sin(angle),
+      lng: lng + (radiusDeg * Math.cos(angle)) / Math.cos(lat * Math.PI / 180),
+    });
+  }
+  return points;
 }
 
 function normalizeStaticGeoJsonToZones(raw: any, labelPrefix: string): AirspaceZone[] {
@@ -4406,6 +4426,123 @@ export async function registerRoutes(
       console.error("Static restricted airspace fetch error:", error);
       res.status(500).json({ error: "Failed to fetch static restricted airspace" });
     }
+  });
+
+  app.get("/api/airspace/tfr", async (req, res) => {
+    try {
+      const lat = safeNumber(req.query.lat);
+      const lng = safeNumber(req.query.lng);
+      const radiusMiles = Math.max(5, Math.min(200, safeNumber(req.query.radiusMiles) ?? 50));
+
+      const tfrCacheKey = `tfr_${lat?.toFixed(2)}_${lng?.toFixed(2)}_${radiusMiles}`;
+      const cached = airspaceCache.get(tfrCacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return res.json(cached.payload);
+      }
+
+      let zones: AirspaceZone[] = [];
+      try {
+        const listResp = await fetch("https://tfr.faa.gov/tfr2/list.json", {
+          headers: { "User-Agent": "MOUSE-GCS/1.0", "Accept": "application/json" },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (listResp.ok) {
+          const tfrList = await listResp.json();
+          if (Array.isArray(tfrList)) {
+            for (const tfr of tfrList.slice(0, 100)) {
+              const tfrLat = safeNumber(tfr?.lat || tfr?.latitude);
+              const tfrLng = safeNumber(tfr?.lng || tfr?.longitude || tfr?.lon);
+              if (tfrLat != null && tfrLng != null) {
+                if (lat != null && lng != null) {
+                  const d = Math.sqrt((tfrLat - lat) ** 2 + (tfrLng - lng) ** 2) * 69;
+                  if (d > radiusMiles) continue;
+                }
+                zones.push({
+                  id: tfr.notamNumber || tfr.id || `tfr-${zones.length}`,
+                  name: tfr.notamNumber || tfr.type || "TFR",
+                  type: "circle",
+                  center: { lat: tfrLat, lng: tfrLng },
+                  radius: (safeNumber(tfr.radius) ?? 3) * 1852,
+                  altMin: safeNumber(tfr.minAlt) ?? 0,
+                  altMax: safeNumber(tfr.maxAlt) ?? 18000,
+                  points: generateCirclePoints(tfrLat, tfrLng, safeNumber(tfr.radius) ?? 3),
+                  active: true,
+                  source: "faa_tfr",
+                  description: tfr.description || tfr.text || "",
+                  effectiveDate: tfr.effectiveDate || tfr.startDate || null,
+                  expirationDate: tfr.expirationDate || tfr.endDate || null,
+                });
+              }
+            }
+          }
+        }
+      } catch (tfrErr: any) {
+        console.warn("FAA TFR fetch failed (non-critical):", tfrErr?.message);
+      }
+
+      const payload = {
+        provider: "faa_tfr",
+        configured: true,
+        zones,
+        count: zones.length,
+        radiusMiles,
+        source: "https://tfr.faa.gov",
+        note: "Free FAA Temporary Flight Restrictions feed - no API key required",
+        fetchedAt: new Date().toISOString(),
+      };
+      airspaceCache.set(tfrCacheKey, { payload, expiresAt: Date.now() + 5 * 60 * 1000 });
+      res.json(payload);
+    } catch (error: any) {
+      res.status(500).json({ error: "Failed to fetch TFR data", details: error?.message });
+    }
+  });
+
+  app.get("/api/airspace/sources", (_req, res) => {
+    const openaipConfigured = Boolean(process.env.OPENAIP_API_KEY);
+    res.json({
+      sources: [
+        {
+          id: "faa_static",
+          name: "FAA UAS Restrictions (Static GeoJSON)",
+          type: "static",
+          configured: true,
+          requiresApiKey: false,
+          description: "National Security, Part-Time, and Pending UAS Flight Restrictions from FAA. Pre-loaded GeoJSON data.",
+          files: [
+            "National_Security_UAS_Flight_Restrictions.geojson",
+            "Part_Time_National_Security_UAS_Flight_Restrictions.geojson",
+            "Pending_National_Security_UAS_Flight_Restrictions.geojson",
+          ],
+        },
+        {
+          id: "faa_facility_map",
+          name: "FAA UAS Facility Map",
+          type: "static",
+          configured: true,
+          requiresApiKey: false,
+          description: "FAA UAS Facility Map showing LAANC grid altitudes near controlled airspace. Large dataset (~480MB).",
+        },
+        {
+          id: "faa_tfr",
+          name: "FAA Temporary Flight Restrictions (TFR)",
+          type: "live",
+          configured: true,
+          requiresApiKey: false,
+          description: "Live TFR feed from tfr.faa.gov. Updated every 5 minutes. Free, no API key needed.",
+          endpoint: "/api/airspace/tfr",
+        },
+        {
+          id: "openaip",
+          name: "OpenAIP Airspace Data",
+          type: "live",
+          configured: openaipConfigured,
+          requiresApiKey: true,
+          description: "International airspace data including restricted zones, CTR, TMA, etc. Requires free API key from openaip.net.",
+          signupUrl: "https://www.openaip.net/users/sign_up",
+          envVar: "OPENAIP_API_KEY",
+        },
+      ],
+    });
   });
 
   app.post("/api/airspace/authorization/validate", async (req, res) => {

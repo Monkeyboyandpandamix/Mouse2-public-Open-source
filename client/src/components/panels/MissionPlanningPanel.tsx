@@ -20,7 +20,7 @@ import { segmentIntersectsNoFlyZones } from "@/lib/noFlyZones";
 import type { NoFlyZone } from "@/lib/noFlyZones";
 
 interface Mission {
-  id: number;
+  id: string;
   name: string;
   description: string | null;
   status: string;
@@ -30,8 +30,8 @@ interface Mission {
 }
 
 interface Waypoint {
-  id: number;
-  missionId: number;
+  id: string;
+  missionId: string;
   order: number;
   latitude: number;
   longitude: number;
@@ -73,7 +73,7 @@ export function MissionPlanningPanel() {
   const canDeleteData = hasPermission('delete_flight_data');
   
   const queryClient = useQueryClient();
-  const [selectedMission, setSelectedMission] = useState<number | null>(null);
+  const [selectedMission, setSelectedMission] = useState<string | null>(null);
   const [targetMethod, setTargetMethod] = useState<"map" | "address" | "coordinates">("map");
   const [addressInput, setAddressInput] = useState("");
   const [addressSuggestions, setAddressSuggestions] = useState<any[]>([]);
@@ -241,9 +241,9 @@ export function MissionPlanningPanel() {
 
   useEffect(() => {
     const handleMissionUpdated = (e: Event) => {
-      const customEvent = e as CustomEvent<{ missionId?: number }>;
+      const customEvent = e as CustomEvent<{ missionId?: string | number }>;
       if (customEvent.detail?.missionId) {
-        setSelectedMission(customEvent.detail.missionId);
+        setSelectedMission(String(customEvent.detail.missionId));
       }
       queryClient.invalidateQueries({ queryKey: ["/api/missions"] });
       if (customEvent.detail?.missionId) {
@@ -271,7 +271,7 @@ export function MissionPlanningPanel() {
   const selectedMissionData = missions.find(m => m.id === selectedMission);
   const orderedWaypoints = [...waypoints].sort((a, b) => {
     const orderDiff = (a.order ?? 0) - (b.order ?? 0);
-    return orderDiff !== 0 ? orderDiff : a.id - b.id;
+    return orderDiff !== 0 ? orderDiff : String(a.id).localeCompare(String(b.id));
   });
   const getNextWaypointOrder = () => orderedWaypoints.reduce((max, wp) => Math.max(max, wp.order || 0), 0) + 1;
 
@@ -293,7 +293,7 @@ export function MissionPlanningPanel() {
   });
 
   const deleteMission = useMutation({
-    mutationFn: async (id: number) => {
+    mutationFn: async (id: string) => {
       const res = await fetch(`/api/missions/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to delete mission");
     },
@@ -335,7 +335,7 @@ export function MissionPlanningPanel() {
   });
 
   const updateWaypoint = useMutation({
-    mutationFn: async ({ id, data }: { id: number; data: any }) => {
+    mutationFn: async ({ id, data }: { id: string; data: any }) => {
       const res = await fetch(`/api/waypoints/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -350,7 +350,7 @@ export function MissionPlanningPanel() {
   });
 
   const deleteWaypoint = useMutation({
-    mutationFn: async (id: number) => {
+    mutationFn: async (id: string) => {
       const res = await fetch(`/api/waypoints/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to delete waypoint");
     },
@@ -371,7 +371,7 @@ export function MissionPlanningPanel() {
     }
   };
 
-  const patchWaypointDirect = async (id: number, data: any) => {
+  const patchWaypointDirect = async (id: string, data: any) => {
     const res = await fetch(`/api/waypoints/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },

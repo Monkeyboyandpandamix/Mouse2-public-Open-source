@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type MouseEvent } from "react";
+import { useState, useRef, useEffect, useCallback, type MouseEvent } from "react";
 import { cn } from "@/lib/utils";
 import { Maximize2, Minimize2, Eye, EyeOff, Flame, ZoomIn, ZoomOut, RotateCcw, Camera, Video, Laptop, Settings2, Crosshair, Move, Upload, Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,8 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import * as tf from "@tensorflow/tfjs";
+import * as cocoSsd from "@tensorflow-models/coco-ssd";
 import aerialImg from "@assets/generated_images/aerial_drone_view_of_a_suburban_street_with_overlaid_bounding_boxes.png";
 import fpvImg from "@assets/generated_images/fpv_drone_view_forward_facing_with_horizon.png";
 
@@ -114,6 +116,34 @@ export function VideoFeed() {
   const frameCountRef = useRef(0);
   const globalMotionRef = useRef({ dx: 0, dy: 0 });
   const lastMappingSyncRef = useRef(0);
+  const mlModelRef = useRef<cocoSsd.ObjectDetection | null>(null);
+  const [mlModelLoaded, setMlModelLoaded] = useState(false);
+  const [mlModelLoading, setMlModelLoading] = useState(false);
+
+  const COCO_TO_TYPE: Record<string, DetectedObject["type"]> = {
+    person: "person", car: "vehicle", truck: "vehicle", bus: "vehicle", motorcycle: "vehicle",
+    bicycle: "vehicle", airplane: "aircraft", bird: "animal", cat: "animal", dog: "animal",
+    horse: "animal", sheep: "animal", cow: "animal", elephant: "animal", bear: "animal",
+    zebra: "animal", giraffe: "animal",
+  };
+
+  const loadMlModel = useCallback(async () => {
+    if (mlModelRef.current || mlModelLoading) return;
+    setMlModelLoading(true);
+    try {
+      await tf.ready();
+      await tf.setBackend("webgl");
+      const model = await cocoSsd.load({ base: "lite_mobilenet_v2" });
+      mlModelRef.current = model;
+      setMlModelLoaded(true);
+      toast.success("AI detection model loaded for camera");
+    } catch (err) {
+      console.error("Failed to load ML model for camera:", err);
+      toast.error("AI model failed — using fallback CV detection");
+    } finally {
+      setMlModelLoading(false);
+    }
+  }, [mlModelLoading]);
   
   useEffect(() => {
     localStorage.setItem('mouse_camera_config', JSON.stringify(cameraConfig));
@@ -165,16 +195,139 @@ export function VideoFeed() {
     }
   }, [webcamStream]);
 
+  useEffect(() => {
+    if (isDetecting && !mlModelRef.current && !mlModelLoading) {
+      loadMlModel();
+    }
+  }, [isDetecting, mlModelLoading, loadMlModel]);
+
+  const runMlDetection = useCallback(async () => {
+    if (!videoRef.current || !isDetecting) return;
+    const video = videoRef.current;
+    if (video.videoWidth === 0 || video.readyState < 2) return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (canvas && ctx) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0);
+    }
+
+    if (mlModelRef.current) {
+      try {
+        const predictions = await mlModelRef.current.detect(video);
+        const width = video.videoWidth;
+        const height = video.videoHeight;
+        const now = Date.now();
+        const tracked = trackedObjectsRef.current;
+        const newDetections: DetectedObject[] = [];
+
+        for (const pred of predictions) {
+          const [bx, by, bw, bh] = pred.bbox;
+          const detType = COCO_TO_TYPE[pred.class] || "unknown";
+          const cx = bx + bw / 2;
+          const cy = by + bh / 2;
+
+          let bestMatchRef: { obj: TrackedObject | null; dist: number } = { obj: null, dist: 120 };
+          tracked.forEach((t) => {
+            const tcx = t.x + t.width / 2;
+            const tcy = t.y + t.height / 2;
+            const d = Math.hypot(cx - tcx, cy - tcy);
+            if (d < bestMatchRef.dist) { bestMatchRef = { obj: t, dist: d }; }
+          });
+          const bestMatch = bestMatchRef.obj;
+
+          if (bestMatch) {
+            bestMatch.vx = cx - (bestMatch.x + bestMatch.width / 2);
+            bestMatch.vy = cy - (bestMatch.y + bestMatch.height / 2);
+            bestMatch.x = bx; bestMatch.y = by;
+            bestMatch.width = bw; bestMatch.height = bh;
+            bestMatch.lastSeen = now;
+            bestMatch.framesSeen++;
+            bestMatch.type = detType;
+            bestMatch.confidence = Math.round(pred.score * 100);
+            newDetections.push({
+              id: bestMatch.id, type: detType, confidence: bestMatch.confidence,
+              x: bx, y: by, width: bw, height: bh,
+              color: detType === "person" ? "#22c55e" : detType === "vehicle" ? "#3b82f6" : detType === "animal" ? "#eab308" : "#ef4444",
+              isLocked: bestMatch.isLocked, isMoving: Math.hypot(bestMatch.vx, bestMatch.vy) > 3,
+              velocity: { vx: bestMatch.vx, vy: bestMatch.vy },
+              colorSignature: bestMatch.colorSignature, framesSeen: bestMatch.framesSeen,
+              lastPredictedPos: { x: bx + bestMatch.vx, y: by + bestMatch.vy },
+            });
+          } else {
+            const newId = `cam-obj-${objectIdCounterRef.current++}`;
+            const newObj: TrackedObject = {
+              id: newId, x: bx, y: by, width: bw, height: bh,
+              vx: 0, vy: 0, lastSeen: now, framesSeen: 1,
+              colorSignature: [0, 0, 0], isLocked: false, isMoving: false,
+              type: detType, confidence: Math.round(pred.score * 100),
+            };
+            tracked.set(newId, newObj);
+            newDetections.push({
+              id: newId, type: detType, confidence: newObj.confidence,
+              x: bx, y: by, width: bw, height: bh,
+              color: detType === "person" ? "#22c55e" : detType === "vehicle" ? "#3b82f6" : detType === "animal" ? "#eab308" : "#ef4444",
+              isLocked: false, isMoving: false,
+              velocity: { vx: 0, vy: 0 }, colorSignature: [0, 0, 0],
+              framesSeen: 1, lastPredictedPos: { x: bx, y: by },
+            });
+          }
+        }
+
+        tracked.forEach((t, id) => {
+          if (now - t.lastSeen > 2000) tracked.delete(id);
+        });
+
+        setDetectedObjects(newDetections);
+
+        if (newDetections.length > 0) {
+          const centerX = width / 2;
+          const centerY = height / 2;
+          let highestRisk = 0;
+          let avoidance = { yaw: 0, forward: 0, lateral: 0 };
+          for (const obj of newDetections) {
+            const objCx = obj.x + obj.width / 2;
+            const objCy = obj.y + obj.height / 2;
+            const normX = (objCx - centerX) / Math.max(1, centerX);
+            const normY = (objCy - centerY) / Math.max(1, centerY);
+            const areaRatio = (obj.width * obj.height) / Math.max(1, width * height);
+            const centeredness = Math.max(0, 1 - Math.hypot(normX, normY));
+            const confidenceFactor = Math.max(0.25, Math.min(1, obj.confidence / 100));
+            const risk = Math.max(0, Math.min(1, areaRatio * 2.8 * centeredness * confidenceFactor));
+            if (risk > highestRisk) {
+              highestRisk = risk;
+              avoidance = {
+                yaw: Math.max(-1, Math.min(1, normX > 0 ? -risk : risk)),
+                forward: Math.max(-1, Math.min(0, -risk)),
+                lateral: Math.max(-1, Math.min(1, normX > 0 ? -risk : risk)),
+              };
+            }
+          }
+          const riskLevel = highestRisk > 0.55 ? "high" : highestRisk > 0.3 ? "medium" : highestRisk > 0.12 ? "low" : "none";
+          window.dispatchEvent(new CustomEvent("obstacle-update", { detail: { riskLevel, avoidanceYaw: avoidance.yaw, avoidanceForward: avoidance.forward, avoidanceLateral: avoidance.lateral } }));
+        } else {
+          window.dispatchEvent(new CustomEvent("obstacle-update", { detail: { riskLevel: "none", avoidanceYaw: 0, avoidanceForward: 0, avoidanceLateral: 0 } }));
+        }
+        return;
+      } catch (err) {
+        console.error("ML detection error in camera, falling back to CV:", err);
+      }
+    }
+
+    detectObjects();
+  }, [isDetecting, COCO_TO_TYPE]);
+
   // Advanced object detection for webcam
   useEffect(() => {
     if (isDetecting && webcamStream && activeCam === 'webcam') {
-      // Reset background model when starting detection
       backgroundModelRef.current = null;
       frameCountRef.current = 0;
       
       detectionIntervalRef.current = setInterval(() => {
-        detectObjects();
-      }, 150); // Faster detection rate for smoother tracking
+        runMlDetection();
+      }, 200);
       
       return () => {
         if (detectionIntervalRef.current) {

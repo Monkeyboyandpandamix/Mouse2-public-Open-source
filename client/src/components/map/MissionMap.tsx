@@ -43,7 +43,7 @@ const WaypointIcon = (num: number, action?: string | null) => {
 };
 
 interface Waypoint {
-  id?: number;
+  id?: string | number;
   order: number;
   latitude: number;
   longitude: number;
@@ -158,7 +158,7 @@ export function MissionMap({ waypoints, homePosition, onMapClick, clickEnabled =
 
   const orderedWaypoints = [...waypoints].sort((a, b) => {
     const orderDiff = (a.order ?? 0) - (b.order ?? 0);
-    return orderDiff !== 0 ? orderDiff : (a.id ?? 0) - (b.id ?? 0);
+    return orderDiff !== 0 ? orderDiff : String(a.id ?? "").localeCompare(String(b.id ?? ""));
   });
   const flightPath: [number, number][] = orderedWaypoints.map(wp => [wp.latitude, wp.longitude]);
   if (homePosition && flightPath.length > 0) {

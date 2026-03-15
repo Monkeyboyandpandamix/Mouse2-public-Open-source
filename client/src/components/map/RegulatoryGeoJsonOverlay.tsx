@@ -136,7 +136,13 @@ export function RegulatoryGeoJsonOverlay({
   const [panelPos, setPanelPos] = useState(() => {
     try {
       const saved = localStorage.getItem("mouse_faa_panel_pos");
-      return saved ? JSON.parse(saved) : { x: 16, y: 16 };
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        const maxX = Math.max(0, window.innerWidth - 300);
+        const maxY = Math.max(0, window.innerHeight - 200);
+        return { x: Math.max(0, Math.min(parsed.x, maxX)), y: Math.max(0, Math.min(parsed.y, maxY)) };
+      }
+      return { x: 16, y: 16 };
     } catch { return { x: 16, y: 16 }; }
   });
   const [isDragging, setIsDragging] = useState(false);
@@ -158,9 +164,11 @@ export function RegulatoryGeoJsonOverlay({
   useEffect(() => {
     if (!isDragging) return;
     const onMove = (e: MouseEvent) => {
+      const panelW = panelRef.current?.offsetWidth || 288;
+      const panelH = panelRef.current?.offsetHeight || 200;
       setPanelPos({
-        x: Math.max(0, Math.min(window.innerWidth - 100, e.clientX - dragStartRef.current.x)),
-        y: Math.max(0, Math.min(window.innerHeight - 50, e.clientY - dragStartRef.current.y)),
+        x: Math.max(0, Math.min(window.innerWidth - panelW, e.clientX - dragStartRef.current.x)),
+        y: Math.max(0, Math.min(window.innerHeight - panelH, e.clientY - dragStartRef.current.y)),
       });
     };
     const onUp = () => setIsDragging(false);
@@ -294,6 +302,8 @@ export function RegulatoryGeoJsonOverlay({
             <button
               className="cursor-grab active:cursor-grabbing p-0.5 text-muted-foreground hover:text-foreground"
               onMouseDown={handleDragStart}
+              onDoubleClick={() => { setPanelPos({ x: 16, y: 80 }); localStorage.removeItem("mouse_faa_panel_pos"); }}
+              title="Drag to move, double-click to reset position"
               data-testid="faa-panel-drag"
             >
               <GripVertical className="h-3.5 w-3.5" />
