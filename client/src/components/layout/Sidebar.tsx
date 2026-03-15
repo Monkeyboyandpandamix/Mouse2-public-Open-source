@@ -17,6 +17,7 @@ import {
   SlidersHorizontal,
   Wrench,
   Users2,
+  Brain,
   LucideIcon
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -95,6 +96,7 @@ export const Sidebar = memo(function Sidebar({ activeTab, setActiveTab }: Sideba
     { id: "fcparams", icon: SlidersHorizontal, label: "FC Params", requiredPermission: "system_settings" },
     { id: "calibration", icon: Wrench, label: "Calibration", requiredPermission: "system_settings" },
     { id: "swarm", icon: Users2, label: "Swarm Ops", requiredPermission: "system_settings" },
+    { id: "stabilization", icon: Brain, label: "Stabilization", requiredPermission: "view_telemetry" },
     { id: "users", icon: Users, label: "User Access", alwaysShow: true },
     { id: "guiconfig", icon: LayoutDashboard, label: "GUI Config", requiredPermission: "configure_gui_advanced" },
     { id: "settings", icon: Settings, label: "Settings", requiredPermission: "system_settings" },

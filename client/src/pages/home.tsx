@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, lazy, Suspense, type ComponentType } from 
 import { TopBar } from "@/components/layout/TopBar";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { AutoStabilizationController } from "@/components/controls/AutoStabilizationController";
+import { MLStabilizationEngine } from "@/components/controls/MLStabilizationEngine";
 import { EmergencyProtocolController } from "@/components/controls/EmergencyProtocolController";
 import { GpsDeniedNavigationController } from "@/components/navigation/GpsDeniedNavigationController";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -57,6 +58,7 @@ const CalibrationPanel = lazyWithRetry(() => import("@/components/panels/Calibra
 const SwarmOpsPanel = lazyWithRetry(() => import("@/components/panels/SwarmOpsPanel").then(m => ({ default: m.SwarmOpsPanel })), "swarm");
 const GeofencingPanel = lazyWithRetry(() => import("@/components/panels/GeofencingPanel").then(m => ({ default: m.GeofencingPanel })), "geofence");
 const GUIConfigPanel = lazyWithRetry(() => import("@/components/panels/GUIConfigPanel").then(m => ({ default: m.GUIConfigPanel })), "guiconfig");
+const StabilizationPanel = lazyWithRetry(() => import("@/components/panels/StabilizationPanel").then(m => ({ default: m.StabilizationPanel })), "stabilization");
 
 function PanelFallback() {
   return (
@@ -658,6 +660,12 @@ export default function Home() {
             <SettingsPanel />
           </div>
         );
+      case "stabilization":
+        return (
+          <div className="flex-1 relative overflow-hidden">
+            <StabilizationPanel />
+          </div>
+        );
       default:
         return (
           <div className="flex-1 relative">
@@ -671,6 +679,7 @@ export default function Home() {
   return (
     <div className="flex flex-col h-screen w-full bg-background overflow-hidden relative">
       <AutoStabilizationController />
+      <MLStabilizationEngine />
       <EmergencyProtocolController />
       <GpsDeniedNavigationController />
       {/* Background Grid Pattern */}

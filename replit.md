@@ -110,6 +110,29 @@ The application can be run as a native desktop app using Electron:
   - Statistics dashboard showing total flights, flight time, distance, monthly comparisons, and category breakdown
   - CSV export of filtered logbook data for external analysis
 
+### ML Flight Stabilization System
+- **ML Stabilization Engine** (`client/src/components/controls/MLStabilizationEngine.tsx`): Client-side machine learning stabilization controller running at 5Hz with:
+  - 15-state Extended Kalman Filter fusing IMU, GPS, barometer, and rangefinder data for state estimation
+  - 3-layer neural network (24→48→24→9) for disturbance prediction with online backpropagation training
+  - Adaptive PID controllers for roll, pitch, yaw, and altitude with wind/payload-aware gain scheduling
+  - Camera-based ground distance estimation using feature scale analysis and optical flow fusion
+  - Wind speed/direction estimation from IMU residuals and airspeed-vs-groundspeed differential
+  - Payload compensation with CG shift detection, thrust adjustment, and payload release detection
+  - Weather adaptation adjusting thrust multiplier and drag based on air density, temperature, and humidity
+  - Takeoff assist with phased launch (pre-check → lift → initial hover → stable) using sensor-fused altitude
+  - Configuration persisted in localStorage (`mouse_ml_stabilization_config`)
+  - Emits events: `flight-command` (stabilize_adjust), `stabilizer-status`, `ml-stabilization-status`
+  - Listens to: `telemetry-update`, `arm-state-changed`, `flight-command`, `weather-update`, `imu-update`, `camera-features`, `payload-release`
+- **Flight Dynamics Engine** (`server/flightDynamics.ts`): Server-side physics engine with:
+  - Full quadrotor dynamics model (thrust, torque, drag, rain drag, payload effects)
+  - Extended Kalman Filter for server-side state estimation
+  - ML disturbance predictor with Xavier initialization and mini-batch SGD training
+  - Wind model with base wind, gusts, and turbulence simulation
+  - Camera ground distance estimator with attitude correction
+  - API endpoints: GET/POST `/api/stabilization/status`, `/api/stabilization/sensors`, `/api/stabilization/environment`, `/api/stabilization/payload`, `/api/stabilization/compute`, `/api/stabilization/motors`, `/api/stabilization/params`
+- **Stabilization Panel** (`client/src/components/panels/StabilizationPanel.tsx`): Dedicated UI panel with Monitor/Configure/Dynamics tabs showing real-time corrections visualization, ML training status, wind estimation, payload compensation, camera ground distance, weather adaptation, Kalman filter state, and adaptive PID gains. Accessible via Brain icon in sidebar.
+- **Legacy AutoStabilizationController** (`client/src/components/controls/AutoStabilizationController.tsx`): Original PID controller with adaptive gains, still active alongside ML engine for redundancy
+
 ### Hardware Configuration
 - **Companion Computer**: Raspberry Pi 5 (16GB) running Trixie 13.2
 - **Flight Controller**: Orange Cube+ with ADSB Carrier Board

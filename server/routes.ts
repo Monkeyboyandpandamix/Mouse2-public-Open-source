@@ -8,6 +8,7 @@ import { readFile, writeFile, readdir } from "fs/promises";
 import path from "path";
 import os from "os";
 import net from "net";
+import { flightDynamicsEngine } from "./flightDynamics";
 
 // Use system Python to ensure Adafruit libraries are available
 // On Raspberry Pi, venv may not have the hardware libraries but system Python does
@@ -6097,6 +6098,85 @@ export async function registerRoutes(
       
     } catch (error) {
       res.status(500).json({ error: "Status check failed" });
+    }
+  });
+
+  app.get("/api/stabilization/status", async (_req, res) => {
+    try {
+      res.json({ success: true, ...flightDynamicsEngine.getStatus() });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get stabilization status" });
+    }
+  });
+
+  app.post("/api/stabilization/sensors", async (req, res) => {
+    try {
+      const { sensors, dt } = req.body;
+      flightDynamicsEngine.updateSensors(sensors || {}, dt || 0.05);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update sensors" });
+    }
+  });
+
+  app.post("/api/stabilization/environment", async (req, res) => {
+    try {
+      flightDynamicsEngine.updateEnvironment(req.body);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update environment" });
+    }
+  });
+
+  app.post("/api/stabilization/payload", async (req, res) => {
+    try {
+      flightDynamicsEngine.updatePayload(req.body);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update payload" });
+    }
+  });
+
+  app.post("/api/stabilization/compute", async (req, res) => {
+    try {
+      const { targetAltitude, targetAttitude, cameraFeatures } = req.body;
+      const result = flightDynamicsEngine.computeStabilization(
+        targetAltitude ?? 20,
+        targetAttitude ?? { roll: 0, pitch: 0, yaw: 0 },
+        cameraFeatures
+      );
+      res.json({ success: true, result });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to compute stabilization" });
+    }
+  });
+
+  app.post("/api/stabilization/motors", async (req, res) => {
+    try {
+      const { rpms } = req.body;
+      if (Array.isArray(rpms)) {
+        flightDynamicsEngine.updateMotorRpms(rpms);
+      }
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update motor RPMs" });
+    }
+  });
+
+  app.get("/api/stabilization/params", async (_req, res) => {
+    try {
+      res.json({ success: true, params: flightDynamicsEngine.getQuadParams() });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get quad params" });
+    }
+  });
+
+  app.post("/api/stabilization/params", async (req, res) => {
+    try {
+      flightDynamicsEngine.setQuadParams(req.body);
+      res.json({ success: true, params: flightDynamicsEngine.getQuadParams() });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update quad params" });
     }
   });
 
