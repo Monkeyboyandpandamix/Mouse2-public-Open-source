@@ -44,6 +44,7 @@ import {
   uploadCloudStorageObject,
 } from "./cloudSync";
 import { getFirebaseAdminDb, getFirebaseAdminRtdb, getFirebaseAdminStorage, resetFirebaseAdminApp } from "./firebaseAdmin";
+import { HARDCODED_FIREBASE_PROJECT } from "@shared/hardcodedFirebaseConfig";
 import { 
   getAuthUrl, 
   handleOAuthCallback, 
@@ -721,6 +722,14 @@ export async function registerRoutes(
 
   const getEffectiveCloudConfig = async () => {
     const runtime = sanitizeCloudConfig(await readCloudRuntimeConfig());
+    const hardcoded = {
+      projectId: HARDCODED_FIREBASE_PROJECT.projectId || null,
+      databaseURL: HARDCODED_FIREBASE_PROJECT.databaseURL || null,
+      storageBucket: HARDCODED_FIREBASE_PROJECT.storageBucket || null,
+      serviceAccountPath: HARDCODED_FIREBASE_PROJECT.serviceAccountPath || null,
+      serviceAccountJson: null,
+      serviceAccountBase64: null,
+    };
     const env = {
       projectId: process.env.FIREBASE_PROJECT_ID || null,
       databaseURL: process.env.FIREBASE_DATABASE_URL || null,
@@ -730,21 +739,23 @@ export async function registerRoutes(
       serviceAccountBase64: process.env.FIREBASE_SERVICE_ACCOUNT_BASE64 || null,
     };
     return {
-      projectId: env.projectId || runtime.projectId,
-      databaseURL: env.databaseURL || runtime.databaseURL,
-      storageBucket: env.storageBucket || runtime.storageBucket,
-      serviceAccountPath: env.serviceAccountPath || runtime.serviceAccountPath,
-      serviceAccountJson: env.serviceAccountJson || runtime.serviceAccountJson,
-      serviceAccountBase64: env.serviceAccountBase64 || runtime.serviceAccountBase64,
+      projectId: env.projectId || runtime.projectId || hardcoded.projectId,
+      databaseURL: env.databaseURL || runtime.databaseURL || hardcoded.databaseURL,
+      storageBucket: env.storageBucket || runtime.storageBucket || hardcoded.storageBucket,
+      serviceAccountPath: env.serviceAccountPath || runtime.serviceAccountPath || hardcoded.serviceAccountPath,
+      serviceAccountJson: env.serviceAccountJson || runtime.serviceAccountJson || hardcoded.serviceAccountJson,
+      serviceAccountBase64: env.serviceAccountBase64 || runtime.serviceAccountBase64 || hardcoded.serviceAccountBase64,
       source: {
-        projectId: env.projectId ? "env" : runtime.projectId ? "runtime" : "unset",
-        databaseURL: env.databaseURL ? "env" : runtime.databaseURL ? "runtime" : "unset",
-        storageBucket: env.storageBucket ? "env" : runtime.storageBucket ? "runtime" : "unset",
+        projectId: env.projectId ? "env" : runtime.projectId ? "runtime" : hardcoded.projectId ? "hardcoded" : "unset",
+        databaseURL: env.databaseURL ? "env" : runtime.databaseURL ? "runtime" : hardcoded.databaseURL ? "hardcoded" : "unset",
+        storageBucket: env.storageBucket ? "env" : runtime.storageBucket ? "runtime" : hardcoded.storageBucket ? "hardcoded" : "unset",
         serviceAccount: env.serviceAccountJson || env.serviceAccountBase64 || env.serviceAccountPath
           ? "env"
           : runtime.serviceAccountJson || runtime.serviceAccountBase64 || runtime.serviceAccountPath
             ? "runtime"
-            : "unset",
+            : hardcoded.serviceAccountPath
+              ? "hardcoded"
+              : "unset",
       },
     };
   };

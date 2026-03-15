@@ -1,15 +1,19 @@
 import { initializeApp, type FirebaseApp } from "firebase/app";
 import { getAnalytics, isSupported, type Analytics } from "firebase/analytics";
+import { HARDCODED_FIREBASE_WEB_APPS } from "@shared/hardcodedFirebaseConfig";
+
+const hardcoded = HARDCODED_FIREBASE_WEB_APPS.primary;
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY as string | undefined,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN as string | undefined,
-  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL as string | undefined,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID as string | undefined,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET as string | undefined,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID as string | undefined,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID as string | undefined,
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID as string | undefined,
+  apiKey: (import.meta.env.VITE_FIREBASE_API_KEY as string | undefined) || hardcoded.apiKey,
+  authDomain: (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN as string | undefined) || hardcoded.authDomain,
+  databaseURL: (import.meta.env.VITE_FIREBASE_DATABASE_URL as string | undefined) || hardcoded.databaseURL,
+  projectId: (import.meta.env.VITE_FIREBASE_PROJECT_ID as string | undefined) || hardcoded.projectId,
+  storageBucket: (import.meta.env.VITE_FIREBASE_STORAGE_BUCKET as string | undefined) || hardcoded.storageBucket,
+  messagingSenderId:
+    (import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID as string | undefined) || hardcoded.messagingSenderId,
+  appId: (import.meta.env.VITE_FIREBASE_APP_ID as string | undefined) || hardcoded.appId,
+  measurementId: (import.meta.env.VITE_FIREBASE_MEASUREMENT_ID as string | undefined) || hardcoded.measurementId,
 };
 
 const required = [

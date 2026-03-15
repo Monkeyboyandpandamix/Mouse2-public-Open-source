@@ -53,24 +53,55 @@ app.use(
 app.use(express.urlencoded({ extended: false }));
 
 async function ensureRuntimeDependencies() {
+  const runningInCloud =
+    Boolean(process.env.K_SERVICE) ||
+    Boolean(process.env.GOOGLE_CLOUD_PROJECT) ||
+    String(process.env.PORT || "") === "8080";
+  if (runningInCloud) {
+    log("runtime deps bootstrap skipped in cloud runtime", "bootstrap");
+    return;
+  }
+
   const pythonExec = process.env.PYTHON_PATH ?? "python3";
   const scriptPath = path.resolve(process.cwd(), "scripts", "runtime_bootstrap.py");
   await new Promise<void>((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+
     const proc = spawn(pythonExec, [scriptPath], {
       cwd: process.cwd(),
       env: process.env,
     });
+
+    const timeout = setTimeout(() => {
+      log("runtime deps bootstrap timed out; continuing startup", "bootstrap");
+      try {
+        proc.kill("SIGTERM");
+      } catch {}
+      done();
+    }, 8000);
+
     let out = "";
     let err = "";
     proc.stdout.on("data", (d: Buffer) => (out += d.toString()));
     proc.stderr.on("data", (d: Buffer) => (err += d.toString()));
+    proc.on("error", (e: any) => {
+      clearTimeout(timeout);
+      log(`runtime deps bootstrap skipped (${e?.message || "spawn error"})`, "bootstrap");
+      done();
+    });
     proc.on("close", (code) => {
+      clearTimeout(timeout);
       if (code === 0) {
         log(`runtime deps ready: ${out.trim()}`, "bootstrap");
       } else {
         log(`runtime deps bootstrap warning (continuing): ${out.trim() || err.trim()}`, "bootstrap");
       }
-      resolve();
+      done();
     });
   });
 }
