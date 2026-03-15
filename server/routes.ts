@@ -60,6 +60,60 @@ interface ServerSession {
   name: string;
   createdAt: number;
 }
+type PermissionId =
+  | "arm_disarm"
+  | "flight_control"
+  | "mission_planning"
+  | "camera_control"
+  | "view_telemetry"
+  | "view_map"
+  | "view_camera"
+  | "system_settings"
+  | "user_management"
+  | "automation_scripts"
+  | "run_terminal"
+  | "emergency_override"
+  | "object_tracking"
+  | "broadcast_audio"
+  | "manage_geofences"
+  | "access_flight_recorder";
+
+const serverRolePermissions: Record<string, PermissionId[]> = {
+  admin: [
+    "arm_disarm",
+    "flight_control",
+    "mission_planning",
+    "camera_control",
+    "view_telemetry",
+    "view_map",
+    "view_camera",
+    "system_settings",
+    "user_management",
+    "automation_scripts",
+    "run_terminal",
+    "emergency_override",
+    "object_tracking",
+    "broadcast_audio",
+    "manage_geofences",
+    "access_flight_recorder",
+  ],
+  operator: [
+    "arm_disarm",
+    "flight_control",
+    "mission_planning",
+    "camera_control",
+    "view_telemetry",
+    "view_map",
+    "view_camera",
+    "automation_scripts",
+    "object_tracking",
+    "broadcast_audio",
+    "manage_geofences",
+    "access_flight_recorder",
+  ],
+  viewer: ["view_telemetry", "view_map", "view_camera"],
+};
+
 const activeSessions = new Map<string, ServerSession>();
 const airspaceCache = new Map<string, { expiresAt: number; payload: any }>();
 const staticAirspaceCache = new Map<string, any>();
@@ -252,6 +306,46 @@ function validateSession(token: string | undefined): ServerSession | null {
 function requestSession(req: any): ServerSession | null {
   const token = req.headers["x-session-token"] as string | undefined;
   return validateSession(token);
+}
+
+function hasServerPermission(session: ServerSession | null, permission: PermissionId): boolean {
+  if (!session) return false;
+  const role = String(session.role || "viewer").toLowerCase();
+  if (role === "admin") return true;
+  return (serverRolePermissions[role] || []).includes(permission);
+}
+
+function requireAuth(req: any, res: any, next: any) {
+  const session = requestSession(req);
+  if (!session) {
+    return res.status(401).json({ success: false, error: "Authentication required" });
+  }
+  req.serverSession = session;
+  next();
+}
+
+function requirePermission(permission: PermissionId) {
+  return (req: any, res: any, next: any) => {
+    const session = requestSession(req);
+    if (!session) {
+      return res.status(401).json({ success: false, error: "Authentication required" });
+    }
+    if (!hasServerPermission(session, permission)) {
+      return res.status(403).json({ success: false, error: "Insufficient permissions" });
+    }
+    req.serverSession = session;
+    next();
+  };
+}
+
+function requirePermissionForWrites(permission: PermissionId) {
+  const writeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+  return (req: any, res: any, next: any) => {
+    if (!writeMethods.has(String(req.method || "GET").toUpperCase())) {
+      return next();
+    }
+    return requirePermission(permission)(req, res, next);
+  };
 }
 
 interface AirspaceZone {
@@ -880,6 +974,19 @@ export async function registerRoutes(
   app.get("/api/health", (req, res) => {
     res.status(200).json({ status: "ok", timestamp: Date.now() });
   });
+
+  // Server-side access control: protect control/data endpoints from anonymous calls.
+  app.use("/api/audio", requireAuth, requirePermissionForWrites("broadcast_audio"));
+  app.use("/api/mavlink", requirePermission("flight_control"));
+  app.use("/api/messages", requireAuth);
+  app.use("/api/settings", requirePermissionForWrites("system_settings"));
+  app.use("/api/missions", requirePermissionForWrites("mission_planning"));
+  app.use("/api/waypoints", requirePermissionForWrites("mission_planning"));
+  app.use("/api/drones", requirePermissionForWrites("system_settings"));
+  app.use("/api/media", requirePermissionForWrites("camera_control"));
+  app.use("/api/flight-logs", requirePermissionForWrites("access_flight_recorder"));
+  app.use("/api/motor-telemetry", requirePermissionForWrites("view_telemetry"));
+  app.use("/api/sensor-data", requirePermissionForWrites("view_telemetry"));
 
   // Audio control API (cross-platform with local fallbacks)
   app.get("/api/audio/status", async (_req, res) => {
@@ -3856,6 +3963,9 @@ export async function registerRoutes(
   app.post("/api/auth/login", async (req, res) => {
     try {
       const { userId, username, role, name } = req.body;
+      const normalizedRole = ["admin", "operator", "viewer"].includes(String(role || "").toLowerCase())
+        ? String(role).toLowerCase()
+        : "viewer";
       
       // Generate a secure session token
       const sessionToken = generateSessionToken();
@@ -3863,7 +3973,7 @@ export async function registerRoutes(
       // Store session on server
       activeSessions.set(sessionToken, {
         userId,
-        role: role || 'viewer',
+        role: normalizedRole,
         name: name || username || 'Unknown',
         createdAt: Date.now()
       });
@@ -3871,14 +3981,14 @@ export async function registerRoutes(
         action: "login",
         userId,
         username: username || null,
-        role: role || "viewer",
+        role: normalizedRole,
         at: new Date().toISOString(),
       }, {
-        session: { userId, role: role || "viewer", name: name || username || "Unknown" },
+        session: { userId, role: normalizedRole, name: name || username || "Unknown" },
         visibility: "admin",
       }).catch(() => {});
       
-      console.log(`User ${name} (${userId}) logged in with role: ${role}`);
+      console.log(`User ${name} (${userId}) logged in with role: ${normalizedRole}`);
       
       res.json({ 
         success: true, 
@@ -5172,7 +5282,7 @@ export async function registerRoutes(
   });
 
   // Trigger Google sync manually
-  app.post("/api/sync/google", async (req, res) => {
+  app.post("/api/sync/google", requirePermission("system_settings"), async (req, res) => {
     try {
       await storage.syncToGoogle();
       res.json({ success: true, message: "Sync initiated" });
