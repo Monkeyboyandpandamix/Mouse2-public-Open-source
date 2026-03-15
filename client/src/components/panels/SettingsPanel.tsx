@@ -268,6 +268,279 @@ function GoogleAccountManager() {
   );
 }
 
+function FirebaseCloudManager() {
+  const [cloudStatus, setCloudStatus] = useState<{
+    enabled: boolean;
+    projectId: string | null;
+    databaseUrl: string | null;
+    storageBucket: string | null;
+    hasServiceAccount: boolean;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [testing, setTesting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    success: boolean;
+    firestore?: boolean;
+    realtimeDatabase?: boolean;
+    storage?: boolean;
+    error?: string;
+  } | null>(null);
+  const [syncResult, setSyncResult] = useState<{ success: boolean; synced?: string[]; syncedAt?: string; error?: string } | null>(null);
+
+  const saved = localStorage.getItem('mouse_gcs_session');
+  const session = saved ? JSON.parse(saved) : null;
+  const isAdmin = session?.user?.role === 'admin';
+
+  useEffect(() => {
+    fetchCloudStatus();
+  }, []);
+
+  const fetchCloudStatus = async () => {
+    try {
+      const res = await fetch('/api/cloud/status');
+      const data = await res.json();
+      setCloudStatus(data);
+    } catch {
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const testConnection = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch('/api/cloud/test', { method: 'POST' });
+      const data = await res.json();
+      setTestResult(data);
+      if (data.success) toast.success('Firebase connection test passed!');
+      else toast.error(data.error || 'Firebase connection test failed');
+    } catch (e: any) {
+      setTestResult({ success: false, error: e.message || 'Test failed' });
+      toast.error('Firebase connection test failed');
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const syncAll = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const res = await fetch('/api/cloud/sync-all', { method: 'POST' });
+      const data = await res.json();
+      setSyncResult(data);
+      if (data.success) toast.success(`Synced: ${data.synced?.join(', ')}`);
+      else toast.error(data.error || 'Sync failed');
+    } catch (e: any) {
+      setSyncResult({ success: false, error: e.message || 'Sync failed' });
+      toast.error('Full sync failed');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  if (!isAdmin) return null;
+
+  if (loading) {
+    return (
+      <Card className="border-2 border-orange-500/50">
+        <CardContent className="py-6 text-center text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
+          Loading Firebase Cloud status...
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="border-2 border-orange-500/50">
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Cloud className="h-5 w-5 text-orange-500" />
+              Firebase Cloud
+            </CardTitle>
+            <CardDescription>Real-time cloud sync, remote drone control, and data persistence via Firebase</CardDescription>
+          </div>
+          <Badge className={cloudStatus?.enabled ? "bg-emerald-500" : "bg-amber-500"}>
+            {cloudStatus?.enabled ? "Connected" : "Not Configured"}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {cloudStatus?.enabled ? (
+          <>
+            <div className="p-3 bg-muted/30 rounded-lg space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Project ID</span>
+                <span className="font-mono text-sm">{cloudStatus.projectId}</span>
+              </div>
+              {cloudStatus.databaseUrl && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Realtime DB</span>
+                  <span className="font-mono text-xs truncate max-w-[200px]">{cloudStatus.databaseUrl}</span>
+                </div>
+              )}
+              {cloudStatus.storageBucket && (
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Storage Bucket</span>
+                  <span className="font-mono text-xs truncate max-w-[200px]">{cloudStatus.storageBucket}</span>
+                </div>
+              )}
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-muted-foreground">Service Account</span>
+                <Badge variant="outline" className="text-emerald-500 border-emerald-500">
+                  <Check className="h-3 w-3 mr-1" /> Configured
+                </Badge>
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={testConnection} disabled={testing} data-testid="button-firebase-test">
+                {testing ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Wifi className="h-4 w-4 mr-1" />}
+                Test Connection
+              </Button>
+              <Button onClick={syncAll} disabled={syncing} data-testid="button-firebase-sync-all">
+                {syncing ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Cloud className="h-4 w-4 mr-1" />}
+                Sync All Data
+              </Button>
+            </div>
+
+            {testResult && (
+              <div className={`p-3 rounded-lg text-sm space-y-1 ${testResult.success ? 'bg-emerald-500/10 border border-emerald-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
+                <p className="font-medium">{testResult.success ? 'Connection Test Passed' : 'Connection Test Failed'}</p>
+                {testResult.success && (
+                  <div className="grid grid-cols-3 gap-2 text-xs mt-2">
+                    <div className="flex items-center gap-1">
+                      {testResult.firestore ? <CheckCircle className="h-3 w-3 text-emerald-500" /> : <AlertTriangle className="h-3 w-3 text-amber-500" />}
+                      Firestore
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {testResult.realtimeDatabase ? <CheckCircle className="h-3 w-3 text-emerald-500" /> : <AlertTriangle className="h-3 w-3 text-amber-500" />}
+                      Realtime DB
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {testResult.storage ? <CheckCircle className="h-3 w-3 text-emerald-500" /> : <AlertTriangle className="h-3 w-3 text-amber-500" />}
+                      Storage
+                    </div>
+                  </div>
+                )}
+                {testResult.error && <p className="text-xs text-destructive">{testResult.error}</p>}
+              </div>
+            )}
+
+            {syncResult && (
+              <div className={`p-3 rounded-lg text-sm ${syncResult.success ? 'bg-emerald-500/10 border border-emerald-500/30' : 'bg-red-500/10 border border-red-500/30'}`}>
+                {syncResult.success ? (
+                  <>
+                    <p className="font-medium">Full Sync Complete</p>
+                    <p className="text-xs text-muted-foreground">Synced: {syncResult.synced?.join(', ')}</p>
+                    <p className="text-xs text-muted-foreground">At: {syncResult.syncedAt ? new Date(syncResult.syncedAt).toLocaleString() : ''}</p>
+                  </>
+                ) : (
+                  <p className="text-destructive">{syncResult.error}</p>
+                )}
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label>Data synced to Firebase Cloud:</Label>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <CheckCircle className="h-4 w-4 text-emerald-500" />
+                  Missions & Waypoints
+                </div>
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <CheckCircle className="h-4 w-4 text-emerald-500" />
+                  Drone Registry & Location
+                </div>
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <CheckCircle className="h-4 w-4 text-emerald-500" />
+                  Flight Logs & Telemetry
+                </div>
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <CheckCircle className="h-4 w-4 text-emerald-500" />
+                  Vehicle Commands (Arm/Disarm)
+                </div>
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <CheckCircle className="h-4 w-4 text-emerald-500" />
+                  Swarm Actions & Formations
+                </div>
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <CheckCircle className="h-4 w-4 text-emerald-500" />
+                  Audio/Speaker Sessions
+                </div>
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <CheckCircle className="h-4 w-4 text-emerald-500" />
+                  Media Assets & Recordings
+                </div>
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <CheckCircle className="h-4 w-4 text-emerald-500" />
+                  Sensor Data & Motor Telemetry
+                </div>
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <CheckCircle className="h-4 w-4 text-emerald-500" />
+                  Settings & Configuration
+                </div>
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <CheckCircle className="h-4 w-4 text-emerald-500" />
+                  Team Messages & DMs
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg space-y-2">
+              <p className="text-sm font-medium flex items-center gap-2">
+                <Radio className="h-4 w-4 text-blue-500" />
+                Remote Drone Control via Cloud
+              </p>
+              <p className="text-xs text-muted-foreground">
+                When hosted on Firebase, this app can remotely control drones through the cloud.
+                All vehicle commands (arm, disarm, mode changes), speaker/microphone sessions,
+                swarm actions, and manual control frames are published to Firebase Realtime Database
+                in real-time. An onboard Raspberry Pi running M.O.U.S.E in onboard mode subscribes
+                to these commands and executes them locally via MAVLink.
+              </p>
+            </div>
+          </>
+        ) : (
+          <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg space-y-3">
+            <p className="text-sm font-medium">Firebase Cloud is not configured</p>
+            <p className="text-sm text-muted-foreground">
+              To enable Firebase cloud sync and remote drone control, configure the following environment variables:
+            </p>
+            <div className="text-sm space-y-2">
+              <p className="font-medium">Required:</p>
+              <ol className="list-decimal list-inside space-y-1 text-muted-foreground text-xs">
+                <li>Create a Firebase project at <a href="https://console.firebase.google.com" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">console.firebase.google.com</a></li>
+                <li>Enable Firestore, Realtime Database, and Cloud Storage</li>
+                <li>Generate a service account key (Project Settings &gt; Service Accounts)</li>
+                <li>Set <code className="bg-muted px-1 rounded font-mono">FIREBASE_PROJECT_ID</code> to your project ID</li>
+                <li>Set <code className="bg-muted px-1 rounded font-mono">FIREBASE_SERVICE_ACCOUNT_JSON</code> to the full JSON key contents</li>
+              </ol>
+              <p className="font-medium mt-3">Optional:</p>
+              <ul className="list-disc list-inside space-y-1 text-muted-foreground text-xs">
+                <li><code className="bg-muted px-1 rounded font-mono">FIREBASE_DATABASE_URL</code> — Realtime Database URL (for real-time command relay)</li>
+                <li><code className="bg-muted px-1 rounded font-mono">FIREBASE_STORAGE_BUCKET</code> — Storage bucket (for video/media uploads)</li>
+                <li><code className="bg-muted px-1 rounded font-mono">FIREBASE_SERVICE_ACCOUNT_BASE64</code> — Alternative: base64-encoded key</li>
+                <li><code className="bg-muted px-1 rounded font-mono">FIREBASE_SERVICE_ACCOUNT_PATH</code> — Alternative: path to JSON key file</li>
+              </ul>
+            </div>
+            {cloudStatus?.hasServiceAccount && !cloudStatus?.projectId && (
+              <div className="p-2 bg-red-500/10 rounded text-xs text-destructive">
+                Service account detected but FIREBASE_PROJECT_ID is not set.
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function SettingsPanel() {
   const { hasPermission } = usePermissions();
   const canAccessSettings = hasPermission('system_settings');
@@ -1792,6 +2065,8 @@ export function SettingsPanel() {
                 <GoogleAccountManager />
               </CardContent>
             </Card>
+
+            <FirebaseCloudManager />
           </TabsContent>
 
           <TabsContent value="operations" className="space-y-4 mt-4">

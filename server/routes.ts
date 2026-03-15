@@ -2056,6 +2056,7 @@ export async function registerRoutes(
             calibrationState[mode].status = "completed";
             calibrationState[mode].ack = parsed.ack ?? null;
             calibrationState[mode].message = "Calibration accepted";
+            void appendCloudDocument("calibration_events", { mode, status: "completed", connectionString, ack: parsed.ack ?? null, timestamp: new Date().toISOString() }, { session: requestSession(req) }).catch(() => {});
             return res.json({ success: true, mode, ack: parsed.ack ?? null });
           }
           calibrationState[mode].status = "failed";
@@ -2370,6 +2371,8 @@ export async function registerRoutes(
       if (mode) args.push("--mode", mode);
       const result = await runMavlinkVehicleControl(args);
       if (!result.ok) return res.status(500).json({ success: false, error: result.error || "Vehicle action failed" });
+      void publishCloudRealtime("vehicle_command", { connectionString, action, mode: mode || null, result: result.data }).catch(() => {});
+      void appendCloudDocument("vehicle_commands", { connectionString, action, mode: mode || null, result: result.data, timestamp: new Date().toISOString() }, { session: requestSession(req) }).catch(() => {});
       res.json({ success: true, result: result.data });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error?.message || "Vehicle action failed" });
@@ -2409,6 +2412,7 @@ export async function registerRoutes(
       ]);
 
       if (!result.ok) return res.status(500).json({ success: false, error: result.error || "Manual control failed" });
+      void publishCloudRealtime("manual_control", { connectionString, x: Number(x), y: Number(y), z: Number(z), r: Number(r) }).catch(() => {});
       res.json({ success: true, result: result.data });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error?.message || "Manual control failed" });
@@ -2451,14 +2455,17 @@ export async function registerRoutes(
       }
 
       const successCount = results.filter((r) => r.success).length;
-      res.json({
+      const payload = {
         success: successCount > 0,
         action,
         mode: mode || null,
         successCount,
         total: results.length,
         results,
-      });
+      };
+      void appendCloudDocument("swarm_actions", payload, { session: requestSession(req) }).catch(() => {});
+      void publishCloudRealtime("swarm_action", payload).catch(() => {});
+      res.json(payload);
     } catch (error: any) {
       res.status(500).json({ success: false, error: error?.message || "Swarm action failed" });
     }
@@ -2544,7 +2551,10 @@ export async function registerRoutes(
           delayMs: Date.now() - startedAt,
         });
       }
-      res.json({ success: true, action, mode: mode || null, staggerMs, results });
+      const payload = { success: true, action, mode: mode || null, staggerMs, results };
+      void appendCloudDocument("swarm_actions", payload, { session: requestSession(req) }).catch(() => {});
+      void publishCloudRealtime("swarm_sync_action", payload).catch(() => {});
+      res.json(payload);
     } catch (error: any) {
       res.status(500).json({ success: false, error: error?.message || "Swarm sync action failed" });
     }
@@ -2565,7 +2575,9 @@ export async function registerRoutes(
           ],
         }))
         .filter((m: any) => Number.isFinite(m.mission[0].lat) && Number.isFinite(m.mission[0].lng));
-      res.json({ success: true, count: missions.length, missions });
+      const payload = { success: true, count: missions.length, missions };
+      void appendCloudDocument("swarm_formation_missions", payload, { session: requestSession(req) }).catch(() => {});
+      res.json(payload);
     } catch (error: any) {
       res.status(500).json({ success: false, error: error?.message || "Formation mission generation failed" });
     }
@@ -5200,7 +5212,93 @@ export async function registerRoutes(
       projectId: process.env.FIREBASE_PROJECT_ID || null,
       databaseUrl: process.env.FIREBASE_DATABASE_URL || null,
       storageBucket: process.env.FIREBASE_STORAGE_BUCKET || null,
+      hasServiceAccount: Boolean(
+        process.env.FIREBASE_SERVICE_ACCOUNT_JSON ||
+        process.env.FIREBASE_SERVICE_ACCOUNT_BASE64 ||
+        process.env.FIREBASE_SERVICE_ACCOUNT_PATH
+      ),
     });
+  });
+
+  app.post("/api/cloud/test", async (req, res) => {
+    try {
+      if (!cloudSyncEnabled()) {
+        return res.json({ success: false, error: "Firebase is not configured. Set FIREBASE_PROJECT_ID and service account credentials." });
+      }
+      const testDoc = {
+        test: true,
+        timestamp: new Date().toISOString(),
+        source: "mouse-gcs-config-test",
+      };
+      await syncCloudDocument("_connection_tests", "latest", testDoc);
+
+      let rtdbOk = false;
+      try {
+        await publishCloudRealtime("_test", { ping: Date.now() });
+        rtdbOk = true;
+      } catch { rtdbOk = false; }
+
+      let storageOk = false;
+      try {
+        const result = await uploadCloudStorageObject(
+          "_test/connection-test.txt",
+          Buffer.from("MOUSE GCS connection test " + new Date().toISOString()),
+          "text/plain"
+        );
+        storageOk = result.ok;
+      } catch { storageOk = false; }
+
+      res.json({
+        success: true,
+        firestore: true,
+        realtimeDatabase: rtdbOk,
+        storage: storageOk,
+        projectId: process.env.FIREBASE_PROJECT_ID,
+      });
+    } catch (error: any) {
+      res.json({ success: false, error: error?.message || "Firebase connection test failed" });
+    }
+  });
+
+  app.post("/api/cloud/sync-all", async (req, res) => {
+    try {
+      if (!cloudSyncEnabled()) {
+        return res.json({ success: false, error: "Firebase is not configured" });
+      }
+      const session = requestSession(req);
+      const synced: string[] = [];
+      const fs = await import("fs");
+      const dataDir = process.env.DATA_DIR || "./data";
+
+      const syncJsonFile = async (filename: string, collection: string, idField = "id") => {
+        const filepath = path.join(dataDir, filename);
+        if (!fs.existsSync(filepath)) return 0;
+        try {
+          const items = JSON.parse(fs.readFileSync(filepath, "utf-8"));
+          if (!Array.isArray(items)) return 0;
+          for (const item of items) {
+            const docId = item[idField] || `${collection}-${items.indexOf(item)}`;
+            await syncCloudDocument(collection, String(docId), item, { session });
+          }
+          return items.length;
+        } catch { return 0; }
+      };
+
+      await syncJsonFile("settings.json", "settings", "key");
+      synced.push("settings");
+      await syncJsonFile("missions.json", "missions");
+      synced.push("missions");
+      await syncJsonFile("waypoints.json", "waypoints");
+      synced.push("waypoints");
+      await syncJsonFile("drones.json", "drones");
+      synced.push("drones");
+      await syncJsonFile("flight_logs.json", "flight_logs");
+      synced.push("flight_logs");
+
+      res.json({ success: true, synced, syncedAt: new Date().toISOString() });
+    } catch (error: any) {
+      res.json({ success: false, error: error?.message || "Full sync failed" });
+    }
   });
 
   app.get("/api/cloud/awareness", async (req, res) => {

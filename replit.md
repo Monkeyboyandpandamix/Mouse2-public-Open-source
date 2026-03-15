@@ -27,6 +27,7 @@ Preferred communication style: Simple, everyday language.
 ### Data Storage
 - **Local Storage**: JSON files in `./data` directory for offline-first operation
 - **Cloud Backup**: Google Drive for file storage, Google Sheets for structured data backup
+- **Firebase Cloud Sync**: Optional Firebase integration for real-time cloud sync, remote drone control, and multi-device collaboration. Syncs settings, missions, waypoints, drones, flight logs, swarm actions, vehicle commands, calibration events, manual control, audio/media assets, and team messages. Configured via `FIREBASE_PROJECT_ID` + `FIREBASE_SERVICE_ACCOUNT_JSON` environment variables.
 - **Schema Location**: `shared/schema.ts` contains all type definitions using Zod
 - **Data Files**: settings.json, missions.json, waypoints.json, drones.json, flight_logs.json, etc.
 - **Auto-sync**: Data automatically syncs to Google Drive/Sheets when online (every 5 minutes)
