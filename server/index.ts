@@ -1,9 +1,37 @@
 import express, { type Request, Response, NextFunction } from "express";
-import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import path from "path";
 import { spawn } from "child_process";
+import { existsSync, readFileSync } from "fs";
+
+function loadEnvFile(filePath = ".env") {
+  try {
+    const abs = path.resolve(process.cwd(), filePath);
+    if (!existsSync(abs)) return;
+    const lines = readFileSync(abs, "utf8").split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq <= 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      if (!key || process.env[key] != null) continue;
+      let value = trimmed.slice(eq + 1).trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      process.env[key] = value;
+    }
+  } catch {
+    // ignore .env parse/load failures; system env still applies
+  }
+}
+
+loadEnvFile();
 
 const app = express();
 const httpServer = createServer(app);
@@ -86,6 +114,7 @@ app.use((req, res, next) => {
 
 (async () => {
   await ensureRuntimeDependencies();
+  const { registerRoutes } = await import("./routes");
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
@@ -130,7 +159,6 @@ app.use((req, res, next) => {
       {
         port,
         host,
-        reusePort: true,
       },
       () => {
         httpServer.off("error", onListenError);

@@ -8,13 +8,14 @@
     "dev": "tsx server/index.ts",
     "build": "npm run check && tsx script/build.ts",
     "start": "node dist/index.cjs",
+    "gcp-build": "npm run build",
     "start:linux": "bash ./start-linux.sh",
     "start:macos": "bash ./start-macos.sh",
     "start:pi": "bash ./start-pi-onboard.sh",
     "start:windows": "start-windows.bat",
     "check": "tsc",
-    "deploy:web": "npm run build && firebase apphosting:rollouts:create web-mouse --git-branch main --force",
-    "deploy:apphosting": "npm run build && firebase apphosting:rollouts:create web-mouse --git-branch main --force",
+    "deploy:web": "npm run build && firebase apphosting:rollouts:create my-web-app --git-branch main --force",
+    "deploy:apphosting": "npm run build && firebase apphosting:rollouts:create my-web-app --git-branch main --force",
     "deploy:apphosting:custom": "npm run build && firebase apphosting:rollouts:create \"$FIREBASE_APPHOSTING_BACKEND\" --git-branch \"${FIREBASE_APPHOSTING_BRANCH:-main}\" --force"
   },
   "dependencies": {

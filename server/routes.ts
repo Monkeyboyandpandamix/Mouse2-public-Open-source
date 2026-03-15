@@ -43,6 +43,7 @@ import {
   syncCloudDocument,
   uploadCloudStorageObject,
 } from "./cloudSync";
+import { getFirebaseAdminDb, getFirebaseAdminRtdb, getFirebaseAdminStorage, resetFirebaseAdminApp } from "./firebaseAdmin";
 import { 
   getAuthUrl, 
   handleOAuthCallback, 
@@ -168,6 +169,7 @@ const calibrationState: Record<string, { status: "idle" | "running" | "completed
   level: { status: "idle", lastRunAt: null },
 };
 const DATA_DIR = path.resolve(process.cwd(), "data");
+const CLOUD_RUNTIME_CONFIG_FILE = path.join(DATA_DIR, "cloud_runtime_config.json");
 const RTK_PROFILE_FILE = path.join(DATA_DIR, "rtk_profiles.json");
 const PLUGINS_DIR = path.resolve(process.cwd(), "plugins");
 const PLUGIN_STATE_FILE = path.join(DATA_DIR, "plugin_state.json");
@@ -573,6 +575,184 @@ export async function registerRoutes(
     userId: string | null;
   }
   const clients = new Map<WebSocket, ClientInfo>();
+
+  type DebugEventLevel = "info" | "warn" | "error" | "success";
+  interface DebugEvent {
+    id: string;
+    timestamp: string;
+    level: DebugEventLevel;
+    source: string;
+    message: string;
+    details?: any;
+  }
+  const debugEvents: DebugEvent[] = [];
+  const DEBUG_EVENT_LIMIT = 800;
+  let lastCloudHealthProbe: any = null;
+  let lastCloudHealthProbeAt: string | null = null;
+  let lastApiError: { at: string; method: string; path: string; status: number } | null = null;
+  let lastSlowApi: { at: string; method: string; path: string; durationMs: number } | null = null;
+
+  const pushDebugEvent = (
+    level: DebugEventLevel,
+    source: string,
+    message: string,
+    details?: any,
+  ) => {
+    const event: DebugEvent = {
+      id: randomBytes(8).toString("hex"),
+      timestamp: new Date().toISOString(),
+      level,
+      source,
+      message,
+      details: details ?? null,
+    };
+    debugEvents.push(event);
+    if (debugEvents.length > DEBUG_EVENT_LIMIT) {
+      debugEvents.splice(0, debugEvents.length - DEBUG_EVENT_LIMIT);
+    }
+
+    const payload = JSON.stringify({ type: "debug_event", data: event });
+    clients.forEach((clientInfo) => {
+      if (clientInfo.ws.readyState === WebSocket.OPEN) {
+        clientInfo.ws.send(payload);
+      }
+    });
+  };
+
+  const runCloudHealthProbe = async () => {
+    const startedAt = Date.now();
+    const checkedAt = new Date().toISOString();
+    const configured = Boolean(cloudSyncEnabled() && getFirebaseAdminDb());
+    const result = {
+      checkedAt,
+      configured,
+      success: false,
+      degraded: false,
+      totalLatencyMs: 0,
+      firestore: { ok: false, latencyMs: null as number | null, error: null as string | null },
+      realtimeDatabase: { ok: false, latencyMs: null as number | null, error: null as string | null },
+      storage: { ok: false, latencyMs: null as number | null, error: null as string | null },
+      error: null as string | null,
+    };
+
+    if (!configured) {
+      result.error = "Firebase is not configured. Set FIREBASE_PROJECT_ID and service account credentials.";
+      result.totalLatencyMs = Date.now() - startedAt;
+      return result;
+    }
+
+    const rtdb = getFirebaseAdminRtdb();
+    const storageAdmin = getFirebaseAdminStorage();
+    if (!rtdb) {
+      result.realtimeDatabase.error = "Realtime Database not configured";
+    }
+    if (!storageAdmin) {
+      result.storage.error = "Cloud Storage not configured";
+    }
+
+    const probeId = `${Date.now()}-${randomBytes(4).toString("hex")}`;
+    try {
+      const t0 = Date.now();
+      await syncCloudDocument("_debug_health", "latest", { probeId, checkedAt, source: "debug/system" });
+      result.firestore.ok = true;
+      result.firestore.latencyMs = Date.now() - t0;
+    } catch (error: any) {
+      result.firestore.error = error?.message || String(error);
+    }
+
+    if (rtdb) {
+      try {
+        const t0 = Date.now();
+        await rtdb.ref("_debug/health/last").set({ probeId, checkedAt, source: "debug/system" });
+        result.realtimeDatabase.ok = true;
+        result.realtimeDatabase.latencyMs = Date.now() - t0;
+      } catch (error: any) {
+        result.realtimeDatabase.error = error?.message || String(error);
+      }
+    }
+
+    if (storageAdmin) {
+      try {
+        const t0 = Date.now();
+        const uploaded = await uploadCloudStorageObject(
+          "_debug/health-probe.txt",
+          Buffer.from(`probe=${probeId};checkedAt=${checkedAt}`),
+          "text/plain",
+        );
+        if (uploaded.ok) {
+          result.storage.ok = true;
+          result.storage.latencyMs = Date.now() - t0;
+        } else {
+          result.storage.error = uploaded.error || "Cloud Storage upload failed";
+        }
+      } catch (error: any) {
+        result.storage.error = error?.message || String(error);
+      }
+    }
+
+    result.success = result.firestore.ok && result.realtimeDatabase.ok && result.storage.ok;
+    result.degraded = !result.success && (result.firestore.ok || result.realtimeDatabase.ok || result.storage.ok);
+    result.totalLatencyMs = Date.now() - startedAt;
+    if (!result.success && !result.error) {
+      result.error = "One or more cloud services failed health checks";
+    }
+    return result;
+  };
+
+  const readCloudRuntimeConfig = async (): Promise<Record<string, any>> => {
+    try {
+      if (!existsSync(CLOUD_RUNTIME_CONFIG_FILE)) return {};
+      const raw = await readFile(CLOUD_RUNTIME_CONFIG_FILE, "utf-8");
+      const parsed = JSON.parse(raw || "{}");
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  };
+
+  const sanitizeCloudConfig = (cfg: Record<string, any>) => ({
+    projectId: String(cfg.projectId || "").trim() || null,
+    databaseURL: String(cfg.databaseURL || "").trim() || null,
+    storageBucket: String(cfg.storageBucket || "").trim() || null,
+    serviceAccountPath: String(cfg.serviceAccountPath || "").trim() || null,
+    serviceAccountJson: String(cfg.serviceAccountJson || "").trim() || null,
+    serviceAccountBase64: String(cfg.serviceAccountBase64 || "").trim() || null,
+  });
+
+  const getEffectiveCloudConfig = async () => {
+    const runtime = sanitizeCloudConfig(await readCloudRuntimeConfig());
+    const env = {
+      projectId: process.env.FIREBASE_PROJECT_ID || null,
+      databaseURL: process.env.FIREBASE_DATABASE_URL || null,
+      storageBucket: process.env.FIREBASE_STORAGE_BUCKET || null,
+      serviceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH || null,
+      serviceAccountJson: process.env.FIREBASE_SERVICE_ACCOUNT_JSON || null,
+      serviceAccountBase64: process.env.FIREBASE_SERVICE_ACCOUNT_BASE64 || null,
+    };
+    return {
+      projectId: env.projectId || runtime.projectId,
+      databaseURL: env.databaseURL || runtime.databaseURL,
+      storageBucket: env.storageBucket || runtime.storageBucket,
+      serviceAccountPath: env.serviceAccountPath || runtime.serviceAccountPath,
+      serviceAccountJson: env.serviceAccountJson || runtime.serviceAccountJson,
+      serviceAccountBase64: env.serviceAccountBase64 || runtime.serviceAccountBase64,
+      source: {
+        projectId: env.projectId ? "env" : runtime.projectId ? "runtime" : "unset",
+        databaseURL: env.databaseURL ? "env" : runtime.databaseURL ? "runtime" : "unset",
+        storageBucket: env.storageBucket ? "env" : runtime.storageBucket ? "runtime" : "unset",
+        serviceAccount: env.serviceAccountJson || env.serviceAccountBase64 || env.serviceAccountPath
+          ? "env"
+          : runtime.serviceAccountJson || runtime.serviceAccountBase64 || runtime.serviceAccountPath
+            ? "runtime"
+            : "unset",
+      },
+    };
+  };
+
+  const saveCloudRuntimeConfig = async (cfg: Record<string, any>) => {
+    mkdirSync(DATA_DIR, { recursive: true });
+    await writeFile(CLOUD_RUNTIME_CONFIG_FILE, JSON.stringify(cfg, null, 2), "utf-8");
+  };
   
   wss.on("connection", (ws) => {
     // Initially, user is not authenticated
@@ -1009,9 +1189,50 @@ export async function registerRoutes(
     res.status(200).json({ status: "ok", timestamp: Date.now() });
   });
 
+  app.use("/api", (req, res, next) => {
+    const started = Date.now();
+    res.on("finish", () => {
+      const durationMs = Date.now() - started;
+      const method = String(req.method || "GET").toUpperCase();
+      const routePath = String(req.path || "");
+      if (routePath.startsWith("/debug")) return;
+
+      if (res.statusCode >= 500) {
+        lastApiError = { at: new Date().toISOString(), method, path: routePath, status: res.statusCode };
+        pushDebugEvent("error", "api.runtime", "API request failed", {
+          method,
+          path: routePath,
+          status: res.statusCode,
+          durationMs,
+        });
+        return;
+      }
+      if (res.statusCode >= 400) {
+        pushDebugEvent("warn", "api.runtime", "API request returned client error", {
+          method,
+          path: routePath,
+          status: res.statusCode,
+          durationMs,
+        });
+        return;
+      }
+      if (durationMs >= 1500) {
+        lastSlowApi = { at: new Date().toISOString(), method, path: routePath, durationMs };
+        pushDebugEvent("warn", "api.runtime", "API request was slow", {
+          method,
+          path: routePath,
+          status: res.statusCode,
+          durationMs,
+        });
+      }
+    });
+    next();
+  });
+
   // Server-side access control: protect control/data endpoints from anonymous calls.
   app.use("/api/audio", requireAuth, requirePermissionForWrites("broadcast_audio"));
   app.use("/api/mavlink", requirePermission("flight_control"));
+  app.use("/api/debug", requirePermission("system_settings"));
   app.use("/api/messages", requireAuth);
   app.use("/api/settings", requirePermissionForWrites("system_settings"));
   app.use("/api/missions", requirePermissionForWrites("mission_planning"));
@@ -1396,6 +1617,10 @@ export async function registerRoutes(
     try {
       const { command, params } = req.body;
       if (!command) return res.status(400).json({ success: false, error: "command is required" });
+      pushDebugEvent("info", "mavlink.command", "Command dispatch requested", {
+        command,
+        hasParams: Boolean(params && typeof params === "object"),
+      });
 
       if (command === "gimbal_control") {
         const pitch = Math.max(-90, Math.min(30, Number(params?.pitch ?? -45)));
@@ -1413,14 +1638,32 @@ export async function registerRoutes(
           py.stdout.on("data", (d: Buffer) => { stdout += d.toString(); });
           py.stderr.on("data", (d: Buffer) => { stderr += d.toString(); });
           await new Promise<void>((resolve) => py.on("close", () => resolve()));
+          pushDebugEvent("success", "mavlink.command", "Gimbal command pushed to MAVLink bridge", {
+            command,
+            hardware: true,
+            connectionString,
+            pitch,
+            yaw,
+            stderr: stderr.trim() || null,
+          });
           return res.json({ success: true, command, pitch, yaw, output: stdout.trim(), hardware: true });
         }
 
+        pushDebugEvent("warn", "mavlink.command", "Gimbal command queued without MAVLink connection", {
+          command,
+          hardware: false,
+          pitch,
+          yaw,
+        });
         return res.json({ success: true, command, pitch, yaw, hardware: false, message: "Gimbal command queued (no MAVLink connection)" });
       }
 
+      pushDebugEvent("warn", "mavlink.command", "Unknown command rejected", { command });
       return res.status(400).json({ success: false, error: `Unknown command: ${command}` });
     } catch (err: any) {
+      pushDebugEvent("error", "mavlink.command", "Command dispatch failed", {
+        error: err?.message || String(err),
+      });
       res.status(500).json({ success: false, error: err.message });
     }
   });
@@ -2439,14 +2682,36 @@ export async function registerRoutes(
         return res.status(400).json({ success: false, error: "mode is required for set_mode" });
       }
 
+      pushDebugEvent("info", "mavlink.vehicle_action", "Vehicle action dispatch requested", {
+        action,
+        mode: mode || null,
+        connectionString,
+      });
       const args = ["action", "--connection", connectionString, "--action", action, "--timeout", "8"];
       if (mode) args.push("--mode", mode);
       const result = await runMavlinkVehicleControl(args);
-      if (!result.ok) return res.status(500).json({ success: false, error: result.error || "Vehicle action failed" });
+      if (!result.ok) {
+        pushDebugEvent("error", "mavlink.vehicle_action", "Vehicle action failed", {
+          action,
+          mode: mode || null,
+          connectionString,
+          error: result.error || "Vehicle action failed",
+        });
+        return res.status(500).json({ success: false, error: result.error || "Vehicle action failed" });
+      }
       void publishCloudRealtime("vehicle_command", { connectionString, action, mode: mode || null, result: result.data }).catch(() => {});
       void appendCloudDocument("vehicle_commands", { connectionString, action, mode: mode || null, result: result.data, timestamp: new Date().toISOString() }, { session: requestSession(req) }).catch(() => {});
+      pushDebugEvent("success", "mavlink.vehicle_action", "Vehicle action dispatched successfully", {
+        action,
+        mode: mode || null,
+        connectionString,
+        ack: result.data?.ack ?? null,
+      });
       res.json({ success: true, result: result.data });
     } catch (error: any) {
+      pushDebugEvent("error", "mavlink.vehicle_action", "Vehicle action failed with exception", {
+        error: error?.message || String(error),
+      });
       res.status(500).json({ success: false, error: error?.message || "Vehicle action failed" });
     }
   });
@@ -2506,6 +2771,11 @@ export async function registerRoutes(
         return res.status(400).json({ success: false, error: "mode is required for set_mode" });
       }
 
+      pushDebugEvent("info", "mavlink.swarm_action", "Swarm action dispatch requested", {
+        action,
+        mode: mode || null,
+        targetCount: connectionStrings.length,
+      });
       const results: Array<{ connectionString: string; success: boolean; ack?: number | null; error?: string }> = [];
       for (const connectionString of connectionStrings) {
         const args = ["action", "--connection", connectionString, "--action", action, "--timeout", "8"];
@@ -2537,8 +2807,17 @@ export async function registerRoutes(
       };
       void appendCloudDocument("swarm_actions", payload, { session: requestSession(req) }).catch(() => {});
       void publishCloudRealtime("swarm_action", payload).catch(() => {});
+      pushDebugEvent(payload.success ? "success" : "warn", "mavlink.swarm_action", "Swarm action dispatch completed", {
+        action,
+        mode: mode || null,
+        successCount,
+        total: results.length,
+      });
       res.json(payload);
     } catch (error: any) {
+      pushDebugEvent("error", "mavlink.swarm_action", "Swarm action dispatch failed", {
+        error: error?.message || String(error),
+      });
       res.status(500).json({ success: false, error: error?.message || "Swarm action failed" });
     }
   });
@@ -2606,6 +2885,12 @@ export async function registerRoutes(
         return res.status(400).json({ success: false, error: "action must be arm|disarm|set_mode|reboot" });
       }
 
+      pushDebugEvent("info", "mavlink.swarm_sync_action", "Synchronized swarm action dispatch requested", {
+        action,
+        mode: mode || null,
+        targetCount: connectionStrings.length,
+        staggerMs,
+      });
       const startedAt = Date.now();
       const results: Array<{ connectionString: string; success: boolean; error?: string; delayMs: number }> = [];
       for (let i = 0; i < connectionStrings.length; i++) {
@@ -2626,8 +2911,18 @@ export async function registerRoutes(
       const payload = { success: true, action, mode: mode || null, staggerMs, results };
       void appendCloudDocument("swarm_actions", payload, { session: requestSession(req) }).catch(() => {});
       void publishCloudRealtime("swarm_sync_action", payload).catch(() => {});
+      pushDebugEvent("success", "mavlink.swarm_sync_action", "Synchronized swarm action dispatch completed", {
+        action,
+        mode: mode || null,
+        staggerMs,
+        total: results.length,
+        successCount: results.filter((r) => r.success).length,
+      });
       res.json(payload);
     } catch (error: any) {
+      pushDebugEvent("error", "mavlink.swarm_sync_action", "Synchronized swarm action dispatch failed", {
+        error: error?.message || String(error),
+      });
       res.status(500).json({ success: false, error: error?.message || "Swarm sync action failed" });
     }
   });
@@ -5395,56 +5690,105 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/cloud/status", (_req, res) => {
+  app.get("/api/cloud/config", async (_req, res) => {
+    const effective = await getEffectiveCloudConfig();
+    res.json({
+      success: true,
+      projectId: effective.projectId || "",
+      databaseURL: effective.databaseURL || "",
+      storageBucket: effective.storageBucket || "",
+      serviceAccountPath: effective.serviceAccountPath || "",
+      hasServiceAccountJson: Boolean(effective.serviceAccountJson),
+      hasServiceAccountBase64: Boolean(effective.serviceAccountBase64),
+      hasServiceAccountPath: Boolean(effective.serviceAccountPath),
+      source: effective.source,
+    });
+  });
+
+  app.post("/api/cloud/config", async (req, res) => {
+    try {
+      const body = req.body || {};
+      const runtimeConfig = sanitizeCloudConfig({
+        projectId: body.projectId,
+        databaseURL: body.databaseURL,
+        storageBucket: body.storageBucket,
+        serviceAccountPath: body.serviceAccountPath,
+        serviceAccountJson: body.serviceAccountJson,
+        serviceAccountBase64: body.serviceAccountBase64,
+      });
+      await saveCloudRuntimeConfig(runtimeConfig);
+
+      process.env.FIREBASE_PROJECT_ID = runtimeConfig.projectId || "";
+      process.env.FIREBASE_DATABASE_URL = runtimeConfig.databaseURL || "";
+      process.env.FIREBASE_STORAGE_BUCKET = runtimeConfig.storageBucket || "";
+      process.env.FIREBASE_SERVICE_ACCOUNT_PATH = runtimeConfig.serviceAccountPath || "";
+      process.env.FIREBASE_SERVICE_ACCOUNT_JSON = runtimeConfig.serviceAccountJson || "";
+      process.env.FIREBASE_SERVICE_ACCOUNT_BASE64 = runtimeConfig.serviceAccountBase64 || "";
+
+      await resetFirebaseAdminApp();
+      const probe = await runCloudHealthProbe();
+      lastCloudHealthProbe = probe;
+      lastCloudHealthProbeAt = probe.checkedAt;
+      pushDebugEvent(probe.success ? "success" : (probe.degraded ? "warn" : "error"), "cloud.config", "Cloud configuration updated from dashboard", {
+        hasProjectId: Boolean(runtimeConfig.projectId),
+        hasDatabaseURL: Boolean(runtimeConfig.databaseURL),
+        hasStorageBucket: Boolean(runtimeConfig.storageBucket),
+        hasServiceAccountPath: Boolean(runtimeConfig.serviceAccountPath),
+        hasServiceAccountJson: Boolean(runtimeConfig.serviceAccountJson),
+        hasServiceAccountBase64: Boolean(runtimeConfig.serviceAccountBase64),
+        probe,
+      });
+
+      res.json({
+        success: true,
+        probe,
+      });
+    } catch (error: any) {
+      pushDebugEvent("error", "cloud.config", "Failed to update cloud configuration", {
+        error: error?.message || String(error),
+      });
+      res.status(500).json({ success: false, error: error?.message || "Failed to update cloud configuration" });
+    }
+  });
+
+  app.get("/api/cloud/status", async (_req, res) => {
+    const effective = await getEffectiveCloudConfig();
     res.json({
       enabled: cloudSyncEnabled(),
-      projectId: process.env.FIREBASE_PROJECT_ID || null,
-      databaseUrl: process.env.FIREBASE_DATABASE_URL || null,
-      storageBucket: process.env.FIREBASE_STORAGE_BUCKET || null,
+      projectId: effective.projectId || null,
+      databaseUrl: effective.databaseURL || null,
+      storageBucket: effective.storageBucket || null,
       hasServiceAccount: Boolean(
-        process.env.FIREBASE_SERVICE_ACCOUNT_JSON ||
-        process.env.FIREBASE_SERVICE_ACCOUNT_BASE64 ||
-        process.env.FIREBASE_SERVICE_ACCOUNT_PATH
+        effective.serviceAccountJson ||
+        effective.serviceAccountBase64 ||
+        effective.serviceAccountPath
       ),
+      source: effective.source,
+      lastDebugProbeAt: lastCloudHealthProbeAt,
+      lastDebugProbeSuccess: lastCloudHealthProbe?.success ?? null,
     });
   });
 
   app.post("/api/cloud/test", async (req, res) => {
     try {
-      if (!cloudSyncEnabled()) {
-        return res.json({ success: false, error: "Firebase is not configured. Set FIREBASE_PROJECT_ID and service account credentials." });
-      }
-      const testDoc = {
-        test: true,
-        timestamp: new Date().toISOString(),
-        source: "mouse-gcs-config-test",
-      };
-      await syncCloudDocument("_connection_tests", "latest", testDoc);
-
-      let rtdbOk = false;
-      try {
-        await publishCloudRealtime("_test", { ping: Date.now() });
-        rtdbOk = true;
-      } catch { rtdbOk = false; }
-
-      let storageOk = false;
-      try {
-        const result = await uploadCloudStorageObject(
-          "_test/connection-test.txt",
-          Buffer.from("MOUSE GCS connection test " + new Date().toISOString()),
-          "text/plain"
-        );
-        storageOk = result.ok;
-      } catch { storageOk = false; }
-
+      pushDebugEvent("info", "cloud.test", "Cloud connectivity test requested");
+      const probe = await runCloudHealthProbe();
+      lastCloudHealthProbe = probe;
+      lastCloudHealthProbeAt = probe.checkedAt;
+      pushDebugEvent(probe.success ? "success" : (probe.degraded ? "warn" : "error"), "cloud.test", "Cloud connectivity test completed", probe);
       res.json({
-        success: true,
-        firestore: true,
-        realtimeDatabase: rtdbOk,
-        storage: storageOk,
+        success: probe.success,
+        firestore: probe.firestore.ok,
+        realtimeDatabase: probe.realtimeDatabase.ok,
+        storage: probe.storage.ok,
         projectId: process.env.FIREBASE_PROJECT_ID,
+        error: probe.error,
+        probe,
       });
     } catch (error: any) {
+      pushDebugEvent("error", "cloud.test", "Cloud connectivity test failed", {
+        error: error?.message || "Firebase connection test failed",
+      });
       res.json({ success: false, error: error?.message || "Firebase connection test failed" });
     }
   });
@@ -5452,9 +5796,13 @@ export async function registerRoutes(
   app.post("/api/cloud/sync-all", async (req, res) => {
     try {
       if (!cloudSyncEnabled()) {
+        pushDebugEvent("warn", "cloud.sync_all", "Full cloud sync rejected: Firebase not configured");
         return res.json({ success: false, error: "Firebase is not configured" });
       }
       const session = requestSession(req);
+      pushDebugEvent("info", "cloud.sync_all", "Full cloud sync requested", {
+        actor: session?.name || session?.userId || "unknown",
+      });
       const synced: string[] = [];
       const fs = await import("fs");
       const dataDir = process.env.DATA_DIR || "./data";
@@ -5484,9 +5832,145 @@ export async function registerRoutes(
       await syncJsonFile("flight_logs.json", "flight_logs");
       synced.push("flight_logs");
 
-      res.json({ success: true, synced, syncedAt: new Date().toISOString() });
+      const syncedAt = new Date().toISOString();
+      pushDebugEvent("success", "cloud.sync_all", "Full cloud sync completed", {
+        synced,
+        syncedAt,
+      });
+      res.json({ success: true, synced, syncedAt });
     } catch (error: any) {
+      pushDebugEvent("error", "cloud.sync_all", "Full cloud sync failed", {
+        error: error?.message || "Full sync failed",
+      });
       res.json({ success: false, error: error?.message || "Full sync failed" });
+    }
+  });
+
+  app.get("/api/debug/events", (req, res) => {
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit || 200)));
+    const source = String(req.query.source || "").trim().toLowerCase();
+    const level = String(req.query.level || "").trim().toLowerCase();
+
+    const filtered = debugEvents.filter((event) => {
+      if (source && !event.source.toLowerCase().includes(source)) return false;
+      if (level && event.level.toLowerCase() !== level) return false;
+      return true;
+    });
+    const events = filtered.slice(-limit).reverse();
+    res.json({
+      success: true,
+      total: filtered.length,
+      returned: events.length,
+      events,
+    });
+  });
+
+  app.post("/api/debug/events/clear", (req, res) => {
+    const session = requestSession(req);
+    if (session && String(session.role || "").toLowerCase() !== "admin") {
+      return res.status(403).json({ success: false, error: "Admin permissions required to clear debug events" });
+    }
+    const cleared = debugEvents.length;
+    debugEvents.length = 0;
+    pushDebugEvent("warn", "debug.events", "Debug event history cleared", {
+      cleared,
+      actor: session?.name || session?.userId || "preview",
+    });
+    res.json({ success: true, cleared });
+  });
+
+  app.get("/api/debug/system", async (req, res) => {
+    try {
+      const forceProbe = ["1", "true", "yes"].includes(String(req.query.probe || "").toLowerCase());
+      const effective = await getEffectiveCloudConfig();
+      if (forceProbe || !lastCloudHealthProbe) {
+        const probe = await runCloudHealthProbe();
+        lastCloudHealthProbe = probe;
+        lastCloudHealthProbeAt = probe.checkedAt;
+        pushDebugEvent(probe.success ? "success" : (probe.degraded ? "warn" : "error"), "debug.system", "System debug probe completed", probe);
+      }
+
+      const levelCounts = debugEvents.reduce<Record<string, number>>((acc, evt) => {
+        acc[evt.level] = (acc[evt.level] || 0) + 1;
+        return acc;
+      }, {});
+      const commandSources = [
+        "mavlink.command",
+        "mavlink.vehicle_action",
+        "mavlink.swarm_action",
+        "mavlink.swarm_sync_action",
+      ];
+      const commandEvents = debugEvents.filter((evt) => commandSources.includes(evt.source));
+      const latestCommandEvent = commandEvents.length ? commandEvents[commandEvents.length - 1] : null;
+      const mem = process.memoryUsage();
+
+      res.json({
+        success: true,
+        now: new Date().toISOString(),
+        cloud: {
+          enabled: cloudSyncEnabled(),
+          projectId: effective.projectId || null,
+          databaseUrl: effective.databaseURL || null,
+          storageBucket: effective.storageBucket || null,
+          source: effective.source,
+          probe: lastCloudHealthProbe,
+          lastProbeAt: lastCloudHealthProbeAt,
+        },
+        runtime: {
+          uptimeSec: Math.round(process.uptime()),
+          pid: process.pid,
+          nodeVersion: process.version,
+          platform: `${process.platform}/${process.arch}`,
+          wsClients: clients.size,
+          activeUserSessions: activeSessions.size,
+          memory: {
+            rss: mem.rss,
+            heapTotal: mem.heapTotal,
+            heapUsed: mem.heapUsed,
+            external: mem.external,
+          },
+          services: {
+            serialPassthrough: serialPassthroughState,
+            rtkNtrip: rtkNtripState,
+            gpsInject: gpsInjectState,
+            firmware: firmwareState,
+            calibration: calibrationState,
+          },
+          api: {
+            lastError: lastApiError,
+            lastSlowRequest: lastSlowApi,
+          },
+        },
+        debug: {
+          totalEvents: debugEvents.length,
+          levelCounts,
+          latestEvent: debugEvents.length ? debugEvents[debugEvents.length - 1] : null,
+        },
+        commandDispatch: {
+          totalEvents: commandEvents.length,
+          lastEvent: latestCommandEvent,
+        },
+      });
+    } catch (error: any) {
+      pushDebugEvent("error", "debug.system", "System debug probe failed", {
+        error: error?.message || "System debug probe failed",
+      });
+      res.status(500).json({ success: false, error: error?.message || "System debug probe failed" });
+    }
+  });
+
+  app.post("/api/debug/system/probe", async (_req, res) => {
+    try {
+      const probe = await runCloudHealthProbe();
+      lastCloudHealthProbe = probe;
+      lastCloudHealthProbeAt = probe.checkedAt;
+      pushDebugEvent(probe.success ? "success" : (probe.degraded ? "warn" : "error"), "debug.system", "Manual system debug probe completed", probe);
+      res.json({ success: true, probe });
+    } catch (error: any) {
+      pushDebugEvent("error", "debug.system", "Manual system debug probe failed", {
+        error: error?.message || "System debug probe failed",
+      });
+      res.status(500).json({ success: false, error: error?.message || "System debug probe failed" });
     }
   });
 

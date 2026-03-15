@@ -1,21 +1,53 @@
 import admin from "firebase-admin";
 import fs from "node:fs";
+import path from "node:path";
 
 let warnedMissingConfig = false;
+const runtimeDataDir = process.env.DATA_DIR || "./data";
+const RUNTIME_CONFIG_PATH = path.resolve(runtimeDataDir, "cloud_runtime_config.json");
+
+type RuntimeCloudConfig = {
+  projectId?: string;
+  databaseURL?: string;
+  storageBucket?: string;
+  serviceAccountPath?: string;
+  serviceAccountJson?: string;
+  serviceAccountBase64?: string;
+};
+
+function readRuntimeCloudConfig(): RuntimeCloudConfig {
+  try {
+    if (!fs.existsSync(RUNTIME_CONFIG_PATH)) return {};
+    const raw = fs.readFileSync(RUNTIME_CONFIG_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function getConfigValue<K extends keyof RuntimeCloudConfig>(key: K, envKey: string): string | undefined {
+  const fromEnv = process.env[envKey];
+  if (fromEnv && String(fromEnv).trim().length > 0) return fromEnv;
+  const runtime = readRuntimeCloudConfig();
+  const v = runtime[key];
+  return typeof v === "string" && v.trim().length > 0 ? v : undefined;
+}
 
 function readServiceAccountFromEnv() {
-  const fromJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  const fromJson = getConfigValue("serviceAccountJson", "FIREBASE_SERVICE_ACCOUNT_JSON");
   if (fromJson) {
     return JSON.parse(fromJson);
   }
 
-  const fromBase64 = process.env.FIREBASE_SERVICE_ACCOUNT_BASE64;
+  const fromBase64 = getConfigValue("serviceAccountBase64", "FIREBASE_SERVICE_ACCOUNT_BASE64");
   if (fromBase64) {
     const decoded = Buffer.from(fromBase64, "base64").toString("utf8");
     return JSON.parse(decoded);
   }
 
-  const fromPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+  const fromPath = getConfigValue("serviceAccountPath", "FIREBASE_SERVICE_ACCOUNT_PATH");
   if (fromPath && fs.existsSync(fromPath)) {
     const raw = fs.readFileSync(fromPath, "utf8");
     return JSON.parse(raw);
@@ -30,9 +62,9 @@ function ensureFirebaseAdminApp() {
   }
 
   const serviceAccount = readServiceAccountFromEnv();
-  const projectId = process.env.FIREBASE_PROJECT_ID;
-  const databaseURL = process.env.FIREBASE_DATABASE_URL;
-  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET;
+  const projectId = getConfigValue("projectId", "FIREBASE_PROJECT_ID");
+  const databaseURL = getConfigValue("databaseURL", "FIREBASE_DATABASE_URL");
+  const storageBucket = getConfigValue("storageBucket", "FIREBASE_STORAGE_BUCKET");
 
   if (!serviceAccount || !projectId) {
     if (!warnedMissingConfig) {
@@ -70,4 +102,10 @@ export function getFirebaseAdminStorage() {
   const app = ensureFirebaseAdminApp();
   if (!app) return null;
   return admin.storage(app);
+}
+
+export async function resetFirebaseAdminApp() {
+  const apps = [...admin.apps].filter((a): a is admin.app.App => Boolean(a));
+  await Promise.all(apps.map((a) => a.delete().catch(() => {})));
+  warnedMissingConfig = false;
 }

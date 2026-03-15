@@ -275,10 +275,25 @@ function FirebaseCloudManager() {
     databaseUrl: string | null;
     storageBucket: string | null;
     hasServiceAccount: boolean;
+    source?: {
+      projectId?: string;
+      databaseURL?: string;
+      storageBucket?: string;
+      serviceAccount?: string;
+    };
   } | null>(null);
+  const [cloudConfig, setCloudConfig] = useState({
+    projectId: "",
+    databaseURL: "",
+    storageBucket: "",
+    serviceAccountPath: "",
+    serviceAccountJson: "",
+    serviceAccountBase64: "",
+  });
   const [loading, setLoading] = useState(true);
   const [testing, setTesting] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [savingConfig, setSavingConfig] = useState(false);
   const [testResult, setTestResult] = useState<{
     success: boolean;
     firestore?: boolean;
@@ -293,7 +308,7 @@ function FirebaseCloudManager() {
   const isAdmin = session?.user?.role === 'admin';
 
   useEffect(() => {
-    fetchCloudStatus();
+    void Promise.all([fetchCloudStatus(), fetchCloudConfig()]).finally(() => setLoading(false));
   }, []);
 
   const fetchCloudStatus = async () => {
@@ -301,9 +316,50 @@ function FirebaseCloudManager() {
       const res = await fetch('/api/cloud/status');
       const data = await res.json();
       setCloudStatus(data);
-    } catch {
+    } catch {}
+  };
+
+  const fetchCloudConfig = async () => {
+    try {
+      const res = await fetch('/api/cloud/config');
+      const data = await res.json();
+      if (res.ok && data?.success) {
+        setCloudConfig((prev) => ({
+          ...prev,
+          projectId: data.projectId || "",
+          databaseURL: data.databaseURL || "",
+          storageBucket: data.storageBucket || "",
+          serviceAccountPath: data.serviceAccountPath || "",
+        }));
+      }
+    } catch {}
+  };
+
+  const saveCloudConfig = async () => {
+    setSavingConfig(true);
+    try {
+      const res = await fetch('/api/cloud/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cloudConfig),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.error || "Failed to save cloud configuration");
+      }
+      toast.success('Cloud configuration saved');
+      setTestResult(data.probe ? {
+        success: Boolean(data.probe?.success),
+        firestore: Boolean(data.probe?.firestore?.ok),
+        realtimeDatabase: Boolean(data.probe?.realtimeDatabase?.ok),
+        storage: Boolean(data.probe?.storage?.ok),
+        error: data.probe?.error || undefined,
+      } : null);
+      await Promise.all([fetchCloudStatus(), fetchCloudConfig()]);
+    } catch (e: any) {
+      toast.error(e?.message || "Failed to save cloud configuration");
     } finally {
-      setLoading(false);
+      setSavingConfig(false);
     }
   };
 
@@ -371,6 +427,74 @@ function FirebaseCloudManager() {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        <div className="p-3 bg-muted/30 rounded-lg space-y-3">
+          <p className="text-sm font-medium">Cloud Configuration (editable from dashboard)</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Firebase Project ID</Label>
+              <Input
+                value={cloudConfig.projectId}
+                onChange={(e) => setCloudConfig((prev) => ({ ...prev, projectId: e.target.value }))}
+                placeholder="mouse-ee60c"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Realtime DB URL</Label>
+              <Input
+                value={cloudConfig.databaseURL}
+                onChange={(e) => setCloudConfig((prev) => ({ ...prev, databaseURL: e.target.value }))}
+                placeholder="https://...-default-rtdb.firebaseio.com"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Storage Bucket</Label>
+              <Input
+                value={cloudConfig.storageBucket}
+                onChange={(e) => setCloudConfig((prev) => ({ ...prev, storageBucket: e.target.value }))}
+                placeholder="mouse-ee60c.firebasestorage.app"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Service Account File Path</Label>
+              <Input
+                value={cloudConfig.serviceAccountPath}
+                onChange={(e) => setCloudConfig((prev) => ({ ...prev, serviceAccountPath: e.target.value }))}
+                placeholder="/abs/path/to/firebase-admin.json"
+              />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Service Account JSON (optional)</Label>
+            <textarea
+              className="w-full min-h-[92px] rounded-md border bg-background px-3 py-2 text-sm"
+              value={cloudConfig.serviceAccountJson}
+              onChange={(e) => setCloudConfig((prev) => ({ ...prev, serviceAccountJson: e.target.value }))}
+              placeholder='{"type":"service_account",...}'
+            />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Service Account Base64 (optional)</Label>
+            <Input
+              value={cloudConfig.serviceAccountBase64}
+              onChange={(e) => setCloudConfig((prev) => ({ ...prev, serviceAccountBase64: e.target.value }))}
+              placeholder="Base64 encoded service account JSON"
+            />
+          </div>
+          <div className="flex gap-2">
+            <Button onClick={saveCloudConfig} disabled={savingConfig}>
+              {savingConfig ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
+              Save Cloud Config
+            </Button>
+            <Button variant="outline" onClick={() => { void fetchCloudConfig(); }} disabled={savingConfig}>
+              <RefreshCw className="h-4 w-4 mr-1" />
+              Reload
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Config source: Project({cloudStatus?.source?.projectId || "unset"}), DB({cloudStatus?.source?.databaseURL || "unset"}), Bucket({cloudStatus?.source?.storageBucket || "unset"}), Service Account({cloudStatus?.source?.serviceAccount || "unset"})
+          </p>
+        </div>
+
         {cloudStatus?.enabled ? (
           <>
             <div className="p-3 bg-muted/30 rounded-lg space-y-2">
@@ -392,9 +516,15 @@ function FirebaseCloudManager() {
               )}
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Service Account</span>
-                <Badge variant="outline" className="text-emerald-500 border-emerald-500">
-                  <Check className="h-3 w-3 mr-1" /> Configured
-                </Badge>
+                {cloudStatus.hasServiceAccount ? (
+                  <Badge variant="outline" className="text-emerald-500 border-emerald-500">
+                    <Check className="h-3 w-3 mr-1" /> Configured
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-amber-500 border-amber-500">
+                    <AlertTriangle className="h-3 w-3 mr-1" /> Missing
+                  </Badge>
+                )}
               </div>
             </div>
 
@@ -510,7 +640,7 @@ function FirebaseCloudManager() {
           <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg space-y-3">
             <p className="text-sm font-medium">Firebase Cloud is not configured</p>
             <p className="text-sm text-muted-foreground">
-              To enable Firebase cloud sync and remote drone control, configure the following environment variables:
+              Save Firebase values in the Cloud Configuration block above, then run “Test Connection”.
             </p>
             <div className="text-sm space-y-2">
               <p className="font-medium">Required:</p>
@@ -536,6 +666,288 @@ function FirebaseCloudManager() {
             )}
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+type BackendDebugEvent = {
+  id: string;
+  timestamp: string;
+  level: "info" | "warn" | "error" | "success";
+  source: string;
+  message: string;
+  details?: any;
+};
+
+function FullDebugManager() {
+  const [status, setStatus] = useState<any>(null);
+  const [events, setEvents] = useState<BackendDebugEvent[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [probing, setProbing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState("all");
+  const [autoRefresh, setAutoRefresh] = useState(true);
+
+  const saved = localStorage.getItem('mouse_gcs_session');
+  const session = saved ? JSON.parse(saved) : null;
+  const isAdmin = session?.user?.role === 'admin';
+
+  const fetchStatus = async (forceProbe = false) => {
+    const probeQuery = forceProbe ? "?probe=1" : "";
+    const res = await fetch(`/api/debug/system${probeQuery}`);
+    const data = await res.json();
+    if (!res.ok || !data?.success) {
+      throw new Error(data?.error || "Failed to fetch debug system status");
+    }
+    setStatus(data);
+  };
+
+  const fetchEvents = async () => {
+    const params = new URLSearchParams({ limit: "250" });
+    if (sourceFilter !== "all") params.set("source", sourceFilter);
+    const res = await fetch(`/api/debug/events?${params.toString()}`);
+    const data = await res.json();
+    if (!res.ok || !data?.success) {
+      throw new Error(data?.error || "Failed to fetch debug events");
+    }
+    setEvents(Array.isArray(data.events) ? data.events : []);
+  };
+
+  const refreshAll = async (forceProbe = false) => {
+    setRefreshing(true);
+    try {
+      await Promise.all([fetchStatus(forceProbe), fetchEvents()]);
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to refresh debug console");
+    } finally {
+      setRefreshing(false);
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void refreshAll(true);
+  }, []);
+
+  useEffect(() => {
+    void fetchEvents().catch(() => {});
+  }, [sourceFilter]);
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const handle = window.setInterval(() => {
+      void refreshAll(false);
+    }, 8000);
+    return () => window.clearInterval(handle);
+  }, [autoRefresh, sourceFilter]);
+
+  const runProbe = async () => {
+    setProbing(true);
+    try {
+      const res = await fetch('/api/debug/system/probe', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data?.success) throw new Error(data?.error || "Debug probe failed");
+      toast.success('Debug probe completed');
+      await refreshAll(false);
+    } catch (error: any) {
+      toast.error(error?.message || 'Debug probe failed');
+    } finally {
+      setProbing(false);
+    }
+  };
+
+  const clearDebugEvents = async () => {
+    try {
+      const res = await fetch('/api/debug/events/clear', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || !data?.success) throw new Error(data?.error || "Failed to clear debug events");
+      toast.success(`Cleared ${data.cleared || 0} debug events`);
+      await refreshAll(false);
+    } catch (error: any) {
+      toast.error(error?.message || "Failed to clear debug events");
+    }
+  };
+
+  if (!isAdmin) return null;
+
+  if (loading) {
+    return (
+      <Card className="border-2 border-primary/50">
+        <CardContent className="py-6 text-center text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
+          Loading debug console...
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const probe = status?.cloud?.probe;
+  const probeHealthy = Boolean(probe?.success);
+  const commandLast = status?.commandDispatch?.lastEvent as BackendDebugEvent | null;
+  const levelCounts = status?.debug?.levelCounts || {};
+  const runtime = status?.runtime || {};
+  const services = runtime?.services || {};
+
+  return (
+    <Card className="border-2 border-primary/50">
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Terminal className="h-5 w-5" />
+              Full Debug Console
+            </CardTitle>
+            <CardDescription>Live command dispatch + database responsiveness diagnostics</CardDescription>
+          </div>
+          <Badge className={probeHealthy ? "bg-emerald-500" : "bg-red-500"}>
+            {probeHealthy ? "Healthy" : "Needs Attention"}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={() => refreshAll(false)} disabled={refreshing}>
+            {refreshing ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+            Refresh
+          </Button>
+          <Button size="sm" onClick={runProbe} disabled={probing}>
+            {probing ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Database className="h-4 w-4 mr-1" />}
+            Run DB Probe
+          </Button>
+          <Button variant="outline" size="sm" onClick={clearDebugEvents}>
+            <Trash2 className="h-4 w-4 mr-1" />
+            Clear Events
+          </Button>
+          <div className="flex items-center gap-2 ml-auto">
+            <Label className="text-xs text-muted-foreground">Auto Refresh</Label>
+            <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="p-3 rounded-lg bg-muted/30 space-y-1">
+            <p className="text-xs text-muted-foreground">Firestore</p>
+            <p className="text-sm font-medium flex items-center gap-1">
+              {probe?.firestore?.ok ? <CheckCircle className="h-4 w-4 text-emerald-500" /> : <AlertTriangle className="h-4 w-4 text-red-500" />}
+              {probe?.firestore?.ok ? "Connected" : "Error"}
+            </p>
+            <p className="text-xs text-muted-foreground">Latency: {probe?.firestore?.latencyMs ?? "-"} ms</p>
+          </div>
+          <div className="p-3 rounded-lg bg-muted/30 space-y-1">
+            <p className="text-xs text-muted-foreground">Realtime Database</p>
+            <p className="text-sm font-medium flex items-center gap-1">
+              {probe?.realtimeDatabase?.ok ? <CheckCircle className="h-4 w-4 text-emerald-500" /> : <AlertTriangle className="h-4 w-4 text-red-500" />}
+              {probe?.realtimeDatabase?.ok ? "Connected" : "Error"}
+            </p>
+            <p className="text-xs text-muted-foreground">Latency: {probe?.realtimeDatabase?.latencyMs ?? "-"} ms</p>
+          </div>
+          <div className="p-3 rounded-lg bg-muted/30 space-y-1">
+            <p className="text-xs text-muted-foreground">Cloud Storage</p>
+            <p className="text-sm font-medium flex items-center gap-1">
+              {probe?.storage?.ok ? <CheckCircle className="h-4 w-4 text-emerald-500" /> : <AlertTriangle className="h-4 w-4 text-red-500" />}
+              {probe?.storage?.ok ? "Connected" : "Error"}
+            </p>
+            <p className="text-xs text-muted-foreground">Latency: {probe?.storage?.latencyMs ?? "-"} ms</p>
+          </div>
+        </div>
+
+        <div className="p-3 rounded-lg bg-muted/30 space-y-2">
+          <p className="text-sm font-medium">Command Dispatch</p>
+          <p className="text-xs text-muted-foreground">
+            Total command events: {status?.commandDispatch?.totalEvents ?? 0}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Last event: {commandLast ? `${new Date(commandLast.timestamp).toLocaleString()} - ${commandLast.message}` : "No command events yet"}
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="p-3 rounded-lg bg-muted/30 space-y-1">
+            <p className="text-sm font-medium">App Runtime</p>
+            <p className="text-xs text-muted-foreground">Uptime: {runtime?.uptimeSec ?? 0}s</p>
+            <p className="text-xs text-muted-foreground">WebSocket Clients: {runtime?.wsClients ?? 0}</p>
+            <p className="text-xs text-muted-foreground">Active Sessions: {runtime?.activeUserSessions ?? 0}</p>
+            <p className="text-xs text-muted-foreground">
+              Heap: {runtime?.memory?.heapUsed ? Math.round(runtime.memory.heapUsed / 1024 / 1024) : 0}MB / {runtime?.memory?.heapTotal ? Math.round(runtime.memory.heapTotal / 1024 / 1024) : 0}MB
+            </p>
+          </div>
+          <div className="p-3 rounded-lg bg-muted/30 space-y-1">
+            <p className="text-sm font-medium">API Health</p>
+            <p className="text-xs text-muted-foreground">
+              Last API error: {runtime?.api?.lastError ? `${runtime.api.lastError.method} ${runtime.api.lastError.path} (${runtime.api.lastError.status})` : "None"}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Last slow API: {runtime?.api?.lastSlowRequest ? `${runtime.api.lastSlowRequest.method} ${runtime.api.lastSlowRequest.path} (${runtime.api.lastSlowRequest.durationMs}ms)` : "None"}
+            </p>
+          </div>
+        </div>
+
+        <div className="p-3 rounded-lg bg-muted/30 space-y-1">
+          <p className="text-sm font-medium">Subsystem Status</p>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs text-muted-foreground">
+            <span>Serial Passthrough: {services?.serialPassthrough?.running ? "Running" : "Stopped"}</span>
+            <span>RTK/NTRIP: {services?.rtkNtrip?.running ? "Running" : "Stopped"}</span>
+            <span>GPS Inject: {services?.gpsInject?.running ? "Running" : "Stopped"}</span>
+            <span>Firmware: {services?.firmware?.status || "unknown"}</span>
+            <span>Compass Cal: {services?.calibration?.compass?.status || "unknown"}</span>
+            <span>Radio Cal: {services?.calibration?.radio?.status || "unknown"}</span>
+          </div>
+        </div>
+
+        <div className="p-3 rounded-lg bg-muted/30 flex flex-wrap gap-3 text-xs">
+          <span>Total: {status?.debug?.totalEvents ?? 0}</span>
+          <span>Success: {levelCounts.success || 0}</span>
+          <span>Info: {levelCounts.info || 0}</span>
+          <span>Warn: {levelCounts.warn || 0}</span>
+          <span>Error: {levelCounts.error || 0}</span>
+          <span>Last probe: {status?.cloud?.lastProbeAt ? new Date(status.cloud.lastProbeAt).toLocaleString() : "N/A"}</span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Label className="text-sm">Filter Source</Label>
+          <Select value={sourceFilter} onValueChange={setSourceFilter}>
+            <SelectTrigger className="w-[240px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Sources</SelectItem>
+              <SelectItem value="mavlink">MAVLink</SelectItem>
+              <SelectItem value="cloud">Cloud</SelectItem>
+              <SelectItem value="api.runtime">API Runtime</SelectItem>
+              <SelectItem value="debug.system">System Probe</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <ScrollArea className="h-64 w-full rounded border bg-black/90 p-3 font-mono text-xs">
+          <div className="space-y-1">
+            {events.map((event) => (
+              <div
+                key={event.id}
+                className={`flex gap-2 ${
+                  event.level === "error"
+                    ? "text-red-400"
+                    : event.level === "warn"
+                      ? "text-amber-300"
+                      : event.level === "success"
+                        ? "text-emerald-400"
+                        : "text-cyan-300"
+                }`}
+              >
+                <span className="text-gray-500 shrink-0">{new Date(event.timestamp).toLocaleTimeString()}</span>
+                <span className="text-gray-400 shrink-0">[{event.level.toUpperCase()}]</span>
+                <span className="text-gray-500 shrink-0">{event.source}</span>
+                <span>{event.message}</span>
+              </div>
+            ))}
+            {events.length === 0 && (
+              <div className="text-gray-500 text-center py-8">
+                No debug events available for this filter.
+              </div>
+            )}
+          </div>
+        </ScrollArea>
       </CardContent>
     </Card>
   );
@@ -2067,6 +2479,7 @@ export function SettingsPanel() {
             </Card>
 
             <FirebaseCloudManager />
+            <FullDebugManager />
           </TabsContent>
 
           <TabsContent value="operations" className="space-y-4 mt-4">
