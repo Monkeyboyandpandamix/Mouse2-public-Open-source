@@ -28,6 +28,7 @@ import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
 import { reportApiError } from "@/lib/apiErrors";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useAppState } from "@/contexts/AppStateContext";
 import { Lock } from "lucide-react";
 import { MapContainer, TileLayer, Circle as LeafletCircle, Polygon, Marker, useMapEvents, useMap } from "react-leaflet";
 import L from "leaflet";
@@ -110,6 +111,7 @@ function MapCenterOnZone({ center }: { center?: { lat: number; lng: number } }) 
 
 export function GeofencingPanel() {
   const { hasPermission } = usePermissions();
+  const { selectedDrone } = useAppState();
   const canManageGeofences = hasPermission('manage_geofences');
   const [zones, setZones] = useState<GeofenceZone[]>(() => {
     const saved = localStorage.getItem('mouse_geofence_zones');
@@ -121,15 +123,7 @@ export function GeofencingPanel() {
   const [isSearching, setIsSearching] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
   const [fcSyncBusy, setFcSyncBusy] = useState(false);
-  const [fcConnectionString, setFcConnectionString] = useState(() => {
-    const saved = localStorage.getItem("mouse_selected_drone");
-    try {
-      const parsed = saved ? JSON.parse(saved) : null;
-      return parsed?.connectionString || "serial:/dev/ttyACM0:57600";
-    } catch {
-      return "serial:/dev/ttyACM0:57600";
-    }
-  });
+  const [fcConnectionString, setFcConnectionString] = useState("serial:/dev/ttyACM0:57600");
 
   const [newZone, setNewZone] = useState({
     name: "",
@@ -144,6 +138,11 @@ export function GeofencingPanel() {
   const [drawingPoints, setDrawingPoints] = useState<{ lat: number; lng: number }[]>([]);
   const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>({ lat: DEFAULT_LAT, lng: DEFAULT_LNG });
   const [mapStyle, setMapStyle] = useState<"standard" | "dark" | "satellite">("standard");
+
+  useEffect(() => {
+    const next = String(selectedDrone?.connectionString || "").trim();
+    if (next) setFcConnectionString(next);
+  }, [selectedDrone?.connectionString]);
 
   // Get user's actual GPS location on mount
   useEffect(() => {

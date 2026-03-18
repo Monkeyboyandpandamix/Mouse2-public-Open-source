@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useAppState } from "@/contexts/AppStateContext";
 import { reportApiError } from "@/lib/apiErrors";
 import { usePermissions } from "@/hooks/usePermissions";
 
@@ -37,6 +38,17 @@ interface AutomationScript {
   enabled: boolean;
   lastRun: string | null;
   code: string;
+}
+
+function isSupportedAutomationRecipe(code: string, trigger: AutomationScript["trigger"]): boolean {
+  const normalizedCode = String(code || "");
+  const normalizedTrigger = String(trigger || "").trim().toLowerCase();
+  if (/takeoff\s*\(\s*([0-9]+(?:\.[0-9]+)?)/i.test(normalizedCode)) return true;
+  if (/returnToBase|return to base|\brtl\b/i.test(normalizedCode)) return true;
+  if (/\bland\b/i.test(normalizedCode)) return true;
+  if (/\bdisarm\b/i.test(normalizedCode)) return true;
+  if (/\barm\b/i.test(normalizedCode)) return true;
+  return ["battery_low", "gps_lost", "disconnect", "landing", "takeoff"].includes(normalizedTrigger);
 }
 
 const defaultScripts: AutomationScript[] = [
@@ -82,6 +94,7 @@ if (!gps.hasSignal) {
 ];
 
 export function AutomationPanel() {
+  const { selectedDrone } = useAppState();
   const { hasPermission } = usePermissions();
   const canAutomate = hasPermission('automation_scripts');
   
@@ -106,18 +119,14 @@ export function AutomationPanel() {
   }, [scripts]);
 
   const executeScriptNow = async (script: AutomationScript, reason: string) => {
-    const selectedDroneRaw = localStorage.getItem("mouse_selected_drone");
-    let connectionString = "";
-    if (selectedDroneRaw) {
-      try {
-        connectionString = String(JSON.parse(selectedDroneRaw)?.connectionString || "").trim();
-      } catch {
-        connectionString = "";
-      }
+    const connectionString = String(selectedDrone?.connectionString || "").trim();
+    if (!isSupportedAutomationRecipe(script.code, script.trigger)) {
+      toast.error("This recipe cannot run yet. Only safe backend-supported actions like arm, disarm, takeoff, land, and RTL are executable.");
+      return;
     }
 
     try {
-      toast.info(`Running "${script.name}" (${reason})...`);
+      toast.info(`Running recipe "${script.name}" (${reason})...`);
       const response = await fetch("/api/automation/scripts/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -252,17 +261,14 @@ export function AutomationPanel() {
   const handleCreateNew = () => {
     const newScript: AutomationScript = {
       id: Date.now().toString(),
-      name: "New Script",
+      name: "New Recipe",
       description: "Enter description",
       trigger: "manual",
       enabled: false,
       lastRun: null,
-      code: `// Your automation script here
-// Available objects: drone, telemetry, camera, gimbal, gps, navigation, waypoint
-
-async function run() {
-  // Your code here
-}`
+      code: `// Supported backend actions only
+// Examples: arm, disarm, land, rtl, takeoff(20)
+rtl`
     };
     setScripts(prev => [...prev, newScript]);
     setSelectedScript(newScript);
@@ -273,6 +279,10 @@ async function run() {
 
   const handleSaveScript = () => {
     if (!editedScript) return;
+    if (!isSupportedAutomationRecipe(editedScript.code, editedScript.trigger)) {
+      toast.error("This panel stores local automation recipes, not arbitrary executable scripts. Save only backend-supported actions.");
+      return;
+    }
     setScripts(prev => prev.map(s => s.id === editedScript.id ? editedScript : s));
     setSelectedScript(editedScript);
     setIsEditing(false);
@@ -324,7 +334,7 @@ async function run() {
           <div className="flex items-center justify-between mb-2">
             <h3 className="font-bold text-lg flex items-center gap-2">
               <Code className="h-5 w-5 text-primary" />
-              Automation Scripts
+              Automation Recipes
             </h3>
             <Button size="sm" onClick={handleCreateNew} data-testid="button-new-script">
               <Plus className="h-4 w-4 mr-1" />
@@ -332,7 +342,7 @@ async function run() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Create custom automation scripts for mission events
+            Local event recipes that map to a small safe backend action set
           </p>
         </div>
 
@@ -493,7 +503,7 @@ async function run() {
               </div>
 
               <div className="space-y-2">
-                <Label>Script Code</Label>
+                <Label>Recipe Logic</Label>
                 <Textarea 
                   value={isEditing ? editedScript?.code : selectedScript.code}
                   onChange={(e) => setEditedScript(prev => prev ? { ...prev, code: e.target.value } : null)}
@@ -507,18 +517,13 @@ async function run() {
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm flex items-center gap-2">
                     <Zap className="h-4 w-4 text-primary" />
-                    Available APIs
+                    Supported Actions
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="text-xs text-muted-foreground space-y-1">
-                  <p><code className="text-primary">drone</code> - arm(), disarm(), takeoff(), land(), returnToBase()</p>
-                  <p><code className="text-primary">telemetry</code> - battery, altitude, speed, heading, position</p>
-                  <p><code className="text-primary">camera</code> - capture(), startRecording(), stopRecording(), feed</p>
-                  <p><code className="text-primary">gimbal</code> - setAngle(pitch), setPan(yaw), lock(), unlock()</p>
-                  <p><code className="text-primary">gps</code> - hasSignal, satellites, accuracy, position</p>
-                  <p><code className="text-primary">navigation</code> - enableDeadReckoning(), useVisualOdometry()</p>
-                  <p><code className="text-primary">notify(msg)</code> - Send notification to GCS</p>
-                  <p><code className="text-primary">log(msg)</code> - Log message to flight log</p>
+                  <p><code className="text-primary">arm</code>, <code className="text-primary">disarm</code>, <code className="text-primary">land</code>, <code className="text-primary">rtl</code>, and <code className="text-primary">takeoff(20)</code> are supported.</p>
+                  <p>Trigger-only recipes for <code className="text-primary">battery_low</code>, <code className="text-primary">gps_lost</code>, and <code className="text-primary">disconnect</code> currently map to safe RTL/landing actions on the backend.</p>
+                  <p>Camera, gimbal, GPS-denied navigation, and arbitrary JavaScript execution are not executed by the backend from this panel.</p>
                 </CardContent>
               </Card>
             </div>
@@ -527,8 +532,8 @@ async function run() {
           <div className="flex-1 flex items-center justify-center text-muted-foreground">
             <div className="text-center">
               <Code className="h-16 w-16 mx-auto mb-4 opacity-50" />
-              <p className="text-lg font-medium">Select a script to view</p>
-              <p className="text-sm">Or create a new automation script</p>
+              <p className="text-lg font-medium">Select a recipe to view</p>
+              <p className="text-sm">Or create a new local automation recipe</p>
             </div>
           </div>
         )}

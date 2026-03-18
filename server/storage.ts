@@ -532,6 +532,12 @@ export class FileStorage implements IStorage {
         id: generateId(),
         activeCamera: 'gimbal',
         trackingEnabled: false,
+        model: 'Skydroid C12',
+        resolution: '2K HD (2560x1440)',
+        thermalResolution: '384x288',
+        lens: '7mm',
+        streamUrl: '',
+        streamEnabled: false,
         recordingEnabled: false,
         updatedAt: new Date().toISOString(),
       };

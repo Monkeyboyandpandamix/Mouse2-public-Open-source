@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useAppState } from "@/contexts/AppStateContext";
 import { toast } from "sonner";
 import { Lock, Satellite, RefreshCw, Save, Trash2, RotateCw, Download, Upload } from "lucide-react";
 
@@ -20,16 +21,9 @@ interface RtkProfile {
 
 export function RtkNtripPanel() {
   const { hasPermission } = usePermissions();
+  const { selectedDrone } = useAppState();
   const canUse = hasPermission("system_settings") || hasPermission("run_terminal");
-  const [connectionString, setConnectionString] = useState(() => {
-    const saved = localStorage.getItem("mouse_selected_drone");
-    try {
-      const parsed = saved ? JSON.parse(saved) : null;
-      return parsed?.connectionString || "serial:/dev/ttyACM0:57600";
-    } catch {
-      return "serial:/dev/ttyACM0:57600";
-    }
-  });
+  const [connectionString, setConnectionString] = useState("serial:/dev/ttyACM0:57600");
   const [host, setHost] = useState("");
   const [port, setPort] = useState("2101");
   const [mountpoint, setMountpoint] = useState("");
@@ -42,6 +36,11 @@ export function RtkNtripPanel() {
   const [gpsInjectState, setGpsInjectState] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const importRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const next = String(selectedDrone?.connectionString || "").trim();
+    if (next) setConnectionString(next);
+  }, [selectedDrone?.connectionString]);
 
   const loadProfiles = async () => {
     const res = await fetch("/api/mavlink/rtk/profiles");

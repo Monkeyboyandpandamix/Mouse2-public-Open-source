@@ -107,7 +107,7 @@ export async function syncCloudDocument(
   } catch (err) {
     logCloudErr(err);
     const { enqueueCloudOp } = await import("./cloudRetryQueue");
-    await enqueueCloudOp({ type: "sync", collection, docId, payload, meta }).catch(() => {});
+    await enqueueCloudOp({ type: "sync", collection, docId, payload, meta }).catch(logCloudErr);
   }
 }
 
@@ -122,7 +122,7 @@ export async function appendCloudDocument(
   } catch (err) {
     logCloudErr(err);
     const { enqueueCloudOp } = await import("./cloudRetryQueue");
-    await enqueueCloudOp({ type: "append", collection, payload, meta }).catch(() => {});
+    await enqueueCloudOp({ type: "append", collection, payload, meta }).catch(logCloudErr);
   }
 }
 
@@ -133,7 +133,7 @@ export async function deleteCloudDocument(collection: string, docId: string) {
   } catch (err) {
     logCloudErr(err);
     const { enqueueCloudOp } = await import("./cloudRetryQueue");
-    await enqueueCloudOp({ type: "delete", collection, docId }).catch(() => {});
+    await enqueueCloudOp({ type: "delete", collection, docId }).catch(logCloudErr);
   }
 }
 

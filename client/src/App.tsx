@@ -4,9 +4,11 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TelemetryProvider } from "@/contexts/TelemetryContext";
+import { AppStateProvider } from "@/contexts/AppStateContext";
 import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
 import { Component, type ErrorInfo, type ReactNode, useEffect } from "react";
+import { clearStoredSelectedDrone, clearStoredSession } from "@/lib/clientState";
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -65,8 +67,8 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
               <button
                 className="px-3 py-2 rounded border border-border text-sm"
                 onClick={() => {
-                  localStorage.removeItem("mouse_gcs_session");
-                  localStorage.removeItem("mouse_selected_drone");
+                  clearStoredSession();
+                  clearStoredSelectedDrone();
                   window.location.reload();
                 }}
               >
@@ -120,14 +122,16 @@ function App() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <TelemetryProvider>
-          <AppErrorBoundary>
-            <Toaster />
-            <Router />
-          </AppErrorBoundary>
-        </TelemetryProvider>
-      </TooltipProvider>
+      <AppStateProvider>
+        <TooltipProvider>
+          <TelemetryProvider>
+            <AppErrorBoundary>
+              <Toaster />
+              <Router />
+            </AppErrorBoundary>
+          </TelemetryProvider>
+        </TooltipProvider>
+      </AppStateProvider>
     </QueryClientProvider>
   );
 }

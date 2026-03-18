@@ -51,6 +51,7 @@ import { useNoFlyZones } from "@/hooks/useNoFlyZones";
 import { NoFlyZoneOverlay } from "@/components/map/NoFlyZoneOverlay";
 import { NoFlyZoneLegend } from "@/components/map/NoFlyZoneLegend";
 import { reportApiError } from "@/lib/apiErrors";
+import { useAppState } from "@/contexts/AppStateContext";
 
 interface FlightSession {
   id: string;
@@ -139,6 +140,7 @@ const endMarkerIcon = new L.Icon({
 });
 
 export function FlightLogsPanel() {
+  const { selectedDrone } = useAppState();
   const { hasPermission } = usePermissions();
   const canDeleteRecords = hasPermission('delete_records');
   const canAccessFlightRecorder = hasPermission('access_flight_recorder');
@@ -152,15 +154,7 @@ export function FlightLogsPanel() {
   const [dataViewDialog, setDataViewDialog] = useState<DataViewType>(null);
   const [videoDialog, setVideoDialog] = useState(false);
   const [mapDialog, setMapDialog] = useState(false);
-  const [fcConnectionString, setFcConnectionString] = useState(() => {
-    const saved = localStorage.getItem("mouse_selected_drone");
-    try {
-      const parsed = saved ? JSON.parse(saved) : null;
-      return parsed?.connectionString || "serial:/dev/ttyACM0:57600";
-    } catch {
-      return "serial:/dev/ttyACM0:57600";
-    }
-  });
+  const [fcConnectionString, setFcConnectionString] = useState("serial:/dev/ttyACM0:57600");
   const [dataflashBusy, setDataflashBusy] = useState(false);
   const [dataflashLogs, setDataflashLogs] = useState<Array<{ id: number; size: number; timeUtc: number }>>([]);
   const [selectedDataflashFile, setSelectedDataflashFile] = useState<string | null>(null);
@@ -173,6 +167,11 @@ export function FlightLogsPanel() {
   const [geotagBusy, setGeotagBusy] = useState(false);
   const [geotagReport, setGeotagReport] = useState<any | null>(null);
   const noFlyZones = useNoFlyZones();
+
+  useEffect(() => {
+    const next = String(selectedDrone?.connectionString || "").trim();
+    if (next) setFcConnectionString(next);
+  }, [selectedDrone?.connectionString]);
 
   const { data: flightSessions = [], isLoading: sessionsLoading, refetch: refetchSessions } = useQuery<FlightSession[]>({
     queryKey: ['/api/flight-sessions'],

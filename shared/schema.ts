@@ -208,6 +208,12 @@ export const cameraSettingsSchema = z.object({
   trackingConfidence: z.number().nullable().optional(),
   gimbalPitch: z.number().nullable().optional(),
   gimbalYaw: z.number().nullable().optional(),
+  model: z.string().nullable().optional(),
+  resolution: z.string().nullable().optional(),
+  thermalResolution: z.string().nullable().optional(),
+  lens: z.string().nullable().optional(),
+  streamUrl: z.string().nullable().optional(),
+  streamEnabled: z.boolean().nullable().optional(),
   recordingEnabled: z.boolean().default(false),
   updatedAt: z.string(),
 });

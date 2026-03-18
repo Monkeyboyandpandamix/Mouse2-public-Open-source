@@ -2,6 +2,11 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
 import { getFirebaseApp, getFirebaseAnalyticsSafe } from "@/lib/firebase";
+import {
+  clearStoredSession,
+  readStoredSessionToken,
+  writeStoredSession,
+} from "@/lib/clientState";
 
 const SUPPRESSED_PATTERNS = [
   "_leaflet_pos",
@@ -57,7 +62,7 @@ window.addEventListener("unhandledrejection", (event) => {
 
 const originalFetch = window.fetch.bind(window);
 window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
-  const token = localStorage.getItem("mouse_gcs_session_token");
+  const token = readStoredSessionToken();
   const reqUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   // Only inject token for same-origin relative API paths to prevent token exfiltration
   const isApiRequest = reqUrl.startsWith("/api/") && !reqUrl.startsWith("http");
@@ -78,11 +83,9 @@ window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
 };
 
 async function hydrateSessionFromServer() {
-  const token = localStorage.getItem("mouse_gcs_session_token");
+  const token = readStoredSessionToken();
   if (!token) {
-    localStorage.removeItem("mouse_gcs_session");
-    window.dispatchEvent(new CustomEvent("session-change", { detail: { user: null, isLoggedIn: false } }));
-    window.dispatchEvent(new CustomEvent("session-updated", { detail: { user: null, isLoggedIn: false } }));
+    clearStoredSession();
     return;
   }
 
@@ -105,17 +108,13 @@ async function hydrateSessionFromServer() {
         fullName: data.user.fullName || data.user.username,
         role: data.user.role,
         enabled: data.user.enabled !== false,
+        permissions: Array.isArray(data.permissions) ? data.permissions : [],
       },
       isLoggedIn: true,
     };
-    localStorage.setItem("mouse_gcs_session", JSON.stringify(session));
-    window.dispatchEvent(new CustomEvent("session-change", { detail: session }));
-    window.dispatchEvent(new CustomEvent("session-updated", { detail: session }));
+    writeStoredSession(session);
   } catch {
-    localStorage.removeItem("mouse_gcs_session");
-    localStorage.removeItem("mouse_gcs_session_token");
-    window.dispatchEvent(new CustomEvent("session-change", { detail: { user: null, isLoggedIn: false } }));
-    window.dispatchEvent(new CustomEvent("session-updated", { detail: { user: null, isLoggedIn: false } }));
+    clearStoredSession();
   }
 }
 

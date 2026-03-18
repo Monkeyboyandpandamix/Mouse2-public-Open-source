@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useAppState } from "@/contexts/AppStateContext";
 import { toast } from "sonner";
 import { Lock, Save } from "lucide-react";
 
@@ -45,16 +46,9 @@ const VEHICLE_ACTION_MODES: Record<string, string[]> = {
 
 export function VehicleSetupPanel() {
   const { hasPermission } = usePermissions();
+  const { selectedDrone } = useAppState();
   const canUse = hasPermission("system_settings") || hasPermission("run_terminal");
-  const [connectionString, setConnectionString] = useState(() => {
-    const saved = localStorage.getItem("mouse_selected_drone");
-    try {
-      const parsed = saved ? JSON.parse(saved) : null;
-      return parsed?.connectionString || "serial:/dev/ttyACM0:57600";
-    } catch {
-      return "serial:/dev/ttyACM0:57600";
-    }
-  });
+  const [connectionString, setConnectionString] = useState("serial:/dev/ttyACM0:57600");
   const [vehicleType, setVehicleType] = useState<"rover" | "plane" | "sub">("rover");
   const [airframeProfile, setAirframeProfile] = useState("quad_x");
   const [airframeProfiles, setAirframeProfiles] = useState<Record<string, any>>({});
@@ -63,6 +57,11 @@ export function VehicleSetupPanel() {
   const [reconfigureProfiles, setReconfigureProfiles] = useState("dronecan_core");
   const [busy, setBusy] = useState(false);
   const [rawPatch, setRawPatch] = useState('[\n  { "name": "PARAM_NAME", "value": 1 }\n]');
+
+  useEffect(() => {
+    const next = String(selectedDrone?.connectionString || "").trim();
+    if (next) setConnectionString(next);
+  }, [selectedDrone?.connectionString]);
 
   const presets = useMemo(() => VEHICLE_PRESETS[vehicleType], [vehicleType]);
   const modeHints = useMemo(() => VEHICLE_ACTION_MODES[vehicleType], [vehicleType]);

@@ -10,7 +10,7 @@ import { Volume2, Mic, Play, Square, MessageSquare, Plus, Trash2, Check, Radio, 
 import { useState, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
-import { useDeviceContext, type DeviceEnvironment } from "@/hooks/useDeviceContext";
+import { useAppState } from "@/contexts/AppStateContext";
 
 type AudioDevice = 'gpio' | 'usb' | 'buzzer';
 
@@ -51,12 +51,15 @@ interface AudioStatusResponse {
   };
 }
 
-export function SpeakerPanel() {
+interface SpeakerPanelProps {
+  isControllerMode: boolean;
+  micRoutedToDrone: boolean;
+}
+
+export function SpeakerPanel({ isControllerMode, micRoutedToDrone }: SpeakerPanelProps) {
+  const { selectedDrone } = useAppState();
   const { hasPermission } = usePermissions();
   const canBroadcast = hasPermission('broadcast_audio');
-  const deviceCtx = useDeviceContext();
-  const isControllerMode = deviceCtx.isController;
-  const micRoutedToDrone = isControllerMode && deviceCtx.peripherals.microphone === "drone_speaker";
   const [isRecording, setIsRecording] = useState(false);
   const [isBroadcasting, setIsBroadcasting] = useState(false);
   const [isPreviewing, setIsPreviewing] = useState(false);
@@ -106,14 +109,7 @@ export function SpeakerPanel() {
   };
 
   const getSelectedDroneId = (): string | null => {
-    try {
-      const raw = localStorage.getItem("mouse_selected_drone");
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      return typeof parsed?.id === "string" ? parsed.id : null;
-    } catch {
-      return null;
-    }
+    return typeof selectedDrone?.id === "string" ? selectedDrone.id : null;
   };
 
   const loadAudioStatus = async () => {

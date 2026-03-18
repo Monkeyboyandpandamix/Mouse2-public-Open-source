@@ -30,6 +30,7 @@ import {
   getUsbGpsPortOptions,
   getUsbRadioPortOptions,
 } from "@/lib/platform";
+import { readStoredSelectedDrone, readStoredSession, writeStoredSelectedDrone } from "@/lib/clientState";
 
 interface FirmwareCatalogEntry {
   id: string;
@@ -55,8 +56,7 @@ function GoogleAccountManager() {
   const [signingIn, setSigningIn] = useState(false);
 
   // Check if current user is admin
-  const saved = localStorage.getItem('mouse_gcs_session');
-  const session = saved ? JSON.parse(saved) : null;
+  const session = readStoredSession();
   const isAdmin = session?.user?.role === 'admin';
 
   useEffect(() => {
@@ -304,8 +304,7 @@ function FirebaseCloudManager() {
   } | null>(null);
   const [syncResult, setSyncResult] = useState<{ success: boolean; synced?: string[]; syncedAt?: string; error?: string } | null>(null);
 
-  const saved = localStorage.getItem('mouse_gcs_session');
-  const session = saved ? JSON.parse(saved) : null;
+  const session = readStoredSession();
   const isAdmin = session?.user?.role === 'admin';
 
   useEffect(() => {
@@ -690,8 +689,7 @@ function FullDebugManager() {
   const [sourceFilter, setSourceFilter] = useState("all");
   const [autoRefresh, setAutoRefresh] = useState(true);
 
-  const saved = localStorage.getItem('mouse_gcs_session');
-  const session = saved ? JSON.parse(saved) : null;
+  const session = readStoredSession();
   const isAdmin = session?.user?.role === 'admin';
 
   const fetchStatus = async (forceProbe = false) => {
@@ -1310,17 +1308,11 @@ export function SettingsPanel() {
     localStorage.setItem('mouse_motor_count', hardwareConfig.motorCount);
     localStorage.setItem('mouse_airframe_profile', hardwareConfig.airframe);
     window.dispatchEvent(new CustomEvent('motor-count-changed', { detail: parseInt(hardwareConfig.motorCount) }));
-    const selectedDroneRaw = localStorage.getItem("mouse_selected_drone");
-    if (selectedDroneRaw) {
-      try {
-        const selectedDrone = JSON.parse(selectedDroneRaw);
-        selectedDrone.motorCount = parseInt(hardwareConfig.motorCount);
-        selectedDrone.model = hardwareConfig.airframe;
-        localStorage.setItem("mouse_selected_drone", JSON.stringify(selectedDrone));
-        window.dispatchEvent(new CustomEvent("drone-selected", { detail: selectedDrone }));
-      } catch {
-        // ignore parse errors
-      }
+    const selectedDrone = readStoredSelectedDrone<any>();
+    if (selectedDrone) {
+      selectedDrone.motorCount = parseInt(hardwareConfig.motorCount);
+      selectedDrone.model = hardwareConfig.airframe;
+      writeStoredSelectedDrone(selectedDrone);
     }
     setEditingHardware(false);
     toast.success("Hardware configuration saved");

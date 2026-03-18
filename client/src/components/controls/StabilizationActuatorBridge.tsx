@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useAppState } from "@/contexts/AppStateContext";
 
 interface StabilizerCorrections {
   roll?: number;
@@ -23,18 +24,8 @@ interface ProposalRecord {
 const SEND_INTERVAL_MS = 220;
 const PROPOSAL_STALE_MS = 1400;
 
-function getConnectionString(): string {
-  try {
-    const raw = localStorage.getItem("mouse_selected_drone");
-    if (!raw) return "";
-    const parsed = JSON.parse(raw);
-    return String(parsed?.connectionString || "").trim();
-  } catch {
-    return "";
-  }
-}
-
 export function StabilizationActuatorBridge() {
+  const { selectedDrone } = useAppState();
   const proposalsRef = useRef<Map<string, ProposalRecord>>(new Map());
   const inFlightRef = useRef(false);
 
@@ -80,7 +71,7 @@ export function StabilizationActuatorBridge() {
       const proposal = pickProposal();
       if (!proposal) return;
 
-      const connectionString = getConnectionString();
+      const connectionString = String(selectedDrone?.connectionString || "").trim();
       if (!connectionString) return;
 
       inFlightRef.current = true;
@@ -128,7 +119,7 @@ export function StabilizationActuatorBridge() {
     }, SEND_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
-  }, []);
+  }, [selectedDrone?.connectionString]);
 
   return null;
 }

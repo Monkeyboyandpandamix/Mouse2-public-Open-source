@@ -2,7 +2,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +20,7 @@ import { segmentIntersectsNoFlyZones } from "@/lib/noFlyZones";
 import type { NoFlyZone } from "@/lib/noFlyZones";
 import { missionsApi, waypointsApi } from "@/lib/api";
 import { reportApiError } from "@/lib/apiErrors";
+import { useAppState } from "@/contexts/AppStateContext";
 
 interface Mission {
   id: string;
@@ -71,10 +71,10 @@ const WAYPOINT_ACTIONS = [
 ];
 
 export function MissionPlanningPanel() {
+  const { selectedDrone } = useAppState();
   const { hasPermission } = usePermissions();
   const canPlanMissions = hasPermission('mission_planning');
   const canDeleteData = hasPermission('delete_flight_data');
-  const canEmergencyOverride = hasPermission('emergency_override');
   
   const queryClient = useQueryClient();
   const [selectedMission, setSelectedMission] = useState<string | null>(null);
@@ -165,19 +165,15 @@ export function MissionPlanningPanel() {
   const [isExecuting, setIsExecuting] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
-  const [fcConnectionString, setFcConnectionString] = useState(() => {
-    const saved = localStorage.getItem("mouse_selected_drone");
-    try {
-      const parsed = saved ? JSON.parse(saved) : null;
-      return parsed?.connectionString || "serial:/dev/ttyACM0:57600";
-    } catch {
-      return "serial:/dev/ttyACM0:57600";
-    }
-  });
+  const [fcConnectionString, setFcConnectionString] = useState("serial:/dev/ttyACM0:57600");
   const [overrideNoFlyRestrictions, setOverrideNoFlyRestrictions] = useState(false);
-  const [overrideReason, setOverrideReason] = useState("");
   const [partTimeRestrictedZones, setPartTimeRestrictedZones] = useState<NoFlyZone[]>([]);
   const noFlyZones = useNoFlyZones();
+
+  useEffect(() => {
+    const next = String(selectedDrone?.connectionString || "").trim();
+    if (next) setFcConnectionString(next);
+  }, [selectedDrone?.connectionString]);
 
   useEffect(() => {
     let active = true;
@@ -910,17 +906,11 @@ export function MissionPlanningPanel() {
 
     setIsExecuting(true);
     try {
-      if (overrideNoFlyRestrictions && overrideReason.trim().length < 10) {
-        toast.error("Please provide an override reason (min 10 characters) for audit when bypassing no-fly zones");
-        return;
-      }
       const data = await missionsApi.execute(selectedMissionData.id, {
         connectionString: fcConnectionString,
         armBeforeStart: false,
         routePolicy: {
           overrideNoFlyRestrictions,
-          overrideReason: overrideReason.trim(),
-          partTimeRestrictionsActive: partTimeRestrictedZones.length > 0,
         },
       });
       if (!data?.success || !data?.run?.id) {
@@ -963,7 +953,11 @@ export function MissionPlanningPanel() {
           pollFailures += 1;
           if (pollFailures >= 3) {
             toast.error("Mission status polling failed repeatedly");
-            pollFailures = 0;
+          }
+          if (pollFailures >= 6) {
+            setIsExecuting(false);
+            setActiveRunId(null);
+            toast.error("Mission monitoring lost after repeated failures. Check mission state and reconnect.");
           }
           return;
         }
@@ -984,7 +978,11 @@ export function MissionPlanningPanel() {
         pollFailures += 1;
         if (pollFailures >= 3) {
           toast.error("Mission status polling failed repeatedly");
-          pollFailures = 0;
+        }
+        if (pollFailures >= 6) {
+          setIsExecuting(false);
+          setActiveRunId(null);
+          toast.error("Mission monitoring lost after repeated failures. Check mission state and reconnect.");
         }
       }
     }, 2000);
@@ -1398,13 +1396,10 @@ export function MissionPlanningPanel() {
                       <Switch
                         checked={overrideNoFlyRestrictions}
                         onCheckedChange={setOverrideNoFlyRestrictions}
-                        disabled={!canEmergencyOverride}
                       />
                     </div>
                     <p className="text-[10px] text-muted-foreground">
-                      {canEmergencyOverride
-                        ? "Destination planning blocks restricted/no-fly routes by default. Enable override to allow direct routing through restricted airspace (requires reason for audit)."
-                        : "Emergency override requires emergency_override permission (e.g. emergency services operator)."}
+                      Destination planning blocks restricted/no-fly routes by default. Enable override to allow direct routing through restricted airspace.
                     </p>
                     {partTimeRestrictedZones.length > 0 && (
                       <Badge variant="secondary" className="text-[10px]">
@@ -1412,21 +1407,9 @@ export function MissionPlanningPanel() {
                       </Badge>
                     )}
                     {overrideNoFlyRestrictions && (
-                      <>
-                        <Badge variant="destructive" className="text-[10px]">
-                          Override active: route may pass through no-fly zones
-                        </Badge>
-                        <div className="space-y-1">
-                          <Label className="text-xs">Override Reason (required for audit)</Label>
-                          <Textarea
-                            placeholder="e.g. Emergency response flight – incident #12345"
-                            value={overrideReason}
-                            onChange={(e) => setOverrideReason(e.target.value)}
-                            className="min-h-[60px] text-xs"
-                            maxLength={500}
-                          />
-                        </div>
-                      </>
+                      <Badge variant="destructive" className="text-[10px]">
+                        Override active: route may pass through no-fly zones
+                      </Badge>
                     )}
                   </div>
 

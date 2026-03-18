@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, type MouseEvent } from "react";
 import { cn } from "@/lib/utils";
+import { logWarn } from "@/lib/logErr";
 import { Maximize2, Minimize2, Eye, EyeOff, Flame, ZoomIn, ZoomOut, RotateCcw, Camera, Video, Laptop, Settings2, Crosshair, Move, Upload, Check, Loader2, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Target } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,6 +8,7 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useAppState } from "@/contexts/AppStateContext";
 import * as tf from "@tensorflow/tfjs";
 import * as cocoSsd from "@tensorflow-models/coco-ssd";
 import { ARHudOverlay } from "./ARHudOverlay";
@@ -98,6 +100,7 @@ const defaultCameraConfig: CameraConfig = {
 };
 
 export function VideoFeed() {
+  const { selectedDrone } = useAppState();
   const [isMain, setIsMain] = useState(false);
   const [visible, setVisible] = useState(true);
   const [activeCam, setActiveCam] = useState<'gimbal' | 'thermal' | 'fpv' | 'webcam' | 'stream'>('gimbal');
@@ -115,10 +118,7 @@ export function VideoFeed() {
   const [isDetecting, setIsDetecting] = useState(false);
   const [detectedObjects, setDetectedObjects] = useState<DetectedObject[]>([]);
   const [videoDimensions, setVideoDimensions] = useState({ width: 640, height: 480 });
-  const [cameraConfig, setCameraConfig] = useState<CameraConfig>(() => {
-    const saved = localStorage.getItem('mouse_camera_config');
-    return saved ? JSON.parse(saved) : defaultCameraConfig;
-  });
+  const [cameraConfig, setCameraConfig] = useState<CameraConfig>(defaultCameraConfig);
   const [showConfigDialog, setShowConfigDialog] = useState(false);
   const [streamUrl, setStreamUrl] = useState(cameraConfig.streamUrl);
   const [gimbalPitch, setGimbalPitch] = useState(-45);
@@ -160,6 +160,7 @@ export function VideoFeed() {
   const mlModelRef = useRef<cocoSsd.ObjectDetection | null>(null);
   const [mlModelLoaded, setMlModelLoaded] = useState(false);
   const [mlModelLoading, setMlModelLoading] = useState(false);
+  const cameraSettingsHydratedRef = useRef(false);
 
   const loadMlModel = useCallback(async () => {
     if (mlModelRef.current || mlModelLoading) return;
@@ -180,8 +181,63 @@ export function VideoFeed() {
   }, [mlModelLoading]);
   
   useEffect(() => {
-    localStorage.setItem('mouse_camera_config', JSON.stringify(cameraConfig));
-  }, [cameraConfig]);
+    let cancelled = false;
+    const loadCameraSettings = async () => {
+      try {
+        const response = await fetch("/api/camera-settings");
+        if (!response.ok) return;
+        const data = await response.json().catch(() => null);
+        if (!data || cancelled) return;
+        setCameraConfig({
+          model: String(data.model || defaultCameraConfig.model),
+          resolution: String(data.resolution || defaultCameraConfig.resolution),
+          thermalResolution: String(data.thermalResolution || defaultCameraConfig.thermalResolution),
+          lens: String(data.lens || defaultCameraConfig.lens),
+          streamUrl: String(data.streamUrl || ""),
+          streamEnabled: Boolean(data.streamEnabled),
+        });
+        if (["gimbal", "thermal", "fpv", "webcam", "stream"].includes(String(data.activeCamera || ""))) {
+          setActiveCam(data.activeCamera);
+        }
+        setStreamUrl(String(data.streamUrl || ""));
+        if (typeof data.gimbalPitch === "number") setGimbalPitch(data.gimbalPitch);
+        if (typeof data.gimbalYaw === "number") setGimbalYaw(data.gimbalYaw);
+      } catch (error) {
+        console.warn("[VideoFeed] failed to load camera settings:", error);
+      } finally {
+        cameraSettingsHydratedRef.current = true;
+      }
+    };
+    void loadCameraSettings();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!cameraSettingsHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      void fetch("/api/camera-settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          activeCamera: activeCam,
+          gimbalPitch,
+          gimbalYaw,
+          recordingEnabled: isRecording,
+          model: cameraConfig.model,
+          resolution: cameraConfig.resolution,
+          thermalResolution: cameraConfig.thermalResolution,
+          lens: cameraConfig.lens,
+          streamUrl: cameraConfig.streamUrl,
+          streamEnabled: cameraConfig.streamEnabled,
+        }),
+      }).catch((error) => {
+        console.warn("[VideoFeed] failed to save camera settings:", error);
+      });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [activeCam, gimbalPitch, gimbalYaw, isRecording, cameraConfig]);
 
   useEffect(() => {
     localStorage.setItem('mouse_camera_position', JSON.stringify(position));
@@ -1104,14 +1160,8 @@ export function VideoFeed() {
   };
 
   const getActiveConnectionString = useCallback(() => {
-    const selectedDroneRaw = localStorage.getItem("mouse_selected_drone");
-    if (!selectedDroneRaw) return "";
-    try {
-      return String(JSON.parse(selectedDroneRaw)?.connectionString || "").trim();
-    } catch {
-      return "";
-    }
-  }, []);
+    return String(selectedDrone?.connectionString || "").trim();
+  }, [selectedDrone?.connectionString]);
 
   const sendGimbalCommand = useCallback(async (
     pitch: number,

@@ -1,4 +1,6 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback } from "react";
+import { useAppState } from "@/contexts/AppStateContext";
+import { ROLE_PERMISSIONS } from "@shared/permissions";
 
 interface RolePermissions {
   [role: string]: string[];
@@ -17,78 +19,17 @@ interface Session {
   isLoggedIn: boolean;
 }
 
-const defaultRolePermissions: RolePermissions = {
-  admin: [
-    "arm_disarm", "flight_control", "mission_planning", "camera_control",
-    "view_telemetry", "view_map", "view_camera", "user_management",
-    "system_settings", "delete_records", "delete_flight_data",
-    "automation_scripts", "emergency_override", "object_tracking", "broadcast_audio",
-    "manage_geofences", "access_flight_recorder", "run_terminal", "configure_gui_advanced"
-  ],
-  operator: [
-    "arm_disarm", "flight_control", "mission_planning", "camera_control",
-    "view_telemetry", "view_map", "view_camera", "automation_scripts",
-    "object_tracking", "broadcast_audio", "manage_geofences", "access_flight_recorder",
-    "system_settings", "run_terminal", "configure_gui_advanced"
-  ],
-  viewer: ["view_telemetry", "view_map", "view_camera"]
-};
-
 export function usePermissions() {
-  const [session, setSession] = useState<Session>(() => {
-    const saved = localStorage.getItem('mouse_gcs_session');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        return { user: null, isLoggedIn: false };
-      }
-    }
-    return { user: null, isLoggedIn: false };
-  });
+  const { session } = useAppState();
 
-  const rolePermissions: RolePermissions = defaultRolePermissions;
-
-  useEffect(() => {
-    const handleSessionChange = (e: CustomEvent<Session>) => {
-      setSession(e.detail);
-    };
-
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'mouse_gcs_session' && e.newValue) {
-        try {
-          setSession(JSON.parse(e.newValue));
-        } catch {}
-      }
-    };
-
-    const handleLocalSessionChange = () => {
-      const saved = localStorage.getItem('mouse_gcs_session');
-      if (saved) {
-        try {
-          setSession(JSON.parse(saved));
-        } catch {}
-      }
-    };
-
-    window.addEventListener('session-change', handleSessionChange as EventListener);
-    window.addEventListener('storage', handleStorageChange);
-    window.addEventListener('session-updated', handleLocalSessionChange);
-    
-    return () => {
-      window.removeEventListener('session-change', handleSessionChange as EventListener);
-      window.removeEventListener('storage', handleStorageChange);
-      window.removeEventListener('session-updated', handleLocalSessionChange);
-    };
-  }, []);
+  const rolePermissions: RolePermissions = ROLE_PERMISSIONS;
 
   const hasPermission = useCallback((permissionId: string): boolean => {
     if (!session.isLoggedIn || !session.user) {
       return false;
     }
 
-    const userRole = session.user.role;
-    const permissions = rolePermissions[userRole] || [];
+    const permissions = session.user.permissions || rolePermissions[session.user.role] || [];
     
     return permissions.includes(permissionId);
   }, [session, rolePermissions]);
@@ -125,7 +66,7 @@ export function usePermissions() {
 
   const getUserPermissions = useCallback((): string[] => {
     if (!session.user) return [];
-    return rolePermissions[session.user.role] || [];
+    return session.user.permissions || rolePermissions[session.user.role] || [];
   }, [session, rolePermissions]);
 
   return {

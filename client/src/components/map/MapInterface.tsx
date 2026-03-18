@@ -22,6 +22,7 @@ import { RegulatoryGeoJsonOverlay } from "@/components/map/RegulatoryGeoJsonOver
 import { useNoFlyZones } from "@/hooks/useNoFlyZones";
 import { missionsApi, waypointsApi, dronesApi } from "@/lib/api";
 import { useTelemetry } from "@/contexts/TelemetryContext";
+import { useAppState } from "@/contexts/AppStateContext";
 
 interface Waypoint {
   id: number;
@@ -294,6 +295,7 @@ function MapCenterPersist() {
 }
 
 export function MapInterface() {
+  const { selectedDrone } = useAppState();
   const [currentLocation, setCurrentLocation] = useState<[number, number]>([DEFAULT_LAT, DEFAULT_LNG]);
   const noFlyZones = useNoFlyZones();
   
@@ -382,28 +384,7 @@ export function MapInterface() {
     refetchInterval: 3000, // Refresh every 3 seconds for real-time positions
   });
 
-  // Get selected drone from localStorage
-  const [selectedDroneId, setSelectedDroneId] = useState<string | null>(() => {
-    const saved = localStorage.getItem('mouse_selected_drone');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        return parsed.id ? String(parsed.id) : null;
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  });
-
-  // Listen for drone selection changes
-  useEffect(() => {
-    const handleDroneChange = (e: CustomEvent<Drone>) => {
-      setSelectedDroneId(e.detail?.id ? String(e.detail.id) : null);
-    };
-    window.addEventListener('drone-selected' as any, handleDroneChange);
-    return () => window.removeEventListener('drone-selected' as any, handleDroneChange);
-  }, []);
+  const selectedDroneId = selectedDrone?.id ? String(selectedDrone.id) : null;
 
   // Use live telemetry position for selected drone when available.
   const telemetry = useTelemetry();
@@ -546,14 +527,14 @@ export function MapInterface() {
   }, [adsbDragging, adsbDragOffset]);
 
   // Get selected drone's GPS position for centering
-  const selectedDrone = selectedDroneId ? allDrones.find(d => d.id === selectedDroneId) : null;
+  const selectedDroneRecord = selectedDroneId ? allDrones.find(d => d.id === selectedDroneId) : null;
   const selectedDronePosition: [number, number] | null = 
     gpsDeniedNav.active && gpsDeniedNav.estimatedPosition
       ? [gpsDeniedNav.estimatedPosition.lat, gpsDeniedNav.estimatedPosition.lng]
       : liveTelemetryPosition
       ? liveTelemetryPosition
-      : selectedDrone?.latitude && selectedDrone?.longitude 
-      ? [selectedDrone.latitude, selectedDrone.longitude] 
+      : selectedDroneRecord?.latitude && selectedDroneRecord?.longitude 
+      ? [selectedDroneRecord.latitude, selectedDroneRecord.longitude] 
       : null;
 
   useEffect(() => {

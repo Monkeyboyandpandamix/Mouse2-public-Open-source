@@ -38,6 +38,9 @@ import { toast } from "sonner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Drone, UserMessage, MessageRecipient, UserGroup } from "@shared/schema";
 import { dispatchBackendCommand } from "@/lib/commandService";
+import { useAppState } from "@/contexts/AppStateContext";
+import { clearStoredSession, readStoredSessionToken, writeStoredSelectedDrone } from "@/lib/clientState";
+import { queryClient } from "@/lib/queryClient";
 
 interface UserSession {
   user: { id: string; username: string; role: string } | null;
@@ -70,20 +73,11 @@ interface SystemDiagnostics {
 }
 
 export function TopBar({ onSettingsClick }: TopBarProps) {
+  const { session, selectedDrone, clearSession, selectDrone } = useAppState();
   const [time, setTime] = useState(new Date());
   const [manualOverride, setManualOverride] = useState(false);
   const [manualReady, setManualReady] = useState(true);
   const [emergencyBusy, setEmergencyBusy] = useState(false);
-  const [session, setSession] = useState<UserSession>(() => {
-    const saved = localStorage.getItem('mouse_gcs_session');
-    return saved ? JSON.parse(saved) : { user: null, isLoggedIn: false };
-  });
-  
-  // Selected drone state
-  const [selectedDrone, setSelectedDrone] = useState<Drone | null>(() => {
-    const saved = localStorage.getItem('mouse_selected_drone');
-    return saved ? JSON.parse(saved) : null;
-  });
 
   // Messaging state
   const [messages, setMessages] = useState<UserMessage[]>(() => {
@@ -211,7 +205,7 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
       const ws = currentWs;
 
       ws.onopen = () => {
-        const sessionToken = localStorage.getItem('mouse_gcs_session_token');
+        const sessionToken = readStoredSessionToken();
         if (sessionToken) {
           ws.send(JSON.stringify({ type: 'auth', sessionToken }));
         }
@@ -262,6 +256,25 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
             window.dispatchEvent(new CustomEvent('audio-tts-broadcast', { detail: data }));
           } else if (type === 'audio_buzzer') {
             window.dispatchEvent(new CustomEvent('audio-buzzer-played', { detail: data }));
+          } else if (type === 'drone_added' || type === 'drone_updated') {
+            void queryClient.invalidateQueries({ queryKey: ["/api/drones"] });
+            if (selectedDrone?.id && String(data?.id) === String(selectedDrone.id)) {
+              writeStoredSelectedDrone(data);
+              selectDrone(data);
+            }
+          } else if (type === 'drone_location') {
+            void queryClient.invalidateQueries({ queryKey: ["/api/drones"] });
+            if (selectedDrone?.id && String(data?.id) === String(selectedDrone.id)) {
+              const nextDrone = { ...selectedDrone, ...data };
+              writeStoredSelectedDrone(nextDrone);
+              selectDrone(nextDrone);
+            }
+          } else if (type === 'drone_removed') {
+            void queryClient.invalidateQueries({ queryKey: ["/api/drones"] });
+            if (selectedDrone?.id && String(data?.id) === String(selectedDrone.id)) {
+              selectDrone(null);
+              toast.warning("Selected drone was removed");
+            }
           }
         } catch (e) {
           // Ignore parse errors
@@ -541,26 +554,8 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
     setEditContent(msg.content);
   };
   
-  // Listen for session changes
-  useEffect(() => {
-    const handleSessionChange = (e: CustomEvent<UserSession>) => {
-      setSession(e.detail);
-    };
-    window.addEventListener('session-change' as any, handleSessionChange);
-    return () => window.removeEventListener('session-change' as any, handleSessionChange);
-  }, []);
-
-  // Listen for drone selection changes
-  useEffect(() => {
-    const handleDroneChange = (e: CustomEvent<Drone>) => {
-      setSelectedDrone(e.detail);
-    };
-    window.addEventListener('drone-selected' as any, handleDroneChange);
-    return () => window.removeEventListener('drone-selected' as any, handleDroneChange);
-  }, []);
-
   const handleLogout = async () => {
-    const sessionToken = localStorage.getItem('mouse_gcs_session_token');
+    const sessionToken = readStoredSessionToken();
     if (sessionToken) {
       try {
         await fetch('/api/auth/logout', {
@@ -571,14 +566,9 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
         // best-effort logout; local session is still cleared below
       }
     }
-    localStorage.removeItem('mouse_gcs_session');
-    localStorage.removeItem('mouse_gcs_session_token');
-    localStorage.removeItem('mouse_selected_drone');
     localStorage.removeItem('mouse_gcs_messages');
-    setSession({ user: null, isLoggedIn: false });
-    setSelectedDrone(null);
-    window.dispatchEvent(new CustomEvent('session-change', { detail: { user: null, isLoggedIn: false } }));
-    window.dispatchEvent(new CustomEvent('session-updated', { detail: { user: null, isLoggedIn: false } }));
+    clearSession();
+    clearStoredSession();
     toast.info("Logged out successfully");
   };
 

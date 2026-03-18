@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useAppState } from "@/contexts/AppStateContext";
 import { Download, Upload, RefreshCw, Save, Search, Lock, Layers } from "lucide-react";
 import { ARDUPILOT_CATEGORIES, ARDUPILOT_META_BY_NAME, ARDUPILOT_PARAM_PRESETS } from "@/lib/ardupilotParams";
 
@@ -18,17 +19,10 @@ interface ParamItem {
 
 export function FlightControllerParamsPanel() {
   const { hasPermission } = usePermissions();
+  const { selectedDrone } = useAppState();
   const canEdit = hasPermission("system_settings") || hasPermission("run_terminal");
 
-  const [connectionString, setConnectionString] = useState(() => {
-    const saved = localStorage.getItem("mouse_selected_drone");
-    try {
-      const parsed = saved ? JSON.parse(saved) : null;
-      return parsed?.connectionString || "serial:/dev/ttyACM0:57600";
-    } catch {
-      return "serial:/dev/ttyACM0:57600";
-    }
-  });
+  const [connectionString, setConnectionString] = useState("serial:/dev/ttyACM0:57600");
   const [params, setParams] = useState<ParamItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
@@ -39,6 +33,11 @@ export function FlightControllerParamsPanel() {
   const [bulkInput, setBulkInput] = useState("[");
   const [compareInput, setCompareInput] = useState("[");
   const [compareResult, setCompareResult] = useState<any | null>(null);
+
+  useEffect(() => {
+    const next = String(selectedDrone?.connectionString || "").trim();
+    if (next) setConnectionString(next);
+  }, [selectedDrone?.connectionString]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase();

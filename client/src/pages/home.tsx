@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense, type ComponentType } from "react";
+import { useState, useEffect, lazy, Suspense, type ComponentType } from "react";
 import { TopBar } from "@/components/layout/TopBar";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { AutoStabilizationController } from "@/components/controls/AutoStabilizationController";
@@ -10,11 +10,12 @@ import { MLNavigationEngine } from "@/components/navigation/MLNavigationEngine";
 import { DeviceContextBanner } from "@/components/layout/DeviceContextBanner";
 import { useDeviceContext } from "@/hooks/useDeviceContext";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { AlertTriangle, X, Eye, ArrowLeft, Cpu, Camera, Video } from "lucide-react";
+import { AlertTriangle, X, Eye, ArrowLeft, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Card, CardContent } from "@/components/ui/card";
 import type { Drone } from "@shared/schema";
+import { useAppState } from "@/contexts/AppStateContext";
 
 function lazyWithRetry<T extends ComponentType<any>>(
   importer: () => Promise<{ default: T }>,
@@ -84,81 +85,6 @@ interface SystemError {
   timestamp: Date;
 }
 
-function CameraFeedView({ label, sublabel }: { label: string; sublabel: string; borderColor?: string }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [active, setActive] = useState(false);
-
-  const startFeed = async () => {
-    try {
-      setError(null);
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setError("Camera access requires HTTPS or localhost.");
-        return;
-      }
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "environment" },
-      });
-      setStream(mediaStream);
-      setActive(true);
-    } catch (err: any) {
-      setError(err.message || "Failed to access camera");
-    }
-  };
-
-  const stopFeed = () => {
-    if (stream) {
-      stream.getTracks().forEach((t) => t.stop());
-      setStream(null);
-    }
-    setActive(false);
-  };
-
-  useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
-    }
-  }, [stream]);
-
-  useEffect(() => {
-    return () => {
-      if (stream) stream.getTracks().forEach((t) => t.stop());
-    };
-  }, []);
-
-  if (active && stream) {
-    return (
-      <div className="absolute inset-0 flex flex-col">
-        <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
-        <div className="absolute top-1 left-2 text-[10px] font-mono text-green-400 bg-black/60 px-1.5 py-0.5 rounded">
-          {label} - LOCAL PREVIEW
-        </div>
-        <button
-          onClick={stopFeed}
-          className="absolute bottom-2 right-2 bg-red-600 text-white text-[10px] px-2 py-1 rounded hover:bg-red-700"
-          data-testid={`button-stop-feed-${label.toLowerCase().replace(/\s/g, "-")}`}
-        >
-          Stop
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div className="text-center text-muted-foreground">
-      <p className="text-base sm:text-lg font-mono">{label}</p>
-      <p className="text-[10px] sm:text-xs">{sublabel}</p>
-      <p className="text-[10px] sm:text-xs text-amber-300 mt-1">Browser local camera preview (not drone RTSP/WebRTC feed)</p>
-      {error && <p className="text-[10px] text-red-400 mt-1">{error}</p>}
-      <Button size="sm" variant="outline" className="mt-2" onClick={startFeed} data-testid={`button-start-feed-${label.toLowerCase().replace(/\s/g, "-")}`}>
-        <Camera className="h-3 w-3 mr-1" />
-        Connect Local Camera
-      </Button>
-    </div>
-  );
-}
-
 interface Mapping3DStatus {
   active: boolean;
   framesCaptured: number;
@@ -173,36 +99,10 @@ interface Mapping3DStatus {
 const MOVED_TO_SETTINGS_TABS = new Set(["modesetup", "mavtools", "rtk", "plugins", "mp-parity", "vehiclesetup"]);
 
 export default function Home() {
+  const { isLoggedIn, selectedDrone, selectDrone } = useAppState();
   const [activeTab, setActiveTab] = useState("map");
   const [systemErrors, setSystemErrors] = useState<SystemError[]>([]);
   const deviceContext = useDeviceContext();
-  
-  // Global session state - check if user is logged in
-  const [isLoggedIn, setIsLoggedIn] = useState(() => {
-    const saved = localStorage.getItem('mouse_gcs_session');
-    if (saved) {
-      try {
-        const session = JSON.parse(saved);
-        return session.isLoggedIn === true;
-      } catch {
-        return false;
-      }
-    }
-    return false;
-  });
-
-  // Selected drone state
-  const [selectedDrone, setSelectedDrone] = useState<Drone | null>(() => {
-    const saved = localStorage.getItem('mouse_selected_drone');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  });
 
   // Preview mode state (for skipping drone selection) - must be before conditional returns
   const [previewMode, setPreviewMode] = useState(false);
@@ -232,25 +132,21 @@ export default function Home() {
   // Listen for session changes (logout from TopBar or UserAccessPanel)
   useEffect(() => {
     const handleSessionChange = (e: CustomEvent<{ isLoggedIn: boolean }>) => {
-      setIsLoggedIn(e.detail.isLoggedIn);
-      // Clear selected drone on logout
       if (!e.detail.isLoggedIn) {
-        setSelectedDrone(null);
-        localStorage.removeItem('mouse_selected_drone');
+        selectDrone(null);
       }
     };
     window.addEventListener('session-change' as any, handleSessionChange);
     return () => window.removeEventListener('session-change' as any, handleSessionChange);
-  }, []);
+  }, [selectDrone]);
 
   // Listen for drone selection changes (from TopBar logo click)
   useEffect(() => {
     const handleDroneChange = (e: CustomEvent<Drone | null>) => {
-      setSelectedDrone(e.detail);
+      selectDrone(e.detail);
     };
     const handleShowDroneSelection = () => {
-      setSelectedDrone(null);
-      localStorage.removeItem('mouse_selected_drone');
+      selectDrone(null);
     };
     window.addEventListener('drone-selected' as any, handleDroneChange);
     window.addEventListener('show-drone-selection' as any, handleShowDroneSelection);
@@ -258,7 +154,7 @@ export default function Home() {
       window.removeEventListener('drone-selected' as any, handleDroneChange);
       window.removeEventListener('show-drone-selection' as any, handleShowDroneSelection);
     };
-  }, []);
+  }, [selectDrone]);
 
   useEffect(() => {
     const handleNavigateTab = (e: CustomEvent<{ tabId?: string }>) => {
@@ -334,10 +230,8 @@ export default function Home() {
       updatedAt: new Date().toISOString(),
       lastSeen: null,
     };
-    setSelectedDrone(onboardDrone);
-    localStorage.setItem("mouse_selected_drone", JSON.stringify(onboardDrone));
-    window.dispatchEvent(new CustomEvent("drone-selected", { detail: onboardDrone }));
-  }, [runtimeConfigLoaded, isOnboard, selectedDrone]);
+    selectDrone(onboardDrone);
+  }, [runtimeConfigLoaded, isOnboard, selectDrone, selectedDrone]);
 
   const refreshMappingStatus = async () => {
     const res = await fetch("/api/mapping/3d/status");
@@ -455,13 +349,10 @@ export default function Home() {
         </div>
       }>
         <DroneSelectionPanel 
-          onDroneSelected={(drone) => setSelectedDrone(drone)} 
+          onDroneSelected={(drone) => selectDrone(drone)} 
           onSkipPreview={() => {
             setPreviewMode(true);
-            // Set preview drone as the selected drone so all components work
-            setSelectedDrone(previewDrone);
-            localStorage.setItem("mouse_selected_drone", JSON.stringify(previewDrone));
-            window.dispatchEvent(new CustomEvent("drone-selected", { detail: previewDrone }));
+            selectDrone(previewDrone);
           }}
         />
       </Suspense>
@@ -502,7 +393,13 @@ export default function Home() {
       case "payload":
         return (
           <div className="flex-1 relative overflow-hidden">
-            <SpeakerPanel />
+            <SpeakerPanel
+              isControllerMode={deviceContext.isController}
+              micRoutedToDrone={
+                deviceContext.isController &&
+                deviceContext.peripherals.microphone === "drone_speaker"
+              }
+            />
           </div>
         );
       case "feeds":
@@ -732,8 +629,7 @@ export default function Home() {
             className="text-black hover:bg-amber-600"
             onClick={() => {
               setPreviewMode(false);
-              setSelectedDrone(null);
-              localStorage.removeItem("mouse_selected_drone");
+              selectDrone(null);
             }}
           >
             <ArrowLeft className="h-4 w-4 mr-1" />

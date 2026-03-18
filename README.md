@@ -11,26 +11,27 @@ A comprehensive ground control station for autonomous drone control with Orange 
 1. [Overview](#overview)
 2. [Key Features](#key-features)
 3. [Application Capabilities (Current)](#application-capabilities-current)
-4. [Complete Function Index (All)](#complete-function-index-all)
-5. [System Requirements](#system-requirements)
-6. [Quick Start](#quick-start)
-7. [Installation Without Replit](#installation-without-replit)
-8. [Environment Variables & API Keys](#environment-variables--api-keys)
-9. [Third-Party Services](#third-party-services)
-10. [Security Features](#security-features)
-11. [User Management](#user-management)
-12. [Operating Instructions](#operating-instructions)
-13. [Flight Controls Reference](#flight-controls-reference)
-14. [Map Controls Reference](#map-controls-reference)
-15. [Settings Configuration](#settings-configuration)
-16. [Hardware Configuration](#hardware-configuration)
-17. [Project Structure](#project-structure)
-18. [Troubleshooting & Common Errors](#troubleshooting--common-errors)
-19. [Dependency Issues](#dependency-issues)
-20. [Firebase Cloud Sync](#firebase-cloud-sync)
-21. [Web Deployment (Firebase App Hosting)](#web-deployment-firebase-app-hosting)
-22. [Redeploy Web App (Latest)](#redeploy-web-app-latest)
-23. [New Cloud/Audio APIs](#new-cloudaudio-apis)
+4. [Application Functions (Repo-Derived)](#application-functions-repo-derived)
+5. [Complete Function Index (All)](#complete-function-index-all)
+6. [System Requirements](#system-requirements)
+7. [Quick Start](#quick-start)
+8. [Installation Without Replit](#installation-without-replit)
+9. [Environment Variables & API Keys](#environment-variables--api-keys)
+10. [Third-Party Services](#third-party-services)
+11. [Security Features](#security-features)
+12. [User Management](#user-management)
+13. [Operating Instructions](#operating-instructions)
+14. [Flight Controls Reference](#flight-controls-reference)
+15. [Map Controls Reference](#map-controls-reference)
+16. [Settings Configuration](#settings-configuration)
+17. [Hardware Configuration](#hardware-configuration)
+18. [Project Structure](#project-structure)
+19. [Troubleshooting & Common Errors](#troubleshooting--common-errors)
+20. [Dependency Issues](#dependency-issues)
+21. [Firebase Cloud Sync](#firebase-cloud-sync)
+22. [Web Deployment (Firebase App Hosting)](#web-deployment-firebase-app-hosting)
+23. [Redeploy Web App (Latest)](#redeploy-web-app-latest)
+24. [New Cloud/Audio APIs](#new-cloudaudio-apis)
 
 ---
 
@@ -130,6 +131,137 @@ The system operates in **offline-first mode** using local JSON storage with opti
 - Role-gated UI panels with server-side permission checks on critical API writes/actions
 - App Hosting deployment support for web operators
 - Electron desktop runtime for integrated local server + UI operation
+
+---
+
+## Application Functions (Repo-Derived)
+
+This section summarizes the implemented function set derived from the live UI modules in `client/src/pages/home.tsx`, the panel components under `client/src/components/panels`, and the backend routes in `server/routes.ts`.
+
+### Core Flight Operations
+- Real-time telemetry display: altitude, speed, heading, attitude, battery, and motor/sensor feeds
+- Manual vehicle actions: arm/disarm, mode changes, manual control, and general MAVLink command dispatch
+- Mission planning: create, edit, and delete missions and waypoints
+- Mission execution: upload, download, validate, and diff missions against the flight controller
+- Mission run control: start, track, stop, and mark mission runs complete
+- Flight mode mapping and airframe profile application
+- Vehicle setup and reconfiguration for hardware profiles
+
+### Map, Navigation, and Airspace
+- Interactive map with drone/operator position and mission overlays
+- No-fly zone and restricted-airspace overlays
+- Regulatory GeoJSON overlay support
+- Airspace queries for restricted areas, TFRs, static restricted data, and source listing
+- Geocoding and reverse geocoding
+- GPS-denied navigation panel and ML-assisted navigation controller
+- Breadcrumb and route visualization for operational awareness
+
+### Object Recognition and Tracking
+- Video feed UI with AR/HUD overlay
+- Object recognition and tracking panel
+- TensorFlow-based object detection wired into the application surface
+- Target locking and confidence-based tracking workflow
+- Tracking integrated with stabilization and navigation alerts
+
+### Stabilization and Safety
+- Auto stabilization controller
+- ML stabilization engine
+- Stabilization actuator bridge
+- Emergency protocol controller
+- Stabilization panel with sensor, environment, payload, motor, and parameter APIs
+- Emergency and failsafe flows such as telemetry-loss and low-battery reactions
+- Geofencing panel and MAVLink fence upload/download support
+
+### User Management and Access Control
+- Login, logout, and session validation
+- Session token hydration on app startup
+- Admin user management: create, update, delete, and reset password
+- Role-based permissions with admin, operator, and viewer roles
+- Group management: list, create, update, and delete groups
+- UI-level user access panel
+- Server-side permission enforcement on protected actions
+
+### Drone and Fleet Management
+- Multi-drone management: create, list, edit, and delete drones
+- Drone selection panel
+- Drone status and location updates
+- Swarm operations: group actions, sync actions, formation planning, and formation mission generation
+- Cloud awareness and admin dashboard endpoints for cross-operator and fleet visibility
+
+### Logs, Telemetry History, and Analysis
+- Flight logs panel with charts and replay views
+- Flight logbook panel
+- Flight session lifecycle: start, end, inspect active/history, and delete
+- DataFlash listing, download, analysis, and replay
+- Telemetry record ingestion and retrieval
+- Motor telemetry and sensor history APIs
+
+### Camera, Media, and Payload
+- Camera settings read/update
+- Media asset CRUD
+- Media lookup by drone and by session
+- Cloud media upload and pending sync handling
+- Servo control and status for payload or gripper-type devices
+- Video feed and capture-related UI
+
+### Audio and Communications
+- Audio session status and join/leave flows
+- Audio output device listing and selection
+- Buzzer trigger
+- Text-to-speech
+- Live audio start/stop
+- Drone microphone route and status management
+- Team messaging: message list, history, create, edit, delete, and sync
+- Chat user presence endpoint
+
+### Environment and Onboard Sensors
+- BME688 panel
+- BME688 read, debug, and status endpoints
+- Sensor data recording and recent retrieval by type
+- Environment telemetry integration into the UI
+
+### Calibration and Low-Level Flight Controller Tooling
+- Calibration panel for compass, accelerometer, radio, ESC, gyroscope, barometer, and level trim
+- Calibration status, start, and cancel APIs
+- Flight controller parameter browser and editor
+- Parameter import, export, and compare
+- MAVLink inspector snapshot and live views
+- Rally point upload/download
+- Serial passthrough controls
+- SiK radio status, modem query, profile apply, and verify flows
+- RTK/NTRIP profile management and start, stop, and reconnect
+- GPS injection controls
+
+### Firmware and Plugin Tooling
+- Firmware catalog CRUD
+- Firmware install, flash, and bootloader recovery
+- Plugin listing, enablement, and tool execution
+- Plugin SDK helpers: create template, validate, and package
+
+### Automation, Terminal, and Debugging
+- Automation panel and automation script execution
+- Automation run history
+- Terminal commands panel
+- Generic command dispatch queue and command history/detail lookup
+- Runtime config and connection test APIs
+- Debug event log, clear, system debug, and system probe endpoints
+- Integration verification endpoint
+
+### Offline-First, Backup, and Cloud Sync
+- Local JSON storage for app state and records
+- Offline backlog queue and sync workflow
+- Offline sync idempotency handling
+- Google Sheets backup and status
+- Google Drive status, file list, upload, and delete
+- Google OAuth account linking, switching, removal, and configured-status checks
+- Firebase/cloud config, cloud status, cloud test, and sync-all
+- Cloud command dispatch, acknowledge, and list
+- Cloud telemetry ingest and live feed
+- Cloud awareness and admin dashboard
+
+### 3D Mapping and Reconstruction
+- 3D mapping status, frame ingestion, reset, reconstruct, and latest model fetch APIs
+- Mapping state surfaced in the main home page logic
 
 ---
 

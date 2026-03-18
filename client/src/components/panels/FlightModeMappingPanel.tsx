@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useAppState } from "@/contexts/AppStateContext";
 import { toast } from "sonner";
 import { reportApiError } from "@/lib/apiErrors";
 import { Lock, RefreshCw, Save } from "lucide-react";
@@ -39,18 +40,16 @@ const initialMapping: MappingState = {
 
 export function FlightModeMappingPanel() {
   const { hasPermission } = usePermissions();
+  const { selectedDrone } = useAppState();
   const canUse = hasPermission("system_settings") || hasPermission("run_terminal");
   const [busy, setBusy] = useState(false);
-  const [connectionString, setConnectionString] = useState(() => {
-    const saved = localStorage.getItem("mouse_selected_drone");
-    try {
-      const parsed = saved ? JSON.parse(saved) : null;
-      return parsed?.connectionString || "serial:/dev/ttyACM0:57600";
-    } catch {
-      return "serial:/dev/ttyACM0:57600";
-    }
-  });
+  const [connectionString, setConnectionString] = useState("serial:/dev/ttyACM0:57600");
   const [mapping, setMapping] = useState<MappingState>(initialMapping);
+
+  useEffect(() => {
+    const next = String(selectedDrone?.connectionString || "").trim();
+    if (next) setConnectionString(next);
+  }, [selectedDrone?.connectionString]);
 
   const hasMissing = useMemo(() => Object.values(mapping).some((v) => !Number.isFinite(v)), [mapping]);
 
@@ -187,4 +186,3 @@ export function FlightModeMappingPanel() {
     </div>
   );
 }
-

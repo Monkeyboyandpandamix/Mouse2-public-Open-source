@@ -28,9 +28,8 @@ const LOCAL_STORAGE_KEY = 'mouse_offline_backlog';
 
 /**
  * Offline sync hook for telemetry, media, and events.
- * When network/internet is unavailable (GPS-denied, WiFi-denied ops), data is queued to localStorage.
- * isOnline = backend reachability (fetch to /api); when GCS backend runs locally, it works without internet.
- * Queued items sync automatically when connection is restored.
+ * Client localStorage is only an unsent staging area.
+ * Once backlog items are successfully synced, the backend becomes the source of truth.
  */
 function makeClientRequestId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -53,6 +52,7 @@ export function useOfflineSync(droneId?: number) {
   const syncIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const heartbeatRef = useRef<NodeJS.Timeout | null>(null);
   const lastImmediatePostFailureToastRef = useRef<number>(0);
+  const syncBacklogRef = useRef<() => Promise<void>>(async () => {});
 
   const loadLocalBacklog = useCallback(() => {
     try {
@@ -87,24 +87,14 @@ export function useOfflineSync(droneId?: number) {
     localBacklog.current.push(newItem);
     saveLocalBacklog();
     setSyncState(prev => ({ ...prev, pendingCount: localBacklog.current.length }));
-    
+
     if (syncState.isOnline) {
-      fetch('/api/backlog', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...newItem,
-          syncStatus: 'pending',
-          syncAttempts: 0,
-        }),
-      }).catch((err) => {
-        console.warn("[useOfflineSync] backlog POST failed:", err);
-        const now = Date.now();
-        if (!lastImmediatePostFailureToastRef.current || now - lastImmediatePostFailureToastRef.current > 15000) {
-          lastImmediatePostFailureToastRef.current = now;
-          toast.warning("Data saved locally - will sync when connection is stable");
-        }
-      });
+      const now = Date.now();
+      if (!lastImmediatePostFailureToastRef.current || now - lastImmediatePostFailureToastRef.current > 15000) {
+        lastImmediatePostFailureToastRef.current = now;
+        toast.info("Data staged locally and will sync to the backend immediately.");
+      }
+      void syncBacklogRef.current();
     }
     
     return newItem;
@@ -207,10 +197,11 @@ export function useOfflineSync(droneId?: number) {
       }));
     }
   }, [syncState.isSyncing, saveLocalBacklog]);
+  syncBacklogRef.current = syncBacklog;
 
   const checkConnectivity = useCallback(async () => {
     try {
-      const response = await fetch('/api/runtime-config', {
+      const response = await fetch('/api/health', {
         method: 'GET',
         cache: 'no-cache',
       });

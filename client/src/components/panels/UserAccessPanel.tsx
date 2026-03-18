@@ -33,12 +33,9 @@ import {
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
-
-interface Permission {
-  id: string;
-  name: string;
-  description: string;
-}
+import { useAppState } from "@/contexts/AppStateContext";
+import { clearStoredSession, writeStoredSessionToken } from "@/lib/clientState";
+import { ALL_PERMISSIONS, ROLE_PERMISSIONS } from "@shared/permissions";
 
 interface RolePermissions {
   [role: string]: string[];
@@ -68,52 +65,12 @@ interface UserGroup {
   createdBy: string;
 }
 
-const allPermissions: Permission[] = [
-  { id: "arm_disarm", name: "Arm/Disarm Drone", description: "Control drone arming state" },
-  { id: "flight_control", name: "Flight Control", description: "Takeoff, land, RTL commands" },
-  { id: "mission_planning", name: "Mission Planning", description: "Create and edit missions" },
-  { id: "camera_control", name: "Camera & Gimbal", description: "Control camera and gimbal" },
-  { id: "view_telemetry", name: "View Telemetry", description: "See real-time drone data" },
-  { id: "view_map", name: "View Map", description: "Access map display" },
-  { id: "view_camera", name: "View Camera Feed", description: "Watch video streams" },
-  { id: "user_management", name: "User Management", description: "Add, edit, delete users" },
-  { id: "system_settings", name: "System Settings", description: "Modify system configuration" },
-  { id: "delete_records", name: "Delete Records", description: "Delete flight logs and data" },
-  { id: "delete_flight_data", name: "Delete Flight Data", description: "Remove waypoints and missions" },
-  { id: "automation_scripts", name: "Automation Scripts", description: "Create and run scripts" },
-  { id: "emergency_override", name: "Emergency Override", description: "Override emergency actions" },
-  { id: "object_tracking", name: "Object Tracking", description: "Use tracking features" },
-  { id: "broadcast_audio", name: "Broadcast Audio", description: "Use speaker system" },
-  { id: "manage_geofences", name: "Manage Geofences", description: "Create and edit geofence zones" },
-  { id: "access_flight_recorder", name: "Flight Recorder", description: "Access flight logs and logbook" },
-  { id: "run_terminal", name: "Terminal Commands", description: "Execute terminal commands" },
-  { id: "configure_gui_advanced", name: "GUI Configuration", description: "Customize interface layout" },
-];
-
-const defaultRolePermissions: RolePermissions = {
-  admin: allPermissions.map(p => p.id),
-  operator: [
-    "arm_disarm", "flight_control", "mission_planning", "camera_control",
-    "view_telemetry", "view_map", "view_camera", "automation_scripts",
-    "object_tracking", "broadcast_audio", "manage_geofences", "access_flight_recorder",
-    "system_settings", "run_terminal", "configure_gui_advanced"
-  ],
-  viewer: ["view_telemetry", "view_map", "view_camera"]
-};
-
 const BUILTIN_ROLES = ['admin', 'operator', 'viewer'] as const;
 
 export function UserAccessPanel() {
+  const { session, setSession, clearSession } = useAppState();
   const [users, setUsers] = useState<User[]>([]);
-  const rolePermissions: RolePermissions = defaultRolePermissions;
-
-  const [session, setSession] = useState<CurrentSession>(() => {
-    const saved = localStorage.getItem('mouse_gcs_session');
-    if (saved) {
-      return JSON.parse(saved);
-    }
-    return { user: null, isLoggedIn: false };
-  });
+  const rolePermissions: RolePermissions = ROLE_PERMISSIONS;
   
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [showPassword, setShowPassword] = useState(false);
@@ -177,12 +134,6 @@ export function UserAccessPanel() {
     window.dispatchEvent(new CustomEvent('groups-updated'));
   }, [groups]);
 
-  useEffect(() => {
-    localStorage.setItem('mouse_gcs_session', JSON.stringify(session));
-    window.dispatchEvent(new CustomEvent('session-change', { detail: session }));
-    window.dispatchEvent(new CustomEvent('session-updated', { detail: session }));
-  }, [session]);
-
   const [loginError, setLoginError] = useState<string | null>(null);
   
   const handleLogin = async () => {
@@ -210,7 +161,7 @@ export function UserAccessPanel() {
         throw new Error(result?.error || "Invalid username or password");
       }
 
-      localStorage.setItem('mouse_gcs_session_token', result.sessionToken);
+      writeStoredSessionToken(result.sessionToken);
 
       const authenticatedUser: User = {
         id: result.user.id,
@@ -253,11 +204,8 @@ export function UserAccessPanel() {
       }
     }
     
-    setSession({ user: null, isLoggedIn: false });
-    localStorage.removeItem('mouse_gcs_session');
-    localStorage.removeItem('mouse_gcs_session_token');
-    window.dispatchEvent(new CustomEvent('session-change', { detail: { user: null, isLoggedIn: false } }));
-    window.dispatchEvent(new CustomEvent('session-updated', { detail: { user: null, isLoggedIn: false } }));
+    clearSession();
+    clearStoredSession();
     toast.info("Logged out successfully");
   };
 
@@ -353,7 +301,11 @@ export function UserAccessPanel() {
       const updated = payload.user as User;
       setUsers(prev => prev.map(u => u.id === id ? updated : u));
       if (session.user?.id === id) {
-        setSession(prev => prev.user ? { ...prev, user: { ...prev.user, role: updated.role } } : prev);
+        setSession(
+          session.user
+            ? { ...session, user: { ...session.user, role: updated.role } }
+            : session,
+        );
       }
       toast.success("Role updated");
     } catch (error) {
@@ -415,7 +367,11 @@ export function UserAccessPanel() {
       const updated = payload.user as User;
       setUsers(prev => prev.map(u => u.id === selectedUser.id ? updated : u));
       if (session.user?.id === selectedUser.id) {
-        setSession(prev => prev.user ? { ...prev, user: { ...prev.user, username: updated.username } } : prev);
+        setSession(
+          session.user
+            ? { ...session, user: { ...session.user, username: updated.username } }
+            : session,
+        );
       }
       setShowEditUserDialog(false);
       setSelectedUser(null);
@@ -882,7 +838,7 @@ export function UserAccessPanel() {
                 </CardHeader>
                 <CardContent>
                   <div className="grid grid-cols-2 gap-2">
-                    {allPermissions.map(permission => {
+                    {ALL_PERMISSIONS.map(permission => {
                       const hasPermission = session.user?.role ? 
                         rolePermissions[session.user.role]?.includes(permission.id) : false;
                       return (
@@ -1157,8 +1113,8 @@ export function UserAccessPanel() {
                         </CardHeader>
                         <CardContent>
                           <div className="grid grid-cols-2 gap-3">
-                            {allPermissions.map(permission => {
-                              const checked = defaultRolePermissions[role]?.includes(permission.id) ?? false;
+                            {ALL_PERMISSIONS.map(permission => {
+                              const checked = ROLE_PERMISSIONS[role]?.includes(permission.id) ?? false;
                               return (
                                 <div 
                                   key={permission.id}

@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useTelemetry } from "@/contexts/TelemetryContext";
+import { useAppState } from "@/contexts/AppStateContext";
 import { flightSessionsApi } from "@/lib/api";
 import { queryClient } from "@/lib/queryClient";
 import { dispatchBackendCommand } from "@/lib/commandService";
@@ -30,15 +31,13 @@ interface ControlDeckProps {
 
 export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
   const { hasPermission, isLoggedIn, getRole } = usePermissions();
+  const { selectedDrone } = useAppState();
   
   const canArmDisarm = hasPermission('arm_disarm');
   const canFlightControl = hasPermission('flight_control');
   const hasAnyControlPermission = canArmDisarm || canFlightControl;
   
-  const [isArmed, setIsArmed] = useState(() => {
-    const saved = localStorage.getItem('mouse_drone_armed');
-    return saved ? JSON.parse(saved) : false;
-  });
+  const [isArmed, setIsArmed] = useState(false);
   const [gripperOpen, setGripperOpen] = useState(false);
   const [gripperLoading, setGripperLoading] = useState(false);
   const [baseLocation, setBaseLocation] = useState<BaseLocation | null>(null);
@@ -59,11 +58,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
   const gamepadBusyRef = useRef(false);
   const lastManualControlErrorRef = useRef(0);
 
-  // Get current drone ID from localStorage
-  const getCurrentDroneId = () => {
-    const saved = localStorage.getItem('mouse_selected_drone');
-    return saved ? JSON.parse(saved)?.id : 'default';
-  };
+  const getCurrentDroneId = () => selectedDrone?.id || 'default';
 
   const dispatchCommand = useCallback(
     async (commandType: string, payload: Record<string, unknown> = {}) => {
@@ -131,6 +126,12 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
 
   // Track telemetry for session stats (uses shared TelemetryProvider)
   const telemetry = useTelemetry();
+  useEffect(() => {
+    if (typeof telemetry?.armed === "boolean") {
+      setIsArmed(telemetry.armed);
+    }
+  }, [telemetry?.armed]);
+
   useEffect(() => {
     if (!isRecording || !telemetry) return;
     const altitude = (telemetry as any).altitude;
@@ -234,9 +235,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
         const newArmed = !isArmed;
         void dispatchCommand(newArmed ? "arm" : "disarm")
           .then(() => {
-            setIsArmed(newArmed);
-            localStorage.setItem("mouse_drone_armed", JSON.stringify(newArmed));
-            window.dispatchEvent(new CustomEvent("arm-state-changed", { detail: { armed: newArmed, source: "gamepad" } }));
+            toast.info(`Arm command acknowledged. Waiting for telemetry to confirm ${newArmed ? "armed" : "disarmed"} state.`);
           })
           .catch((error) => {
             toast.error(error instanceof Error ? error.message : "Gamepad arm/disarm failed");
@@ -255,15 +254,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
       const throttleAxis = applyDeadzone(gp.axes?.[3] ?? 0);
       if (!rollAxis && !pitchAxis && !yawAxis && !throttleAxis) return;
 
-      const selectedDroneRaw = localStorage.getItem("mouse_selected_drone");
-      let connectionString = "";
-      if (selectedDroneRaw) {
-        try {
-          connectionString = String(JSON.parse(selectedDroneRaw)?.connectionString || "").trim();
-        } catch {
-          connectionString = "";
-        }
-      }
+      const connectionString = String(selectedDrone?.connectionString || "").trim();
       if (!connectionString) return;
       fetch("/api/mavlink/manual-control", {
         method: "POST",
@@ -420,9 +411,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
             const newArmed = !isArmed;
             try {
               await dispatchCommand(newArmed ? "arm" : "disarm");
-              setIsArmed(newArmed);
-              localStorage.setItem('mouse_drone_armed', JSON.stringify(newArmed));
-              window.dispatchEvent(new CustomEvent('arm-state-changed', { detail: { armed: newArmed } }));
+              toast.info(`Command acknowledged. Waiting for telemetry to confirm ${newArmed ? "armed" : "disarmed"} state.`);
             } catch (error) {
               toast.error(error instanceof Error ? error.message : "Arm/disarm command failed");
             }
@@ -526,9 +515,6 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
               try {
                 await dispatchCommand("abort");
                 toast.error("EMERGENCY STOP ACTIVATED - Motors killed!", { duration: 5000 });
-                setIsArmed(false);
-                localStorage.setItem('mouse_drone_armed', JSON.stringify(false));
-                window.dispatchEvent(new CustomEvent('arm-state-changed', { detail: { armed: false } }));
               } catch (error) {
                 toast.error(error instanceof Error ? error.message : "Abort command failed");
               }

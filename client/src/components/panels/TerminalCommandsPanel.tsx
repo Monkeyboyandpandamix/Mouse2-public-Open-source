@@ -44,6 +44,22 @@ interface SystemCommand {
   lastExecuted?: string;
 }
 
+function isBackendSupportedTerminalCommand(command: string): boolean {
+  const normalized = String(command || "").trim();
+  if (!normalized || normalized.includes("|")) return false;
+  if (/^mavlink_shell\s+'arm throttle'$/i.test(normalized)) return true;
+  if (/^mavlink_shell\s+'disarm(?: force)?'$/i.test(normalized)) return true;
+  if (/^mavlink_shell\s+'reboot'$/i.test(normalized)) return true;
+  if (/^mavlink_shell\s+'mode\s+[a-z0-9_]+'$/i.test(normalized)) return true;
+  if (/^mavlink_shell\s+'servo set 9 2000'$/i.test(normalized)) return true;
+  if (/^mavlink_shell\s+'servo set 9 1000'$/i.test(normalized)) return true;
+  if (/^mavlink_shell\s+'gimbal pitch\s+-?\d+(?:\.\d+)?'$/i.test(normalized)) return true;
+  if (/mavlink_shell\s+'takeoff\s+\d+(?:\.\d+)?'/i.test(normalized)) return true;
+  if (/^mavlink_shell\s+'servo set 9 2000'\s*&&/i.test(normalized)) return true;
+  if (/^mavlink_shell\s+'servo set 9 1000'\s*&&/i.test(normalized)) return true;
+  return false;
+}
+
 const defaultCommands: SystemCommand[] = [
   // Payload / Gripper Commands
   {
@@ -850,7 +866,9 @@ export function TerminalCommandsPanel() {
   const canRunTerminal = hasPermission('run_terminal');
   const [commands, setCommands] = useState<SystemCommand[]>(() => {
     const saved = localStorage.getItem('mouse_terminal_commands');
-    return saved ? JSON.parse(saved) : defaultCommands;
+    const source = saved ? JSON.parse(saved) : defaultCommands;
+    const list = Array.isArray(source) ? source : defaultCommands;
+    return list.filter((cmd) => isBackendSupportedTerminalCommand(String(cmd?.command || "")));
   });
   const [selectedCommand, setSelectedCommand] = useState<SystemCommand | null>(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -871,6 +889,10 @@ export function TerminalCommandsPanel() {
 
   const handleSave = () => {
     if (!editedCommand) return;
+    if (!isBackendSupportedTerminalCommand(editedCommand.command)) {
+      toast.error("This panel only supports commands with a safe backend implementation.");
+      return;
+    }
     setCommands(prev => prev.map(c => c.id === editedCommand.id ? editedCommand : c));
     setSelectedCommand(editedCommand);
     setIsEditing(false);
@@ -906,6 +928,10 @@ export function TerminalCommandsPanel() {
     const handleExternalExecute = (e: CustomEvent<{ command?: string }>) => {
       const commandText = e.detail?.command?.trim();
       if (!commandText) return;
+      if (!isBackendSupportedTerminalCommand(commandText)) {
+        toast.error("External command blocked: no safe backend implementation exists for it.");
+        return;
+      }
       const matched = commands.find((cmd) => cmd.command.trim() === commandText);
       if (matched) {
         handleExecute(matched);
@@ -932,7 +958,7 @@ export function TerminalCommandsPanel() {
 
   const handleReset = () => {
     if (confirm("Reset all commands to defaults? Your customizations will be lost.")) {
-      setCommands(defaultCommands);
+      setCommands(defaultCommands.filter((cmd) => isBackendSupportedTerminalCommand(cmd.command)));
       localStorage.removeItem('mouse_terminal_commands');
       toast.success("Commands reset to defaults");
     }
@@ -941,6 +967,10 @@ export function TerminalCommandsPanel() {
   const handleAddCommand = () => {
     if (!newCommand.name.trim() || !newCommand.command.trim()) {
       toast.error("Please enter a name and command");
+      return;
+    }
+    if (!isBackendSupportedTerminalCommand(newCommand.command)) {
+      toast.error("Only commands with a safe backend implementation can be added here.");
       return;
     }
     const cmd: SystemCommand = {
@@ -1007,7 +1037,7 @@ export function TerminalCommandsPanel() {
           <div className="flex items-center justify-between mb-2">
             <h3 className="font-bold text-lg flex items-center gap-2">
               <Terminal className="h-5 w-5 text-primary" />
-              Terminal Commands
+              Safe Commands
             </h3>
             <div className="flex gap-1">
               <Button size="sm" variant="default" onClick={() => setShowAddCommand(true)} data-testid="button-add-command">
@@ -1019,7 +1049,10 @@ export function TerminalCommandsPanel() {
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            View and edit system commands for all drone operations
+            Only commands with a verified backend implementation are available here.
+          </p>
+          <p className="text-[11px] text-amber-500 mt-1">
+            Placeholder shell snippets and unsupported backend actions were removed.
           </p>
           
           {showAddCommand && (

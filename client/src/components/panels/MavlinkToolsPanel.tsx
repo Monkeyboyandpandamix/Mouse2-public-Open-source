@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useAppState } from "@/contexts/AppStateContext";
 import { toast } from "sonner";
 import { reportApiError } from "@/lib/apiErrors";
 import { Label } from "@/components/ui/label";
@@ -13,16 +14,9 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 
 export function MavlinkToolsPanel() {
   const { hasPermission } = usePermissions();
+  const { selectedDrone } = useAppState();
   const canUse = hasPermission("system_settings") || hasPermission("run_terminal");
-  const [connectionString, setConnectionString] = useState(() => {
-    const saved = localStorage.getItem("mouse_selected_drone");
-    try {
-      const parsed = saved ? JSON.parse(saved) : null;
-      return parsed?.connectionString || "serial:/dev/ttyACM0:57600";
-    } catch {
-      return "serial:/dev/ttyACM0:57600";
-    }
-  });
+  const [connectionString, setConnectionString] = useState("serial:/dev/ttyACM0:57600");
   const [snapshot, setSnapshot] = useState<any>(null);
   const [passthroughState, setPassthroughState] = useState<any>(null);
   const [localPort, setLocalPort] = useState("5760");
@@ -47,6 +41,11 @@ export function MavlinkToolsPanel() {
   const [liveRates, setLiveRates] = useState<Record<string, number>>({});
   const [liveLatest, setLiveLatest] = useState<any>(null);
   const [liveSeries, setLiveSeries] = useState<Array<{ t: string; total: number; attitude: number; gps: number; sys: number; heartbeat: number }>>([]);
+
+  useEffect(() => {
+    const next = String(selectedDrone?.connectionString || "").trim();
+    if (next) setConnectionString(next);
+  }, [selectedDrone?.connectionString]);
 
   const refreshPassthrough = async () => {
     const res = await fetch("/api/mavlink/serial-passthrough/status");

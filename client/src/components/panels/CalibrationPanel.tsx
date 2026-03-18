@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useAppState } from "@/contexts/AppStateContext";
 import { reportApiError } from "@/lib/apiErrors";
 import { toast } from "sonner";
 import { Compass, SlidersHorizontal, Radio, AlertTriangle, Lock, StopCircle, RefreshCw } from "lucide-react";
@@ -65,16 +66,9 @@ const CARD_META: Record<CalMode, { title: string; icon: any; safety: string[]; s
 
 export function CalibrationPanel() {
   const { hasPermission } = usePermissions();
+  const { selectedDrone } = useAppState();
   const canUse = hasPermission("system_settings") || hasPermission("run_terminal");
-  const [connectionString, setConnectionString] = useState(() => {
-    const saved = localStorage.getItem("mouse_selected_drone");
-    try {
-      const parsed = saved ? JSON.parse(saved) : null;
-      return parsed?.connectionString || "serial:/dev/ttyACM0:57600";
-    } catch {
-      return "serial:/dev/ttyACM0:57600";
-    }
-  });
+  const [connectionString, setConnectionString] = useState("serial:/dev/ttyACM0:57600");
   const [busy, setBusy] = useState(false);
   const [state, setState] = useState<Record<CalMode, CalState>>({
     compass: { status: "idle", lastRunAt: null },
@@ -109,26 +103,9 @@ export function CalibrationPanel() {
   }, []);
 
   useEffect(() => {
-    const onDroneSelected = (e: CustomEvent<{ connectionString?: string }>) => {
-      const conn = e.detail?.connectionString;
-      if (typeof conn === "string" && conn.trim()) setConnectionString(conn.trim());
-    };
-    const onStorage = () => {
-      const saved = localStorage.getItem("mouse_selected_drone");
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          if (parsed?.connectionString) setConnectionString(String(parsed.connectionString).trim());
-        } catch { /* ignore */ }
-      }
-    };
-    window.addEventListener("drone-selected" as any, onDroneSelected);
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.removeEventListener("drone-selected" as any, onDroneSelected);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, []);
+    const next = String(selectedDrone?.connectionString || "").trim();
+    if (next) setConnectionString(next);
+  }, [selectedDrone?.connectionString]);
 
   const startCalibration = async (mode: CalMode) => {
     setBusy(true);

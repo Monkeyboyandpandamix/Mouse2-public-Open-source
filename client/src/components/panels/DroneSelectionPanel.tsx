@@ -33,6 +33,7 @@ import { dronesApi } from "@/lib/api";
 import { reportApiError } from "@/lib/apiErrors";
 import { usePermissions } from "@/hooks/usePermissions";
 import { getRuntimePlatform, getSerialPortOptions } from "@/lib/platform";
+import { useAppState } from "@/contexts/AppStateContext";
 
 interface DroneSelectionPanelProps {
   onDroneSelected: (drone: Drone) => void;
@@ -59,6 +60,7 @@ const gpsStatusLabels: Record<string, { label: string; color: string }> = {
 export function DroneSelectionPanel({ onDroneSelected, onSkipPreview }: DroneSelectionPanelProps) {
   const queryClient = useQueryClient();
   const { hasPermission, isAdmin } = usePermissions();
+  const { selectDrone } = useAppState();
   const canManageDrones = hasPermission('system_settings') || isAdmin();
   const runtimePlatform = getRuntimePlatform();
   const serialPortOptions = getSerialPortOptions(runtimePlatform);
@@ -153,8 +155,7 @@ export function DroneSelectionPanel({ onDroneSelected, onSkipPreview }: DroneSel
   };
 
   const handleSelectDrone = (drone: Drone) => {
-    localStorage.setItem("mouse_selected_drone", JSON.stringify(drone));
-    window.dispatchEvent(new CustomEvent("drone-selected", { detail: drone }));
+    selectDrone(drone);
     onDroneSelected(drone);
     toast.success(`Connected to ${drone.name} (${drone.callsign})`);
   };

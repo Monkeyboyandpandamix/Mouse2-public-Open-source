@@ -38,6 +38,7 @@ import {
 import { useState, useEffect, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { useAppState } from "@/contexts/AppStateContext";
 import { usePermissions } from "@/hooks/usePermissions";
 import type { Drone } from "@shared/schema";
 
@@ -110,6 +111,7 @@ const DEFAULT_LAT = 36.0957;
 const DEFAULT_LNG = -79.4378;
 
 export function FlightPathOptimizerPanel() {
+  const { selectedDrone: appSelectedDrone } = useAppState();
   const { hasPermission } = usePermissions();
   const canOptimize = hasPermission('mission_planning');
   const queryClient = useQueryClient();
@@ -135,24 +137,13 @@ export function FlightPathOptimizerPanel() {
   });
 
   useEffect(() => {
-    const loadDrone = () => {
-      const saved = localStorage.getItem('mouse_selected_drone');
-      if (saved) {
-        try {
-          setSelectedDrone(JSON.parse(saved));
-        } catch {
-          setSelectedDrone(null);
-        }
-      }
-    };
-    loadDrone();
-    
     const handleDroneChange = (e: CustomEvent<Drone | null>) => {
       setSelectedDrone(e.detail);
     };
+    setSelectedDrone(appSelectedDrone);
     window.addEventListener('drone-selected' as any, handleDroneChange);
     return () => window.removeEventListener('drone-selected' as any, handleDroneChange);
-  }, []);
+  }, [appSelectedDrone]);
 
   useEffect(() => {
     const fetchMissions = async () => {

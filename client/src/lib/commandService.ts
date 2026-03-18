@@ -1,3 +1,5 @@
+import { readStoredSelectedDrone } from "@/lib/clientState";
+
 export interface DispatchCommandOptions {
   commandType: string;
   payload?: Record<string, unknown>;
@@ -7,14 +9,8 @@ export interface DispatchCommandOptions {
 }
 
 function selectedDroneConnectionString() {
-  const raw = localStorage.getItem("mouse_selected_drone");
-  if (!raw) return "";
-  try {
-    const parsed = JSON.parse(raw);
-    return String(parsed?.connectionString || "").trim();
-  } catch {
-    return "";
-  }
+  const parsed = readStoredSelectedDrone<{ connectionString?: string }>();
+  return String(parsed?.connectionString || "").trim();
 }
 
 export async function dispatchBackendCommand(options: DispatchCommandOptions) {
