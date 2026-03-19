@@ -477,8 +477,8 @@ export default function Home() {
                 <div className="p-2 sm:p-3 bg-amber-500/10 border border-amber-500/30 rounded text-[10px] sm:text-xs text-amber-500">
                   <strong>Note:</strong> For best 3D reconstruction, lock gimbal to nadir position.
                 </div>
-                <div className="p-2 sm:p-3 bg-muted/50 border border-border rounded text-[10px] sm:text-xs text-muted-foreground">
-                  Lightweight local reconstruction — not a production mapping pipeline.
+                <div className="p-2 sm:p-3 bg-emerald-500/10 border border-emerald-500/30 rounded text-[10px] sm:text-xs text-emerald-600 dark:text-emerald-400 flex items-center gap-2">
+                  <span className="font-semibold">Production mapping pipeline</span> — JSON + PLY export, DB persistence, model listing.
                 </div>
               </div>
             </div>

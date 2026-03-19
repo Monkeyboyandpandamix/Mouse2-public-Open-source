@@ -188,6 +188,9 @@ app.use((req, res, next) => {
 
 (async () => {
   await ensureRuntimeDependencies();
+  // Run DB migrations before any DB access (needed for automation_recipes even when USE_DB is false)
+  const { runMigrations } = await import("./db/migrate");
+  runMigrations();
   const { registerRoutes } = await import("./routes");
   await registerRoutes(httpServer, app);
 

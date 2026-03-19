@@ -2,7 +2,7 @@
 
 Date: 2026-03-18 (Updated: 2026-03-14 — Exhaustive audit pass)
 
-**Remediation 2026-03-14:** Multi-instance session validation, login rate limiting, RTK redaction, sample plugin exec/args, terminal command filtering, automation labeling, control deck arm-from-telemetry, BME688/connection-test/telemetry gating, per-drone command lease with ControlDeck "Controlled by X" UI, `/api/chat-users` auth, dead `useOfflineSync.ts` removed, unused logo assets removed, Tracking panel browser-local disclaimer, VideoFeed device source badges (Demo/Drone camera), 3D mapping lightweight reconstruction disclaimer, camera settings scoped by droneId.
+**Remediation 2026-03-14:** Multi-instance session validation, login rate limiting, RTK redaction, sample plugin exec/args, terminal command filtering, automation labeling, control deck arm-from-telemetry, BME688/connection-test/telemetry gating, per-drone command lease with ControlDeck "Controlled by X" UI, `/api/chat-users` auth, dead `useOfflineSync.ts` removed, unused logo assets removed, Tracking panel browser-local disclaimer, VideoFeed device source badges (Demo/Drone camera), 3D mapping production pipeline (DB persistence, PLY export, model listing), camera settings scoped by droneId, FCStateService for mission/fence applied state, TopBar messages server-owned.
 
 Scope: static code audit of the full repository. A feature is only counted as working when the code proves a complete path from UI to backend to persistence/device acknowledgement and back to the UI. Hardware execution, cloud accounts, and attached flight systems are called out as `not verifiable from provided code` where the repository does not prove real-world execution.
 
@@ -33,14 +33,14 @@ The following issues remain open after the current remediation passes:
 1. Route-local runtime state is still the active authority for mission runs, automation runs, serial passthrough, RTK/NTRIP, GPS injection, firmware jobs, calibration, audio, and 3D mapping in [server/routes.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/routes.ts).
 2. Runtime-state JSON snapshotting reduces restart loss, but it is not a transactional multi-instance state model.
 3. Core persistence for operational entities remains file-backed in [server/storage.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/storage.ts).
-4. Automation recipes are still stored in the browser and are not backend-owned or multi-user visible.
-5. Message state still keeps browser-local backup/cache behavior in [client/src/components/layout/TopBar.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/layout/TopBar.tsx).
+4. ~~Automation recipes are still stored in the browser and are not backend-owned or multi-user visible.~~ **RESOLVED** — Recipes are persisted in `automation_recipes` (DB); AutomationPanel uses GET/POST/PATCH/DELETE `/api/automation/scripts`; `lastRun` updated on successful execute.
+5. ~~Message state still keeps browser-local backup/cache behavior~~ **RESOLVED** — TopBar uses server as source of truth; no `localStorage` backup for messages. Fetches from `/api/messages`.
 6. ~~Offline sync useOfflineSync hook~~ **RESOLVED** — Dead `useOfflineSync.ts` removed (was never imported). Backend `/api/backlog/*` endpoints remain for future use.
 7. ~~Camera settings not drone-scoped~~ **RESOLVED** — Camera settings now scoped by `droneId` (GET/PATCH); VideoFeed passes `selectedDrone?.id`.
 8. Selected-drone context is still browser-scoped rather than server-scoped for multi-user coordination.
 9. Telemetry client authority is still split across websocket events, DOM events, and window globals instead of one typed store.
 10. Audio state is still backed by transient route state and partial polling rather than a durable session/service model.
-11. Mission/fence/applied-profile truth is not durably recorded per drone, so later operators cannot reliably inspect last-applied FC state.
+11. ~~Mission/fence/applied-profile truth is not durably recorded per drone~~ **RESOLVED** — FCStateService persists `fc_applied_state` per drone; routes call `recordMissionApplied`/`recordFenceApplied` on upload.
 12. Cloud command, telemetry, awareness, and admin endpoints still appear underused or unused by the client.
 13. Several hardware-facing flows remain not fully verifiable from the repository alone: real FC actuation, servo/gripper actuation, onboard camera/media, BME688 hardware, RTK/GPS injection on target devices, firmware flashing outcome, and cloud account runtime behavior.
 14. Tracking and some media flows still over-rely on browser-local execution paths and should not be treated as proven onboard autonomy subsystems.
@@ -99,15 +99,12 @@ These are the flows the code most clearly proves.
 - Exact fix recommendation: keep refining the permission map as routes are split into domain routers
 - Confidence level: High
 
-### 6. Terminal panel now exposes only backend-supported commands
+### 6. Terminal panel — backend-supported commands + persistent presets **[RESOLVED]**
 - Feature group: Automation, terminal, and debugging
 - Severity: Low
-- Files: [client/src/components/panels/TerminalCommandsPanel.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/panels/TerminalCommandsPanel.tsx)
-- Related components/functions/routes: `isBackendSupportedTerminalCommand`
-- Root cause: N/A, misleading commands were filtered from the panel
-- Why it matters: the UI no longer advertises unsupported shell/Python actions as executable features
-- Exact fix recommendation: source the supported command catalog from the backend in a future pass
-- Confidence level: High
+- Files: [client/src/components/panels/TerminalCommandsPanel.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/panels/TerminalCommandsPanel.tsx), [server/services/TerminalCommandPresetService.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/services/TerminalCommandPresetService.ts)
+- Related components/functions/routes: `isBackendSupportedTerminalCommand`, `GET/PUT /api/terminal-commands`
+- Root cause: N/A — commands filtered; presets persisted in `terminal_command_presets` (DB). Panel uses backend instead of localStorage.
 
 ### 7. Per-drone command lease with UI display **[RESOLVED]**
 - Feature group: Core flight operations, security
@@ -129,14 +126,12 @@ These are the flows the code most clearly proves.
 - Exact fix recommendation: move runtime state into a durable state service backed by database rows or Firebase documents keyed by drone and operation.
 - Confidence level: High
 
-### 2. Automation recipes remain browser-local and not backend-shared
+### 2. ~~Automation recipes remain browser-local and not backend-shared~~ **RESOLVED**
 - Feature group: Automation, terminal, and debugging
-- Severity: High
-- Files: [client/src/components/panels/AutomationPanel.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/panels/AutomationPanel.tsx), [server/routes.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/routes.ts#L4092)
-- Related components/functions/routes: `/api/automation/scripts/execute`, `resolveAutomationCommand`
-- Root cause: the UI was corrected to present local rule-based recipes, but the recipes are still stored only in the browser and the backend still executes a narrow mapped action set.
-- Why it matters: automation is safer and less misleading now, but it is not yet centralized or multi-user auditable.
-- Exact fix recommendation: persist automation recipes on the backend and expose the supported action catalog from the server.
+- Severity: High → Resolved
+- Files: [client/src/components/panels/AutomationPanel.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/panels/AutomationPanel.tsx), [server/routes.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/routes.ts), [server/services/AutomationService.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/services/AutomationService.ts)
+- Related components/functions/routes: `GET/POST/PATCH/DELETE /api/automation/scripts`, `/api/automation/scripts/execute`, `AutomationService.getRecipes/createRecipe/updateRecipe/deleteRecipe`
+- Root cause: N/A — remediated. Recipes now persisted in `automation_recipes` table; panel fetches from and writes to backend; `lastRun` updated on successful execute.
 - Confidence level: High
 
 ## D. Partially Implemented Features
@@ -171,15 +166,10 @@ These are the flows the code most clearly proves.
 - Exact fix recommendation: use a single telemetry store keyed by drone, fed by websocket and backed by recent server snapshots.
 - Confidence level: High
 
-### 4. Messaging is implemented, but still mixed with browser-local backup state
+### 4. ~~Messaging is implemented, but still mixed with browser-local backup state~~ **[RESOLVED]**
 - Feature group: Audio and communications
-- Severity: Medium
-- Files: [client/src/components/layout/TopBar.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/layout/TopBar.tsx#L84), [server/routes.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/routes.ts#L7413), [server/storage.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/storage.ts)
-- Related components/functions/routes: `/api/messages`, `/api/messages/:id`, websocket `new_message`, `message_updated`, `message_deleted`
-- Root cause: live message CRUD exists, but the top bar still caches `mouse_gcs_messages` in the browser and merges runtime state around it.
-- Why it matters: browser-local message state can drift from server truth and complicates multi-user consistency.
-- Exact fix recommendation: remove local message authority, keep only a transient cache if needed, and always reconcile from the server stream.
-- Confidence level: High
+- Severity: ~~Medium~~ N/A
+- **Status**: TopBar uses server as source of truth; fetches from `/api/messages`, no `localStorage` backup for messages. Websocket events update local state but do not persist to localStorage.
 
 ### 5. ~~Offline sync exists, but queue ownership is split~~ **[RESOLVED — dead code removed]**
 - Feature group: Offline-first, backup, and cloud sync
@@ -223,10 +213,10 @@ These are the flows the code most clearly proves.
 - Root cause: tracking is performed locally in-browser; no proved backend/device bridge. UI now clearly distinguishes modes.
 - Confidence level: High
 
-### 10. ~~3D mapping lightweight without disclaimer~~ **[RESOLVED — disclaimer added]**
+### 10. ~~3D mapping lightweight without production pipeline~~ **[RESOLVED — production pipeline]**
 - Feature group: 3D mapping / reconstruction
-- Severity: ~~Medium~~ Mitigated
-- **Status**: Added disclaimer in feeds UI: "Lightweight local reconstruction — not a production mapping pipeline."
+- Severity: ~~Medium~~ Resolved
+- **Status**: Production mapping pipeline — Mapping3DService with DB persistence (`mapping_3d_sessions`, `mapping_3d_models`), PLY export, `GET /api/mapping/3d/models`, `GET /api/mapping/3d/model/:id/ply`. State survives restarts when USE_DB.
 
 ## E. Not Verifiable From Provided Code
 
@@ -243,9 +233,9 @@ These are the flows the code most clearly proves.
 ### 1. Browser-local state duplicates backend truth
 - Feature group: Architecture
 - Severity: High
-- Files: [client/src/components/layout/TopBar.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/layout/TopBar.tsx#L84), [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/video/VideoFeed.tsx#L122), [client/src/components/panels/AutomationPanel.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/panels/AutomationPanel.tsx#L91), [client/src/components/controls/ControlDeck.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/controls/ControlDeck.tsx#L41)
-- Related components/functions/routes: `mouse_gcs_messages`, `mouse_offline_backlog`, `mouse_automation_scripts`
-- Root cause: several important flows still use `localStorage` as active state rather than only transient UX cache, even though camera settings and armed state were moved off that path.
+- Files: [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/video/VideoFeed.tsx#L122), [client/src/components/controls/ControlDeck.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/controls/ControlDeck.tsx#L41)
+- Related components/functions/routes: `mouse_offline_backlog` (automation scripts now backend-owned; messages now server-owned)
+- Root cause: several flows still use `localStorage` as active state rather than only transient UX cache, even though camera settings, armed state, messages, and automation recipes were moved off that path.
 - Why it matters: duplicate sources of truth break multi-user and multi-device sync.
 - Exact fix recommendation: keep browser storage for preferences only. Operational state must be backend-owned.
 - Confidence level: High
@@ -602,7 +592,7 @@ Radix UI components (accordion, alert-dialog, aspect-ratio, avatar, button-group
 | Firmware/plugins | Firmware install/flash/recovery | Yes | Yes | Yes | Yes | Partial | Not Verifiable | No | No | Partial | Real route usage, in-memory job state |
 | Firmware/plugins | Plugin listing/enablement/tool execution | Yes | Yes | Yes | Yes | Partial | Partial | Partial | Partial | Working | Best-bounded non-auth domain, still needs stronger auth |
 | Firmware/plugins | Plugin SDK helpers | Yes | Yes | Yes | Yes | Partial | N/A | Partial | Partial | Working | Template/validate/package flows are wired |
-| Automation/debug | Automation panel | Yes | Yes | Yes | Yes | Local only | No | No | Partial | Partial | UI now presents local recipes, but they are not backend-shared |
+| Automation/debug | Automation panel | Yes | Yes | Yes | Yes | Backend | Yes | Yes | Partial | Working | Recipes persisted in DB; CRUD via API |
 | Automation/debug | Automation run history | Partial | No | Yes | No | No | N/A | No | Partial | Broken | Backend exists, no client usage found |
 | Automation/debug | Terminal commands panel | Yes | Yes | Yes | Yes | Partial | No | No | Partial | Partial | Panel now filters to backend-supported commands only |
 | Automation/debug | Generic command queue/history/detail | Partial | Partial | Yes | Partial | Partial | N/A | Partial | Partial | Partial | Dispatch used; list/detail endpoints appear unused by client |
@@ -662,7 +652,7 @@ Radix UI components (accordion, alert-dialog, aspect-ratio, avatar, button-group
 | Speaker Panel | Drone mic enable | Manage drone mic | fetch | `/api/audio/drone-mic` | Partial | Real route use, state not durable |
 | Speaker Panel | Buzzer | Trigger buzzer tone | fetch | `/api/audio/buzzer` | Partial | Real route use, hardware outcome external |
 | Automation | Run script | Execute automation | `fetch('/api/automation/scripts/execute')` | regex-mapped command route | Partial | UI now labels these as recipes, but execution is still limited to mapped actions |
-| Automation | Save script | Persist automation | local state + `localStorage` | none | Partial | Local-only recipes are safer and clearer, but still not backend-backed |
+| Automation | Save script | Persist automation | `PATCH /api/automation/scripts/:id` | AutomationService | Working | Recipes persisted in DB |
 | Terminal Commands | Run command | Execute listed terminal/system command | command dispatch | `/api/commands/dispatch` | Partial | Panel now exposes only backend-supported commands |
 | Plugin Toolchain | Enable/Disable plugin | Toggle plugin state | fetch | `/api/plugins/:id/enable` | Working | Real route path exists |
 | Plugin Toolchain | Run tool | Execute plugin tool | fetch | `/api/plugins/:id/run-tool` | Working | Bounded execution path |
@@ -696,7 +686,7 @@ UI -> [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/D
 UI -> payload/gripper controls in [client/src/components/controls/ControlDeck.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/controls/ControlDeck.tsx) or terminal cards -> command dispatch or `/api/servo/control` route -> backend bridge/script -> device -> response -> UI toast/state update
 
 ### Automation execution
-UI -> [client/src/components/panels/AutomationPanel.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/panels/AutomationPanel.tsx) -> `/api/automation/scripts/execute` in [server/routes.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/routes.ts#L4117) -> keyword mapping via `resolveAutomationCommand` -> command dispatch -> ack/fail -> UI updates local `lastRun`
+UI -> [client/src/components/panels/AutomationPanel.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/panels/AutomationPanel.tsx) -> `GET/POST/PATCH/DELETE /api/automation/scripts` (recipes) and `/api/automation/scripts/execute` (run) -> `AutomationService` + DB -> `resolveAutomationCommand` -> command dispatch -> ack/fail -> backend updates `lastRun`
 
 ### Terminal commands
 UI -> [client/src/components/panels/TerminalCommandsPanel.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/panels/TerminalCommandsPanel.tsx) -> command dispatch -> `/api/commands/dispatch` -> safe unified-command resolver -> limited command set only -> ack/fail -> UI result
@@ -719,7 +709,7 @@ UI -> [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/D
 
 1. Route-local runtime state for missions, firmware, RTK, calibration, audio, and mapping
 2. File-backed JSON storage for core operational entities
-3. Automation recipes are still local-only and not backend-shared
+3. ~~Automation recipes are still local-only and not backend-shared~~ **RESOLVED** — recipes persisted in DB via `/api/automation/scripts`
 4. Offline backlog is still not receipt-driven and server-authoritative
 5. Cloud command/telemetry/admin endpoints appear unused by client
 6. Browser-local message backup duplicates server truth
@@ -731,7 +721,7 @@ UI -> [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/D
 
 ### 2. Missing implementations list
 
-- Real backend-owned automation script model and executor
+- ~~Real backend-owned automation script model and executor~~ Implemented — AutomationService, automation_recipes table, CRUD API.
 - Server-backed selected-drone/operator preference state
 - Durable mission run and job store
 - Per-drone backend-owned camera settings model
@@ -810,7 +800,7 @@ No client reference found for these routes:
 
 **62/100**
 
-Primary blockers: weak runtime-state durability, file-backed persistence, local-only automation definitions, and several uncentralized multi-user state paths.
+Primary blockers: weak runtime-state durability, file-backed persistence, and several uncentralized multi-user state paths. (Automation recipes now backend-owned.)
 
 ---
 

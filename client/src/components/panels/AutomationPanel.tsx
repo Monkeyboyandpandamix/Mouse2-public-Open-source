@@ -70,16 +70,8 @@ export function AutomationPanel() {
 
   // Rule-based command mapping: recipes map triggers to backend-supported actions only.
   
-  const [scripts, setScripts] = useState<AutomationScript[]>(() => {
-    const saved = localStorage.getItem("mouse_automation_scripts");
-    if (!saved) return defaultScripts;
-    try {
-      const parsed = JSON.parse(saved);
-      return Array.isArray(parsed) ? parsed : defaultScripts;
-    } catch {
-      return defaultScripts;
-    }
-  });
+  const [scripts, setScripts] = useState<AutomationScript[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedScript, setSelectedScript] = useState<AutomationScript | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedScript, setEditedScript] = useState<AutomationScript | null>(null);
@@ -87,8 +79,19 @@ export function AutomationPanel() {
   const lastTriggerRunRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
-    localStorage.setItem("mouse_automation_scripts", JSON.stringify(scripts));
-  }, [scripts]);
+    if (!canAutomate) return;
+    fetch("/api/automation/scripts")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.success && Array.isArray(data?.scripts)) {
+          setScripts(data.scripts.map(apiRecipeToScript));
+        }
+      })
+      .catch((err) => {
+        reportApiError(err, "Failed to load automation scripts");
+      })
+      .finally(() => setLoading(false));
+  }, [canAutomate]);
 
   const executeScriptNow = async (script: AutomationScript, reason: string) => {
     const connectionString = String(selectedDrone?.connectionString || "").trim();
@@ -230,55 +233,105 @@ export function AutomationPanel() {
     );
   }
 
-  const handleCreateNew = () => {
-    const newScript: AutomationScript = {
-      id: Date.now().toString(),
+  const handleCreateNew = async () => {
+    const payload = {
       name: "New Recipe",
       description: "Enter description",
       trigger: "manual",
       enabled: false,
-      lastRun: null,
       code: `// Supported backend actions only
 // Examples: arm, disarm, land, rtl, takeoff(20)
 rtl`
     };
-    setScripts(prev => [...prev, newScript]);
-    setSelectedScript(newScript);
-    setEditedScript(newScript);
-    setIsEditing(true);
-    toast.success("New script created");
+    try {
+      const res = await fetch("/api/automation/scripts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.script) throw new Error(data?.error || "Create failed");
+      const newScript = apiRecipeToScript(data.script);
+      setScripts(prev => [...prev, newScript]);
+      setSelectedScript(newScript);
+      setEditedScript(newScript);
+      setIsEditing(true);
+      toast.success("New script created");
+    } catch (err) {
+      reportApiError(err, "Failed to create script");
+    }
   };
 
-  const handleSaveScript = () => {
+  const handleSaveScript = async () => {
     if (!editedScript) return;
     if (!isSupportedAutomationRecipe(editedScript.code, editedScript.trigger)) {
-      toast.error("This panel stores local automation recipes, not arbitrary executable scripts. Save only backend-supported actions.");
+      toast.error("Save only backend-supported actions: arm, disarm, land, rtl, takeoff.");
       return;
     }
-    setScripts(prev => prev.map(s => s.id === editedScript.id ? editedScript : s));
-    setSelectedScript(editedScript);
-    setIsEditing(false);
-    toast.success("Script saved");
+    try {
+      const res = await fetch(`/api/automation/scripts/${editedScript.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: editedScript.name,
+          description: editedScript.description,
+          trigger: editedScript.trigger,
+          code: editedScript.code,
+          enabled: editedScript.enabled,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.script) throw new Error(data?.error || "Save failed");
+      const updated = apiRecipeToScript(data.script);
+      setScripts(prev => prev.map(s => s.id === editedScript.id ? updated : s));
+      setSelectedScript(updated);
+      setEditedScript(updated);
+      setIsEditing(false);
+      toast.success("Script saved");
+    } catch (err) {
+      reportApiError(err, "Failed to save script");
+    }
   };
 
-  const handleDeleteScript = (id: string) => {
+  const handleDeleteScript = async (id: string) => {
     if (deleteConfirmId === id) {
-      setScripts(prev => prev.filter(s => s.id !== id));
-      if (selectedScript?.id === id) {
-        setSelectedScript(null);
-        setEditedScript(null);
+      try {
+        const res = await fetch(`/api/automation/scripts/${id}`, { method: "DELETE" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || "Delete failed");
+        setScripts(prev => prev.filter(s => s.id !== id));
+        if (selectedScript?.id === id) {
+          setSelectedScript(null);
+          setEditedScript(null);
+        }
+        setDeleteConfirmId(null);
+        toast.success("Script deleted");
+      } catch (err) {
+        reportApiError(err, "Failed to delete script");
       }
-      setDeleteConfirmId(null);
-      toast.success("Script deleted");
     } else {
       setDeleteConfirmId(id);
       setTimeout(() => setDeleteConfirmId(null), 3000);
     }
   };
 
-  const handleToggleScript = (id: string, enabled: boolean) => {
+  const handleToggleScript = async (id: string, enabled: boolean) => {
+    const script = scripts.find(s => s.id === id);
+    if (!script) return;
     setScripts(prev => prev.map(s => s.id === id ? { ...s, enabled } : s));
-    toast.success(enabled ? "Script enabled" : "Script disabled");
+    try {
+      const res = await fetch(`/api/automation/scripts/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Update failed");
+      toast.success(enabled ? "Script enabled" : "Script disabled");
+    } catch (err) {
+      reportApiError(err, "Failed to update script");
+      setScripts(prev => prev.map(s => s.id === id ? { ...s, enabled: !enabled } : s));
+    }
   };
 
   const handleRunScript = (script: AutomationScript) => {
@@ -320,7 +373,13 @@ rtl`
 
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-2">
-            {scripts.map(script => (
+            {loading ? (
+              <div className="flex items-center justify-center py-8 text-muted-foreground">
+                <RefreshCw className="h-5 w-5 animate-spin mr-2" />
+                Loading recipes…
+              </div>
+            ) : (
+            scripts.map(script => (
               <Card
                 key={script.id}
                 className={`cursor-pointer transition-colors ${
@@ -387,7 +446,8 @@ rtl`
                   </div>
                 </CardContent>
               </Card>
-            ))}
+            ))
+            )}
           </div>
         </ScrollArea>
       </div>
@@ -505,7 +565,7 @@ rtl`
             <div className="text-center">
               <Code className="h-16 w-16 mx-auto mb-4 opacity-50" />
               <p className="text-lg font-medium">Select a recipe to view</p>
-              <p className="text-sm">Or create a new local automation recipe</p>
+              <p className="text-sm">Or create a new recipe</p>
             </div>
           </div>
         )}

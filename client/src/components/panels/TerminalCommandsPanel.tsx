@@ -861,15 +861,14 @@ const defaultCommands: SystemCommand[] = [
   },
 ];
 
+const filterSupported = (list: SystemCommand[]) =>
+  list.filter((cmd) => isBackendSupportedTerminalCommand(String(cmd?.command || "")));
+
 export function TerminalCommandsPanel() {
   const { hasPermission } = usePermissions();
   const canRunTerminal = hasPermission('run_terminal');
-  const [commands, setCommands] = useState<SystemCommand[]>(() => {
-    const saved = localStorage.getItem('mouse_terminal_commands');
-    const source = saved ? JSON.parse(saved) : defaultCommands;
-    const list = Array.isArray(source) ? source : defaultCommands;
-    return list.filter((cmd) => isBackendSupportedTerminalCommand(String(cmd?.command || "")));
-  });
+  const [commands, setCommands] = useState<SystemCommand[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedCommand, setSelectedCommand] = useState<SystemCommand | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editedCommand, setEditedCommand] = useState<SystemCommand | null>(null);
@@ -884,8 +883,36 @@ export function TerminalCommandsPanel() {
   });
 
   useEffect(() => {
-    localStorage.setItem('mouse_terminal_commands', JSON.stringify(commands));
-  }, [commands]);
+    if (!canRunTerminal) {
+      setLoading(false);
+      return;
+    }
+    fetch("/api/terminal-commands")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.success && Array.isArray(data?.commands)) {
+          setCommands(filterSupported(data.commands));
+        } else {
+          setCommands(filterSupported(defaultCommands));
+        }
+      })
+      .catch(() => setCommands(filterSupported(defaultCommands)))
+      .finally(() => setLoading(false));
+  }, [canRunTerminal]);
+
+  const persistCommands = useCallback(async (nextCommands: SystemCommand[]) => {
+    try {
+      const res = await fetch("/api/terminal-commands", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ commands: nextCommands }),
+      });
+      if (!res.ok) throw new Error("Persist failed");
+    } catch (e) {
+      console.warn("[TerminalCommands] persist failed:", e);
+      toast.error("Failed to save commands");
+    }
+  }, []);
 
   const handleSave = () => {
     if (!editedCommand) return;
@@ -893,9 +920,11 @@ export function TerminalCommandsPanel() {
       toast.error("This panel only supports commands with a safe backend implementation.");
       return;
     }
-    setCommands(prev => prev.map(c => c.id === editedCommand.id ? editedCommand : c));
+    const next = commands.map(c => c.id === editedCommand.id ? editedCommand : c);
+    setCommands(next);
     setSelectedCommand(editedCommand);
     setIsEditing(false);
+    void persistCommands(next);
     toast.success("Command saved");
   };
 
@@ -958,8 +987,9 @@ export function TerminalCommandsPanel() {
 
   const handleReset = () => {
     if (confirm("Reset all commands to defaults? Your customizations will be lost.")) {
-      setCommands(defaultCommands.filter((cmd) => isBackendSupportedTerminalCommand(cmd.command)));
-      localStorage.removeItem('mouse_terminal_commands');
+      const defaults = filterSupported(defaultCommands);
+      setCommands(defaults);
+      void persistCommands(defaults);
       toast.success("Commands reset to defaults");
     }
   };
@@ -980,17 +1010,21 @@ export function TerminalCommandsPanel() {
       category: newCommand.category,
       command: newCommand.command,
     };
-    setCommands(prev => [...prev, cmd]);
+    const next = [...commands, cmd];
+    setCommands(next);
     setNewCommand({ name: "", description: "", category: "system", command: "" });
     setShowAddCommand(false);
     setActiveCategory(newCommand.category);
+    void persistCommands(next);
     toast.success(`Command "${cmd.name}" added`);
   };
 
   const handleDeleteCommand = (id: string) => {
     if (id.startsWith('custom_')) {
-      setCommands(prev => prev.filter(c => c.id !== id));
+      const next = commands.filter(c => c.id !== id);
+      setCommands(next);
       if (selectedCommand?.id === id) setSelectedCommand(null);
+      void persistCommands(next);
       toast.success("Command deleted");
     } else {
       toast.error("Cannot delete built-in commands");
@@ -1012,6 +1046,18 @@ export function TerminalCommandsPanel() {
 
   const categories = ['arming', 'flight', 'navigation', 'telemetry', 'camera', 'video', 'system'];
   const filteredCommands = commands.filter(c => c.category === activeCategory);
+
+  // Show loading
+  if (loading) {
+    return (
+      <div className="h-full flex items-center justify-center p-6 bg-background">
+        <div className="flex flex-col items-center gap-4 text-muted-foreground">
+          <RefreshCw className="h-8 w-8 animate-spin" />
+          <p className="text-sm">Loading commands...</p>
+        </div>
+      </div>
+    );
+  }
 
   // Show permission denied if user doesn't have access
   if (!canRunTerminal) {
@@ -1123,7 +1169,13 @@ export function TerminalCommandsPanel() {
         {/* Command List */}
         <ScrollArea className="flex-1">
           <div className="p-2 space-y-2">
-            {filteredCommands.map(cmd => (
+            {loading ? (
+              <div className="flex items-center justify-center py-8 text-muted-foreground">
+                <RefreshCw className="h-5 w-5 animate-spin mr-2" />
+                Loading commands...
+              </div>
+            ) : (
+            filteredCommands.map(cmd => (
               <Card
                 key={cmd.id}
                 className={`cursor-pointer transition-colors ${

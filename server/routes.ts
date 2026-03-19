@@ -115,7 +115,7 @@ import {
   removeAccount,
   isOAuthConfigured 
 } from "./googleAuth";
-import { missionExecutionService, automationService, operatorPreferenceService, fcStateService } from "./services/index.js";
+import { missionExecutionService, automationService, terminalCommandPresetService, operatorPreferenceService, fcStateService, mapping3DService } from "./services/index.js";
 import { registerDebugRoutes } from "./routes/debug";
 import {
   requestSession,
@@ -679,6 +679,27 @@ const loadRuntimeState = async () => {
       Object.assign(mappingState, parsed.mappingState);
       mappingState.coverageBins = new Set(Array.isArray(parsed.mappingState.coverageBins) ? parsed.mappingState.coverageBins : []);
       mappingState.trajectory = Array.isArray(parsed.mappingState.trajectory) ? parsed.mappingState.trajectory : [];
+    }
+
+    if (USE_DB) {
+      const s = mapping3DService.getSession();
+      if (s) {
+        mappingState.active = s.active;
+        mappingState.framesCaptured = s.framesCaptured;
+        mappingState.coveragePercent = s.coveragePercent;
+        mappingState.confidence = s.confidence;
+        mappingState.trackX = s.trackX;
+        mappingState.trackY = s.trackY;
+        mappingState.distanceEstimate = s.distanceEstimate;
+        mappingState.coverageBins = new Set(s.coverageBins || []);
+        mappingState.trajectory = s.trajectory || [];
+        mappingState.lastFrameAt = s.lastFrameAt;
+      }
+      const latest = mapping3DService.getLatestModel();
+      if (latest) {
+        mappingState.lastModelPath = latest.jsonPath;
+        mappingState.lastModelGeneratedAt = latest.generatedAt || latest.createdAt;
+      }
     }
   } catch (error) {
     console.warn("[runtime-state] failed to load runtime state:", (error as any)?.message || String(error));
@@ -2196,6 +2217,7 @@ export async function registerRoutes(
   app.use("/api/chat-users", requireAuth);
   app.use("/api/operator", requireAuth);
   app.use("/api/automation", requirePermission("automation_scripts"));
+  app.use("/api/terminal-commands", requirePermission("run_terminal"));
   app.use("/api/settings", requirePermission("system_settings"));
   app.use("/api/missions", requirePermission("mission_planning"));
   app.use("/api/waypoints", requirePermission("mission_planning"));
@@ -2517,6 +2539,24 @@ export async function registerRoutes(
       ),
     );
 
+    if (USE_DB && mappingState.framesCaptured % 5 === 0) {
+      try {
+        mapping3DService.upsertSession({
+          active: mappingState.active,
+          framesCaptured: mappingState.framesCaptured,
+          coveragePercent: mappingState.coveragePercent,
+          confidence: mappingState.confidence,
+          trackX: mappingState.trackX,
+          trackY: mappingState.trackY,
+          distanceEstimate: mappingState.distanceEstimate,
+          coverageBins: Array.from(mappingState.coverageBins),
+          trajectory: [...mappingState.trajectory],
+          lastFrameAt: mappingState.lastFrameAt,
+        });
+      } catch (e) {
+        console.warn("[mapping] DB upsert skipped:", (e as any)?.message);
+      }
+    }
     res.json({
       success: true,
       framesCaptured: mappingState.framesCaptured,
@@ -2527,6 +2567,9 @@ export async function registerRoutes(
   });
 
   app.post("/api/mapping/3d/reset", async (_req, res) => {
+    if (USE_DB) {
+      mapping3DService.resetSession();
+    }
     mappingState.framesCaptured = 0;
     mappingState.coveragePercent = 0;
     mappingState.confidence = 0;
@@ -2552,59 +2595,55 @@ export async function registerRoutes(
       });
     }
 
-    const mapDir = path.resolve(process.cwd(), "data", "3d-maps");
-    mkdirSync(mapDir, { recursive: true });
-    const ts = new Date();
-    const stamp = ts.toISOString().replace(/[:.]/g, "-");
-    const modelPath = path.join(mapDir, `map3d-${stamp}.json`);
-
-    const pointCloud = mappingState.trajectory.map((point, index) => ({
-      id: index + 1,
-      x: point.x,
-      y: point.y,
-      z: Math.round(Math.sin(index / 14) * 5 * 100) / 100,
-      confidence: Math.round(point.conf * 100),
-    }));
-
-    const model = {
-      type: "local-photogrammetry-map",
-      generatedAt: ts.toISOString(),
-      frameCount: mappingState.framesCaptured,
+    const session = {
+      id: "default",
+      active: mappingState.active,
+      framesCaptured: mappingState.framesCaptured,
       coveragePercent: mappingState.coveragePercent,
       confidence: mappingState.confidence,
-      estimatedDistance: Math.round(mappingState.distanceEstimate * 100) / 100,
+      trackX: mappingState.trackX,
+      trackY: mappingState.trackY,
+      distanceEstimate: mappingState.distanceEstimate,
+      coverageBins: Array.from(mappingState.coverageBins),
       trajectory: mappingState.trajectory,
-      pointCloud,
-      metadata: {
-        standalone: true,
-        externalServices: false,
-        generator: "M.O.U.S.E. onboard local mapper",
-      },
+      lastFrameAt: mappingState.lastFrameAt,
+      updatedAt: new Date().toISOString(),
     };
 
-    await writeFile(modelPath, JSON.stringify(model, null, 2), "utf-8");
-    mappingState.lastModelPath = modelPath;
-    mappingState.lastModelGeneratedAt = ts.toISOString();
+    const { model } = mapping3DService.createModel(session);
+    mappingState.lastModelPath = model.jsonPath;
+    mappingState.lastModelGeneratedAt = model.generatedAt;
     scheduleRuntimeStatePersist();
     broadcast("mapping_3d_reconstructed", {
-      modelPath,
-      generatedAt: mappingState.lastModelGeneratedAt,
-      frameCount: mappingState.framesCaptured,
-      coveragePercent: mappingState.coveragePercent,
-      confidence: mappingState.confidence,
+      modelPath: model.jsonPath,
+      generatedAt: model.generatedAt,
+      frameCount: model.framesCaptured,
+      coveragePercent: model.coveragePercent,
+      confidence: model.confidence,
     });
 
     res.json({
       success: true,
-      modelPath,
-      generatedAt: mappingState.lastModelGeneratedAt,
-      frameCount: mappingState.framesCaptured,
-      coveragePercent: mappingState.coveragePercent,
-      confidence: mappingState.confidence,
+      modelPath: model.jsonPath,
+      plyPath: model.plyPath,
+      generatedAt: model.generatedAt,
+      frameCount: model.framesCaptured,
+      coveragePercent: model.coveragePercent,
+      confidence: model.confidence,
     });
   });
 
   app.get("/api/mapping/3d/model/latest", async (_req, res) => {
+    if (USE_DB) {
+      const latest = mapping3DService.getLatestModel();
+      if (latest) {
+        const content = mapping3DService.getModelJson(latest.id);
+        if (content) {
+          res.setHeader("Content-Type", "application/json");
+          return res.send(content);
+        }
+      }
+    }
     if (!mappingState.lastModelPath) {
       return res.status(404).json({ success: false, error: "No 3D model generated yet" });
     }
@@ -2615,6 +2654,22 @@ export async function registerRoutes(
     } catch {
       res.status(404).json({ success: false, error: "Latest model file is unavailable" });
     }
+  });
+
+  app.get("/api/mapping/3d/models", async (_req, res) => {
+    const limit = Math.min(50, Math.max(1, Number((_req as any).query?.limit) || 20));
+    const models = USE_DB ? mapping3DService.listModels(limit) : [];
+    res.json({ success: true, models });
+  });
+
+  app.get("/api/mapping/3d/model/:id/ply", async (req, res) => {
+    const id = String(req.params?.id || "").trim();
+    if (!id) return res.status(400).json({ success: false, error: "Model id required" });
+    const content = USE_DB ? mapping3DService.getModelPly(id) : null;
+    if (!content) return res.status(404).json({ success: false, error: "PLY not found" });
+    res.setHeader("Content-Type", "text/plain");
+    res.setHeader("Content-Disposition", `attachment; filename="${id}.ply"`);
+    res.send(content);
   });
 
   app.post("/api/mavlink/command", async (req, res) => {
@@ -4543,6 +4598,21 @@ export async function registerRoutes(
     const all = getAutomationRuns().reverse();
     const filtered = scriptId ? all.filter((run) => run.scriptId === scriptId) : all;
     return res.json({ success: true, runs: filtered.slice(0, limit) });
+  });
+
+  app.get("/api/terminal-commands", async (req: any, res) => {
+    const session = req.serverSession as ServerSession | undefined;
+    if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+    const preset = terminalCommandPresetService.getPreset(session.userId);
+    return res.json({ success: true, commands: preset?.commands ?? [] });
+  });
+
+  app.put("/api/terminal-commands", async (req: any, res) => {
+    const session = req.serverSession as ServerSession | undefined;
+    if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+    const commands = Array.isArray(req.body?.commands) ? req.body.commands : [];
+    const preset = terminalCommandPresetService.putPreset(session.userId, commands);
+    return res.json({ success: true, commands: preset.commands });
   });
 
   app.post("/api/mavlink/swarm/action", async (req, res) => {
