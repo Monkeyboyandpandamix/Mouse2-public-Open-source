@@ -182,9 +182,11 @@ export function VideoFeed() {
   
   useEffect(() => {
     let cancelled = false;
+    const droneId = selectedDrone?.id;
     const loadCameraSettings = async () => {
       try {
-        const response = await fetch("/api/camera-settings");
+        const url = droneId ? `/api/camera-settings?droneId=${encodeURIComponent(droneId)}` : "/api/camera-settings";
+        const response = await fetch(url);
         if (!response.ok) return;
         const data = await response.json().catch(() => null);
         if (!data || cancelled) return;
@@ -212,15 +214,17 @@ export function VideoFeed() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [selectedDrone?.id]);
 
   useEffect(() => {
     if (!cameraSettingsHydratedRef.current) return;
     const timer = window.setTimeout(() => {
-      void fetch("/api/camera-settings", {
+      const droneId = selectedDrone?.id;
+      void fetch(droneId ? `/api/camera-settings?droneId=${encodeURIComponent(droneId)}` : "/api/camera-settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          droneId: droneId || undefined,
           activeCamera: activeCam,
           gimbalPitch,
           gimbalYaw,
@@ -757,6 +761,36 @@ export function VideoFeed() {
           frameWidth: width,
           frameHeight: height,
           timestamp: Date.now(),
+        },
+      }),
+    );
+
+    // Feed camera features to ML stabilization for ground distance, lift-off, environmental awareness
+    const totalPixels = width * height;
+    let brightness = 128;
+    if (totalPixels > 0 && currentFrame.data.length >= 4) {
+      let sum = 0;
+      let samples = 0;
+      const step = Math.max(4, Math.floor((width * height * 4) / 1000));
+      for (let i = 0; i + 2 < currentFrame.data.length; i += step) {
+        sum += (currentFrame.data[i] + currentFrame.data[i + 1] + currentFrame.data[i + 2]) / 3;
+        samples++;
+      }
+      brightness = samples > 0 ? sum / samples : 128;
+    }
+    const avgFeatureSize = objects.length > 0
+      ? objects.reduce((s, o) => s + o.width * o.height, 0) / objects.length
+      : 0;
+    window.dispatchEvent(
+      new CustomEvent("camera-features", {
+        detail: {
+          avgFeatureSize,
+          featureCount: objects.length,
+          frameWidth: width,
+          frameHeight: height,
+          opticalFlowX: globalMotionRef.current.dx,
+          opticalFlowY: globalMotionRef.current.dy,
+          brightness,
         },
       }),
     );
@@ -1648,11 +1682,12 @@ export function VideoFeed() {
             <span className="text-red-500">REC {formatDuration(recordingDuration)}</span>
           ) : (
             <span>LIVE</span>
-          )}: {
-            activeCam === 'gimbal' ? (thermalMode ? 'THERMAL' : cameraConfig.model) : 
-            activeCam === 'thermal' ? `THERMAL ${cameraConfig.thermalResolution}` : 
-            activeCam === 'webcam' ? 'LAPTOP CAM' : 
-            activeCam === 'stream' ? 'RTSP STREAM' : 'FPV'
+          ) }: {
+            activeCam === 'webcam' ? 'LAPTOP CAM (Browser capture)' : (
+              (activeCam === 'gimbal' ? (thermalMode ? 'THERMAL' : cameraConfig.model) : 
+              activeCam === 'thermal' ? `THERMAL ${cameraConfig.thermalResolution}` : 
+              activeCam === 'stream' ? 'RTSP STREAM' : 'FPV') + (showPlaceholder && activeCam !== 'stream' ? ' (Demo — not live drone feed)' : ' (Drone camera)')
+            )
           }
           {zoom[0] > 1 && <span className="text-amber-500">{zoom[0].toFixed(1)}x</span>}
         </div>

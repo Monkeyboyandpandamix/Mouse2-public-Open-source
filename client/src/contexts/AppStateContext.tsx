@@ -9,6 +9,7 @@ import {
   writeStoredSelectedDrone,
   writeStoredSession,
 } from "@/lib/clientState";
+import { dronesApi, operatorPreferencesApi } from "@/lib/api";
 
 interface AppStateContextValue {
   session: ClientSession;
@@ -42,8 +43,14 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
     setSelectedDrone(drone);
     if (drone) {
       writeStoredSelectedDrone(drone);
+      if (session.isLoggedIn) {
+        operatorPreferencesApi.update({ selectedDroneId: drone.id }).catch(() => {});
+      }
     } else {
       clearStoredSelectedDrone();
+      if (session.isLoggedIn) {
+        operatorPreferencesApi.update({ selectedDroneId: null }).catch(() => {});
+      }
     }
   };
 
@@ -86,6 +93,21 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("drone-selected", handleDroneChange);
     };
   }, []);
+
+  // Fetch backend-owned preferences on mount when logged in
+  useEffect(() => {
+    if (!session.isLoggedIn) return;
+    operatorPreferencesApi
+      .get()
+      .then((prefs) => {
+        if (prefs?.selectedDroneId) {
+          dronesApi.get(prefs.selectedDroneId).then((drone) => {
+            if (drone) setSelectedDrone(drone as Drone);
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }, [session.isLoggedIn]);
 
   const value = useMemo<AppStateContextValue>(() => ({
     session,

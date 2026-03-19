@@ -174,11 +174,8 @@ export function TelemetryPanel() {
     return R * c;
   };
   
-  // Track drone arm state - only update telemetry when armed
-  const [isArmed, setIsArmed] = useState(() => {
-    const saved = localStorage.getItem('mouse_drone_armed');
-    return saved ? JSON.parse(saved) : false;
-  });
+  // Track drone arm state - sourced from telemetry/backend, not localStorage
+  const [isArmed, setIsArmed] = useState(false);
 
   useEffect(() => {
     const handleMotorCountChange = (e: CustomEvent) => {
@@ -316,6 +313,7 @@ export function TelemetryPanel() {
     }
     if (typeof data.batteryCurrent === "number") setBatteryCurrent(Math.max(0, data.batteryCurrent));
     if (typeof data.gpsSatellites === "number") setGpsSatellites(Math.max(0, Math.round(data.gpsSatellites)));
+    if (typeof data.armed === "boolean") setIsArmed(data.armed);
     if (data.gpsStatus === "3d_fix" || data.gpsStatus === "2d_fix" || data.gpsStatus === "no_fix") {
       setGpsStatus(data.gpsStatus as "no_fix" | "2d_fix" | "3d_fix");
     } else if (data.gpsFixType === 3) {
@@ -523,6 +521,9 @@ export function TelemetryPanel() {
               )
             ) : (
               <Badge variant="outline" className="text-muted-foreground text-[8px] px-1.5 py-0">OFFLINE</Badge>
+            )}
+            {(rawTelemetry as { source?: string } | null)?.source === "sim" && (
+              <Badge variant="secondary" className="text-amber-600 bg-amber-500/20 text-[8px] px-1.5 py-0 border-amber-500/30">SIM</Badge>
             )}
           </span>
           <button 

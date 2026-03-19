@@ -473,8 +473,13 @@ export default function Home() {
                   </Button>
                 )}
               </div>
-              <div className="mt-3 sm:mt-4 p-2 sm:p-3 bg-amber-500/10 border border-amber-500/30 rounded text-[10px] sm:text-xs text-amber-500">
-                <strong>Note:</strong> For best 3D reconstruction, lock gimbal to nadir position.
+              <div className="mt-3 sm:mt-4 space-y-2">
+                <div className="p-2 sm:p-3 bg-amber-500/10 border border-amber-500/30 rounded text-[10px] sm:text-xs text-amber-500">
+                  <strong>Note:</strong> For best 3D reconstruction, lock gimbal to nadir position.
+                </div>
+                <div className="p-2 sm:p-3 bg-muted/50 border border-border rounded text-[10px] sm:text-xs text-muted-foreground">
+                  Lightweight local reconstruction — not a production mapping pipeline.
+                </div>
               </div>
             </div>
           </div>

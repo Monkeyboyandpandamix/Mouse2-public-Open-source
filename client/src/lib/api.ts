@@ -84,6 +84,19 @@ export const waypointsApi = {
     apiFetch<{ success: boolean }>(`/api/waypoints/${id}`, { method: "DELETE" }),
 };
 
+// Operator preferences (backend-owned selected drone)
+export const operatorPreferencesApi = {
+  get: () =>
+    apiFetch<{ selectedDroneId: string | null; cameraSettings?: Record<string, unknown> | null }>(
+      "/api/operator/preferences"
+    ),
+  update: (data: { selectedDroneId?: string | null }) =>
+    apiFetch<{ selectedDroneId: string | null; cameraSettings?: Record<string, unknown> | null }>(
+      "/api/operator/preferences",
+      { method: "PATCH", body: JSON.stringify(data) }
+    ),
+};
+
 // Drones (GET /api/drones returns array directly)
 export const dronesApi = {
   list: () => apiFetch<unknown[]>("/api/drones"),
@@ -115,6 +128,12 @@ export const commandsApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  getLease: (connectionString: string) =>
+    apiFetch<{
+      lease: { heldBy: string; acquiredAt: number; expiresInMs: number } | null;
+      currentUserId: string;
+      hasLease: boolean;
+    }>(`/api/commands/lease?connectionString=${encodeURIComponent(connectionString)}`),
 };
 
 // Flight sessions

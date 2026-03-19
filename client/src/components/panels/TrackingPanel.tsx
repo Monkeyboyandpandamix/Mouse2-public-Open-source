@@ -10,6 +10,7 @@ import { Target, Users, Car, Box, AlertCircle, Lock, Unlock, Camera, Play, Squar
 import { useState, useCallback, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
+import { useDeviceContext } from "@/hooks/useDeviceContext";
 import * as tf from "@tensorflow/tfjs";
 import * as cocoSsd from "@tensorflow-models/coco-ssd";
 
@@ -71,6 +72,7 @@ const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(ma
 
 export function TrackingPanel() {
   const { hasPermission } = usePermissions();
+  const { isOnboard } = useDeviceContext();
   const canTrack = hasPermission('object_tracking');
   const [trackingActive, setTrackingActive] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -554,6 +556,45 @@ export function TrackingPanel() {
       trackedObjectsRef.current
     );
     
+    // Feed camera features to ML stabilization (ground distance, lift-off, environmental awareness)
+    if (canvasRef.current && video.videoWidth > 0) {
+      const ctx = canvasRef.current.getContext("2d");
+      if (ctx) {
+        canvasRef.current.width = video.videoWidth;
+        canvasRef.current.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        const frame = ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height);
+        const w = frame.width;
+        const h = frame.height;
+        let brightness = 128;
+        if (frame.data.length >= 4) {
+          let sum = 0, samples = 0;
+          const step = Math.max(4, Math.floor((w * h * 4) / 1000));
+          for (let i = 0; i + 2 < frame.data.length; i += step) {
+            sum += (frame.data[i] + frame.data[i + 1] + frame.data[i + 2]) / 3;
+            samples++;
+          }
+          brightness = samples > 0 ? sum / samples : 128;
+        }
+        const avgFeatureSize = trackedResults.length > 0
+          ? trackedResults.reduce((s, o) => s + (o.width ?? 0) * (o.height ?? 0), 0) / trackedResults.length
+          : 0;
+        window.dispatchEvent(
+          new CustomEvent("camera-features", {
+            detail: {
+              avgFeatureSize,
+              featureCount: trackedResults.length,
+              frameWidth: w,
+              frameHeight: h,
+              opticalFlowX: 0,
+              opticalFlowY: 0,
+              brightness,
+            },
+          }),
+        );
+      }
+    }
+    
     if (!mountedRef.current) return;
     setDetectedObjects(trackedResults);
   }, [isDetecting, assignDetectionsToTracks, runMotionDetection]);
@@ -963,7 +1004,19 @@ export function TrackingPanel() {
       <div className="w-96 overflow-y-auto p-4 bg-background space-y-4 border-r border-border">
         <div>
           <h2 className="text-xl font-bold tracking-tight font-sans">Object Tracking</h2>
-          <p className="text-sm text-muted-foreground">Computer vision target tracking</p>
+          <p className="text-sm text-muted-foreground">
+            Computer vision target tracking
+            {isOnboard ? (
+              <Badge variant="secondary" className="ml-2">Onboard tracking</Badge>
+            ) : (
+              <Badge variant="outline" className="ml-2">Browser demo mode</Badge>
+            )}
+          </p>
+          {!isOnboard && (
+            <p className="text-xs text-muted-foreground mt-1">
+              Runs in-browser with TensorFlow.js COCO-SSD — not a verified onboard drone tracking subsystem.
+            </p>
+          )}
         </div>
 
         <Card className="border-2 border-primary/50">

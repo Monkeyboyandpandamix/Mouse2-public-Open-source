@@ -760,10 +760,23 @@ export function MLStabilizationEngine() {
       }
     };
 
-    const onTelemetry = (e: CustomEvent<TelemetrySnapshot>) => {
+    const onTelemetry = (e: CustomEvent<TelemetrySnapshot & { accelX?: number; accelY?: number; accelZ?: number; gyroX?: number; gyroY?: number; gyroZ?: number }>) => {
       const d = e.detail;
       if (!d) return;
       telemetryRef.current = { ...telemetryRef.current, ...d };
+
+      // Derive IMU from telemetry when present (MAVLink RAW_IMU/SCALED_IMU or server sensor data)
+      const accelX = (d as any).accelX ?? (d as any).accel_x;
+      const accelY = (d as any).accelY ?? (d as any).accel_y;
+      const accelZ = (d as any).accelZ ?? (d as any).accel_z;
+      const gyroX = (d as any).gyroX ?? (d as any).gyro_x ?? (d as any).gyroP;
+      const gyroY = (d as any).gyroY ?? (d as any).gyro_y ?? (d as any).gyroQ;
+      const gyroZ = (d as any).gyroZ ?? (d as any).gyro_z ?? (d as any).gyroR;
+      if (typeof accelX === "number" && typeof accelY === "number" && typeof accelZ === "number" &&
+          typeof gyroX === "number" && typeof gyroY === "number" && typeof gyroZ === "number") {
+        imuRef.current = { accelX, accelY, accelZ, gyroX, gyroY, gyroZ };
+        kalmanRef.current.predict(0.02, [accelX, accelY, accelZ], [gyroX, gyroY, gyroZ]);
+      }
 
       if (d.attitude) {
         kalmanRef.current.updateAttitude(

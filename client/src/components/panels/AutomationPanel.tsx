@@ -51,52 +51,24 @@ function isSupportedAutomationRecipe(code: string, trigger: AutomationScript["tr
   return ["battery_low", "gps_lost", "disconnect", "landing", "takeoff"].includes(normalizedTrigger);
 }
 
-const defaultScripts: AutomationScript[] = [
-  {
-    id: "1",
-    name: "Auto-RTL on Low Battery",
-    description: "Automatically return to base when battery drops below 20%",
-    trigger: "battery_low",
-    enabled: true,
-    lastRun: new Date(Date.now() - 3600000).toISOString(),
-    code: `// Auto RTL on low battery
-if (telemetry.battery < 20) {
-  await drone.returnToBase();
-  notify("Low battery - returning home");
-}`
-  },
-  {
-    id: "2",
-    name: "Photo on Waypoint",
-    description: "Capture photo when reaching any waypoint",
-    trigger: "waypoint",
-    enabled: true,
-    lastRun: null,
-    code: `// Capture photo at waypoint
-await gimbal.setAngle(-90); // Nadir
-await camera.capture();
-log("Photo captured at waypoint " + waypoint.id);`
-  },
-  {
-    id: "3",
-    name: "GPS Denied Navigation",
-    description: "Switch to dead reckoning when GPS signal is lost",
-    trigger: "gps_lost",
-    enabled: true,
-    lastRun: null,
-    code: `// GPS lost - switch to backup navigation
-if (!gps.hasSignal) {
-  navigation.enableDeadReckoning();
-  navigation.useVisualOdometry(camera.feed);
-  notify("GPS lost - using visual navigation");
-}`
-  }
-];
+function apiRecipeToScript(r: { id: string; name: string; description?: string; trigger: string; code: string; enabled: boolean; lastRun?: string | null }): AutomationScript {
+  return {
+    id: r.id,
+    name: r.name,
+    description: r.description ?? "",
+    trigger: r.trigger as AutomationScript["trigger"],
+    enabled: Boolean(r.enabled),
+    lastRun: r.lastRun ?? null,
+    code: r.code,
+  };
+}
 
 export function AutomationPanel() {
   const { selectedDrone } = useAppState();
   const { hasPermission } = usePermissions();
   const canAutomate = hasPermission('automation_scripts');
+
+  // Rule-based command mapping: recipes map triggers to backend-supported actions only.
   
   const [scripts, setScripts] = useState<AutomationScript[]>(() => {
     const saved = localStorage.getItem("mouse_automation_scripts");
@@ -342,7 +314,7 @@ rtl`
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Local event recipes that map to a small safe backend action set
+            Rule-based command mapping — event recipes map to backend-supported actions only.
           </p>
         </div>
 

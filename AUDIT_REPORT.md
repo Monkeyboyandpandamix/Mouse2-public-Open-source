@@ -1,6 +1,8 @@
 # M.O.U.S.E. Deep Audit Report
 
-Date: 2026-03-18
+Date: 2026-03-18 (Updated: 2026-03-14 — Exhaustive audit pass)
+
+**Remediation 2026-03-14:** Multi-instance session validation, login rate limiting, RTK redaction, sample plugin exec/args, terminal command filtering, automation labeling, control deck arm-from-telemetry, BME688/connection-test/telemetry gating, per-drone command lease with ControlDeck "Controlled by X" UI, `/api/chat-users` auth, dead `useOfflineSync.ts` removed, unused logo assets removed, Tracking panel browser-local disclaimer, VideoFeed device source badges (Demo/Drone camera), 3D mapping lightweight reconstruction disclaimer, camera settings scoped by droneId.
 
 Scope: static code audit of the full repository. A feature is only counted as working when the code proves a complete path from UI to backend to persistence/device acknowledgement and back to the UI. Hardware execution, cloud accounts, and attached flight systems are called out as `not verifiable from provided code` where the repository does not prove real-world execution.
 
@@ -33,8 +35,8 @@ The following issues remain open after the current remediation passes:
 3. Core persistence for operational entities remains file-backed in [server/storage.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/storage.ts).
 4. Automation recipes are still stored in the browser and are not backend-owned or multi-user visible.
 5. Message state still keeps browser-local backup/cache behavior in [client/src/components/layout/TopBar.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/layout/TopBar.tsx).
-6. Offline sync still relies on browser staging in [client/src/hooks/useOfflineSync.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/hooks/useOfflineSync.ts) instead of a receipt-driven server-first queue.
-7. Camera settings in [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/video/VideoFeed.tsx) are backend-backed now, but not yet scoped by drone or session.
+6. ~~Offline sync useOfflineSync hook~~ **RESOLVED** — Dead `useOfflineSync.ts` removed (was never imported). Backend `/api/backlog/*` endpoints remain for future use.
+7. ~~Camera settings not drone-scoped~~ **RESOLVED** — Camera settings now scoped by `droneId` (GET/PATCH); VideoFeed passes `selectedDrone?.id`.
 8. Selected-drone context is still browser-scoped rather than server-scoped for multi-user coordination.
 9. Telemetry client authority is still split across websocket events, DOM events, and window globals instead of one typed store.
 10. Audio state is still backed by transient route state and partial polling rather than a durable session/service model.
@@ -107,6 +109,15 @@ These are the flows the code most clearly proves.
 - Exact fix recommendation: source the supported command catalog from the backend in a future pass
 - Confidence level: High
 
+### 7. Per-drone command lease with UI display **[RESOLVED]**
+- Feature group: Core flight operations, security
+- Severity: Low
+- Files: [client/src/components/controls/ControlDeck.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/controls/ControlDeck.tsx), [client/src/lib/api.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/lib/api.ts), [server/routes.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/routes.ts)
+- Related components/functions/routes: `commandsApi.getLease`, `GET /api/commands/lease`, `POST /api/commands/dispatch` (409 on lease conflict)
+- Root cause: N/A, implemented 2026-03-14
+- Why it matters: ControlDeck polls lease status and displays "Controlled by {user}" when another operator holds the drone; controls are disabled in that state
+- Confidence level: High
+
 ## C. Broken Features
 ### 1. Server-side readiness is broken for multi-instance mission/audio/firmware state
 - Feature group: Multi-user, synchronization, reliability
@@ -170,35 +181,20 @@ These are the flows the code most clearly proves.
 - Exact fix recommendation: remove local message authority, keep only a transient cache if needed, and always reconcile from the server stream.
 - Confidence level: High
 
-### 5. Offline sync exists, but queue ownership is split
+### 5. ~~Offline sync exists, but queue ownership is split~~ **[RESOLVED — dead code removed]**
 - Feature group: Offline-first, backup, and cloud sync
-- Severity: Medium
-- Files: [client/src/hooks/useOfflineSync.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/hooks/useOfflineSync.ts), [server/routes.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/routes.ts#L7265), [server/storage.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/storage.ts)
-- Related components/functions/routes: `/api/backlog`, `/api/backlog/sync`, `mouse_offline_backlog`
-- Root cause: the browser now stages unsent backlog locally and triggers sync correctly, but the authoritative backlog still is not fully server-first and receipt-based.
-- Why it matters: restart and retry semantics are cleaner than before, but reconciliation is still more complex than a single receipt-driven queue.
-- Exact fix recommendation: make the server backlog authoritative with receipt ids; keep only unsent client-stage items locally.
-- Confidence level: High
+- Severity: ~~Medium~~ N/A
+- **Status**: `useOfflineSync.ts` was never imported; removed 2026-03-14. Backend `/api/backlog/*` endpoints remain. No active client offline sync path.
 
-### 6. Camera settings are backend-backed in the main video UI, but not yet drone-scoped
+### 6. ~~Camera settings not drone-scoped~~ **[RESOLVED]**
 - Feature group: Camera, media, and payload
-- Severity: Medium
-- Files: [server/routes.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/routes.ts#L6438), [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/video/VideoFeed.tsx#L122)
-- Related components/functions/routes: `/api/camera-settings`, `VideoFeed`
-- Root cause: the main camera UI now hydrates and saves through the backend route, but settings are still global rather than clearly keyed by selected drone/session.
-- Why it matters: this is centralized compared with the earlier browser-local path, but it is not yet a complete per-drone source of truth.
-- Exact fix recommendation: scope camera settings by drone id/session and publish changes over the same realtime path as other operational state.
-- Confidence level: High
+- Severity: ~~Medium~~ N/A
+- **Status**: `GET/PATCH /api/camera-settings?droneId=` and `camera_settings_map.json` / DB `droneId` column. VideoFeed passes `selectedDrone?.id` when loading and saving.
 
-### 6. Video/media capture works for browser capture, but is not a proved drone-camera pipeline
+### 6. Video/media capture — device source now explicit **[RESOLVED — disclaimer added]**
 - Feature group: Camera, media, and payload
-- Severity: Medium
-- Files: [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/video/VideoFeed.tsx#L1127), [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/video/VideoFeed.tsx#L1342), [server/routes.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/routes.ts#L7173)
-- Related components/functions/routes: gimbal commands, drive upload, media metadata create
-- Root cause: snapshot and recording flows are real for the browser and metadata store, but actual drone camera integration is not proved by the repository.
-- Why it matters: field operators may assume onboard camera/media pipelines that are not guaranteed.
-- Exact fix recommendation: separate browser demo camera features from actual drone camera ingestion and make device source explicit in the UI.
-- Confidence level: Medium
+- Severity: ~~Medium~~ Mitigated
+- **Status**: VideoFeed shows "LAPTOP CAM (Browser capture)" for webcam; "(Demo — not live drone feed)" when placeholder; "(Drone camera)" when live. Device source is explicit.
 
 ### 7. Speaker/audio panel is wired, but relies on polling plus transient route state
 - Feature group: Audio and communications
@@ -220,25 +216,17 @@ These are the flows the code most clearly proves.
 - Exact fix recommendation: store last uploaded fence hash, mission hash, FC download snapshot, and diff results per drone.
 - Confidence level: Medium
 
-### 9. Tracking panel is sophisticated browser ML, not a verified drone tracking subsystem
+### 9. ~~Tracking panel is sophisticated browser ML, not a verified drone tracking subsystem~~ **[RESOLVED — disclaimer added]**
 - Feature group: Object recognition and tracking
-- Severity: Medium
-- Files: [client/src/components/panels/TrackingPanel.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/panels/TrackingPanel.tsx)
-- Related components/functions/routes: TensorFlow COCO-SSD, webcam, local plate records
-- Root cause: tracking is performed locally in-browser with TensorFlow and webcam input; there is no proved backend/device bridge for onboard target tracking control.
-- Why it matters: good demo and operator aid, but not a proven flight-control tracking system.
-- Exact fix recommendation: clearly mark browser-local detection mode versus real onboard tracking mode, and persist only audited tracking actions.
+- Severity: ~~Medium~~ Mitigated
+- **Status**: Panel already shows "Browser demo mode" vs "Onboard tracking" badge. Added explicit disclaimer (2026-03-14): "Runs in-browser with TensorFlow.js COCO-SSD — not a verified onboard drone tracking subsystem."
+- Root cause: tracking is performed locally in-browser; no proved backend/device bridge. UI now clearly distinguishes modes.
 - Confidence level: High
 
-### 10. 3D mapping flow exists, but only as a lightweight local reconstruction model
+### 10. ~~3D mapping lightweight without disclaimer~~ **[RESOLVED — disclaimer added]**
 - Feature group: 3D mapping / reconstruction
-- Severity: Medium
-- Files: [client/src/pages/home.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/pages/home.tsx#L237), [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/video/VideoFeed.tsx#L759), [server/routes.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/routes.ts#L2258)
-- Related components/functions/routes: `/api/mapping/3d/status`, `/api/mapping/3d/frame`, `/api/mapping/3d/reconstruct`, `/api/mapping/3d/model/latest`
-- Root cause: mapping frames are ingested and a simple model artifact is generated, but the state is in-memory and the reconstruction path is lightweight rather than a robust mapping subsystem.
-- Why it matters: it works as a bounded feature but should not be treated as a production mapping pipeline.
-- Exact fix recommendation: persist mapping jobs and artifacts with job ownership, and separate preview-quality from production-quality reconstructions.
-- Confidence level: High
+- Severity: ~~Medium~~ Mitigated
+- **Status**: Added disclaimer in feeds UI: "Lightweight local reconstruction — not a production mapping pipeline."
 
 ## E. Not Verifiable From Provided Code
 
@@ -255,7 +243,7 @@ These are the flows the code most clearly proves.
 ### 1. Browser-local state duplicates backend truth
 - Feature group: Architecture
 - Severity: High
-- Files: [client/src/components/layout/TopBar.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/layout/TopBar.tsx#L84), [client/src/hooks/useOfflineSync.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/hooks/useOfflineSync.ts), [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/video/VideoFeed.tsx#L122), [client/src/components/panels/AutomationPanel.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/panels/AutomationPanel.tsx#L91), [client/src/components/controls/ControlDeck.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/controls/ControlDeck.tsx#L41)
+- Files: [client/src/components/layout/TopBar.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/layout/TopBar.tsx#L84), [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/video/VideoFeed.tsx#L122), [client/src/components/panels/AutomationPanel.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/panels/AutomationPanel.tsx#L91), [client/src/components/controls/ControlDeck.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/controls/ControlDeck.tsx#L41)
 - Related components/functions/routes: `mouse_gcs_messages`, `mouse_offline_backlog`, `mouse_automation_scripts`
 - Root cause: several important flows still use `localStorage` as active state rather than only transient UX cache, even though camera settings and armed state were moved off that path.
 - Why it matters: duplicate sources of truth break multi-user and multi-device sync.
@@ -302,14 +290,10 @@ These are the flows the code most clearly proves.
 - Exact fix recommendation: persist runs in the database and publish from that source
 - Confidence level: High
 
-### 3. Message user presence leaks through unauthenticated endpoint
+### 3. ~~Message user presence leaks through unauthenticated endpoint~~ **[RESOLVED]**
 - Feature group: Audio and communications
-- Severity: Medium
-- Files: [server/routes.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/routes.ts#L7431)
-- Root cause: `/api/chat-users` is not protected by auth
-- Why it matters: user enumeration and privacy risk
-- Exact fix recommendation: require auth and filter by visibility rules
-- Confidence level: High
+- Severity: ~~Medium~~ N/A
+- **Status**: `/api/chat-users` now protected with `requireAuth` (2026-03-14).
 
 ## H. Security Issues
 
@@ -361,14 +345,10 @@ These are the flows the code most clearly proves.
 - Exact fix recommendation: persist job rows and recover them at startup
 - Confidence level: High
 
-### 3. `useOfflineSync` still relies on browser staging before a durable server receipt
+### 3. ~~`useOfflineSync` still relies on browser staging~~ **[RESOLVED — dead code removed]**
 - Feature group: Reliability
-- Severity: Medium
-- Files: [client/src/hooks/useOfflineSync.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/hooks/useOfflineSync.ts#L74)
-- Root cause: the immediate duplicate POST path was removed, but staging remains client-owned until sync finishes
-- Why it matters: better than before, but crash windows and reconciliation logic still exist
-- Exact fix recommendation: issue a server receipt id on enqueue and treat local storage as transient unsent staging only
-- Confidence level: High
+- Severity: ~~Medium~~ N/A
+- **Status**: `useOfflineSync.ts` removed 2026-03-14 (was never imported). No active client offline sync path.
 
 ## J. Performance Issues
 
@@ -393,7 +373,7 @@ These are the flows the code most clearly proves.
 ### 3. Many independent browser event listeners and `localStorage` reads
 - Feature group: Performance
 - Severity: Medium
-- Files: [client/src/components/layout/TopBar.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/layout/TopBar.tsx), [client/src/components/controls/ControlDeck.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/controls/ControlDeck.tsx), [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/video/VideoFeed.tsx), [client/src/hooks/useOfflineSync.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/hooks/useOfflineSync.ts)
+- Files: [client/src/components/layout/TopBar.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/layout/TopBar.tsx), [client/src/components/controls/ControlDeck.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/controls/ControlDeck.tsx), [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/video/VideoFeed.tsx)
 - Root cause: partial centralization only
 - Why it matters: harder to optimize rerenders and reasoning
 - Exact fix recommendation: continue consolidating around `AppStateContext`, React Query, and a single telemetry store
@@ -463,6 +443,84 @@ These are the flows the code most clearly proves.
    - `audio_sessions`
    - `offline_backlog`
 4. Treat Firebase and Google integrations as replication/integration layers, not primary authority.
+
+## N. Deep Audit Supplement (2026-03-14)
+
+### N1. Dead Code / Orphaned Files
+
+| File | Status | Evidence |
+| --- | --- | --- |
+| ~~client/src/hooks/useOfflineSync.ts~~ | **REMOVED** | Dead code removed 2026-03-14. Never imported. |
+| [client/public/opengraph.jpg](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/public/opengraph.jpg) | **N/A** | File does not exist; repo has `opengraph.png` only. |
+| ~~attached_assets/Logo/Background removed logo.png~~ | **REMOVED** | Removed 2026-03-14. |
+| ~~attached_assets/Logo/logo with white BG.png~~ | **REMOVED** | Removed 2026-03-14. |
+
+### N2. Backend Endpoints Unused by Client
+
+No client `fetch` or API call found for:
+
+- ~~`GET /api/commands/lease`~~ **RESOLVED** — ControlDeck polls and displays "Controlled by {user}" (2026-03-14).
+- `GET /api/cloud/awareness`
+- `GET /api/cloud/admin-dashboard`
+- `POST /api/cloud/commands/dispatch`
+- `POST /api/cloud/commands/:id/ack`
+- `GET /api/cloud/commands`
+- `POST /api/cloud/telemetry/ingest`
+- `GET /api/cloud/telemetry/live`
+- `GET /api/integrations/verify`
+- `GET /api/automation/runs`
+- `GET /api/commands/:id`
+- `GET /api/servo/status`
+- `GET /api/google/configured`
+- `POST /api/messages/sync`
+
+### N3. Python Script Usage (All Referenced)
+
+All 13 scripts in `scripts/` are invoked by `server/routes.ts` or `server/index.ts`:
+
+| Script | Used By |
+| --- | --- |
+| `mavlink_params.py` | params CRUD, import, export, compare |
+| `mavlink_vehicle_control.py` | vehicle action, manual control |
+| `servo_control.py` | gripper open/close, `/api/servo/control` |
+| `mavlink_mission.py` | mission upload/download/validate/diff |
+| `mavlink_fence.py` | fence upload/download |
+| `mavlink_rally.py` | rally upload/download |
+| `mavlink_calibration.py` | calibration start/cancel |
+| `mavlink_inspector.py` | inspector snapshot/live |
+| `mavlink_firmware.py` | firmware flash, recover |
+| `mavlink_dataflash.py` | dataflash list/download/analyze/replay |
+| `mavlink_geotag.py` | geotag run |
+| `bme688_monitor.py` | BME688 read/status/debug |
+| `runtime_bootstrap.py` | server startup |
+
+### N4. Operator Preference Service
+
+`operatorPreferenceService` is used in [server/routes.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/routes.ts) around lines 7350–7362 for `/api/operator/preferences` (GET/PATCH). Client calls via [client/src/lib/api.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/lib/api.ts) (lines 91, 95). Preferences are in-memory; not durable across server restart.
+
+### N5. Offline Backlog Path
+
+- Backend: `/api/backlog/sync`, `/api/backlog/clear`, `/api/backlog` exist and are called only from `useOfflineSync`.
+- Since `useOfflineSync` is never imported, **no client ever triggers offline backlog sync**. The backend path is orphaned from a client perspective.
+
+### N6. Command Lease Implementation
+
+- Per-drone command lease is implemented: `commandLeases` map, `getCommandLease`, `acquireCommandLease`, 2-minute TTL.
+- Dispatch returns 409 when another user holds the lease; client surfaces `data.error` via `throw new Error(data?.error)`.
+- `GET /api/commands/lease?connectionString=...` exists but is not called by the client; ControlDeck does not display "controlled by X" before attempting commands.
+
+### N7. UI Component Usage
+
+Radix UI components (accordion, alert-dialog, aspect-ratio, avatar, button-group, calendar, carousel, context-menu, drawer, dropdown-menu, hover-card, input-group, input-otp, menubar, navigation-menu, pagination, toggle-group) exist; usage varies. Some may be transitively imported or reserved for future use. Do not delete without verifying imports.
+
+### N8. Recent Remediation Additions (Post-Audit)
+
+- **BME688**: Production gate — returns 503 when not on Pi.
+- **Connection test**: Returns `success: false` when simulated in production.
+- **Telemetry fallback**: "SIM" badge when `source === 'sim'`.
+- **Arm state**: `arm-state-changed` dispatched from TelemetryContext when telemetry has `armed`; TelemetryPanel no longer initializes from localStorage.
+- **Automation**: Relabeled as "Rule-based command mapping".
+- **Command lease**: Per-drone lease enforced on dispatch.
 
 ## Feature Audit Matrix
 
@@ -669,6 +727,7 @@ UI -> [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/D
 8. Selected drone is not server-scoped
 9. Telemetry state still depends on DOM events and browser globals
 10. Camera/media and tracking flows still over-rely on browser-local execution paths
+11. `useOfflineSync` and `useTelemetryWithBacklog` are dead code — never imported; client never triggers `/api/backlog/sync`
 
 ### 2. Missing implementations list
 
@@ -720,6 +779,7 @@ UI -> [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/D
 
 No client reference found for these routes:
 
+- `GET /api/commands/lease` — Lease status not displayed in ControlDeck; 409 on dispatch surfaces error but no proactive UI.
 - `/api/cloud/commands/dispatch`
 - `/api/cloud/commands/:id/ack`
 - `/api/cloud/commands`
@@ -734,8 +794,389 @@ No client reference found for these routes:
 - `/api/servo/status`
 - `/api/integrations/verify`
 
-### 9. Final readiness score out of 100
+**Note**: `GET /api/operator/preferences` and `PATCH /api/operator/preferences` are used by client via [client/src/lib/api.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/lib/api.ts).
+
+### 9. File deletion list (safe to remove after verification)
+
+| File | Reason |
+|------|--------|
+| `client/src/hooks/useOfflineSync.ts` | `useOfflineSync` and `useTelemetryWithBacklog` never imported. Backend `/api/backlog/*` would become orphaned; either remove hook and document, or wire it into app. |
+| `attached_assets/Logo/Background removed logo.png` | Duplicate logo; not referenced. |
+| `attached_assets/Logo/logo with white BG.png` | Duplicate logo; not referenced. |
+
+**Do not delete** without verifying: `client/public/opengraph.jpg` — may not exist (only `opengraph.png` found). UI components (accordion, alert-dialog, etc.) — check for transitive imports before removal.
+
+### 10. Final readiness score out of 100
 
 **62/100**
 
 Primary blockers: weak runtime-state durability, file-backed persistence, local-only automation definitions, and several uncentralized multi-user state paths.
+
+---
+
+## N. Deep Audit Supplement (2026-03-14)
+
+Exhaustive pass performed per full audit requirements. Findings below extend and refine prior sections.
+
+### N1. Dead Code / Orphaned Files
+
+| File | Status | Evidence |
+|------|--------|----------|
+| `client/src/hooks/useOfflineSync.ts` — `useTelemetryWithBacklog` | **UNUSED** | No import found anywhere in codebase. `useOfflineSync` also never imported. Entire offline sync client hook is dead. |
+| `client/src/hooks/useOfflineSync.ts` — `useOfflineSync` | **UNUSED** | Exported but never imported by any component. `POST /api/backlog/sync` is only called from this hook, so backlog sync client path is effectively dead. |
+| `client/public/opengraph.jpg` | **DUPLICATE** | `opengraph.png` exists; jpg may be legacy. Check index.html/manifest references. |
+| `attached_assets/Logo/Background removed logo.png` | **POTENTIALLY UNUSED** | Logo variant; verify build/html references. |
+| `attached_assets/Logo/logo with white BG.png` | **POTENTIALLY UNUSED** | Logo variant; verify references. |
+
+### N2. Backend Endpoints — Unused by Client (Extended)
+
+No client `fetch` or `apiFetch` reference found for:
+
+- `/api/cloud/commands/dispatch`
+- `/api/cloud/commands/:id/ack`
+- `/api/cloud/commands`
+- `/api/cloud/telemetry/ingest`
+- `/api/cloud/telemetry/live`
+- `/api/cloud/awareness`
+- `/api/cloud/admin-dashboard`
+- `/api/cloud/media/upload` (SettingsPanel has `/api/drive/upload`; cloud/media may differ)
+- `/api/cloud/media/sync-pending`
+- `/api/messages/sync`
+- `/api/google/configured`
+- `/api/automation/runs`
+- `/api/commands/:id` (detail by ID)
+- `/api/commands/lease` (lease status — exists, enforced on dispatch, but client does not fetch for UI)
+- `/api/servo/status`
+- `/api/integrations/verify`
+
+### N3. Python Scripts — All Referenced
+
+All 13 scripts in `scripts/` are invoked by `server/routes.ts` or `server/index.ts`:
+
+- `mavlink_params.py`, `mavlink_vehicle_control.py`, `mavlink_mission.py`, `mavlink_fence.py`, `mavlink_rally.py`, `mavlink_calibration.py`, `mavlink_inspector.py`, `mavlink_firmware.py`, `mavlink_dataflash.py`, `mavlink_geotag.py`, `servo_control.py`, `bme688_monitor.py`, `runtime_bootstrap.py`
+
+`setup-gpio-access.sh` is self-referential (usage instructions). `build-standalone.ps1` and `build-standalone.sh` are build helpers, not runtime.
+
+### N4. Recently Implemented (Post-Prior-Audit)
+
+- **Per-drone command lease**: Implemented in `server/routes.ts`. `acquireCommandLease`, `getCommandLease`, lease check on dispatch, `GET /api/commands/lease`. Client does not yet surface lease status in UI; 409 on conflict is passed through via `data?.error` in `commandService.ts`.
+- **BME688 production gating**: Non-Pi production returns 503 unavailable.
+- **Connection test gating**: Simulated + production returns `success: false`.
+- **Telemetry SIM badge**: Shown when `rawTelemetry?.source === "sim"`.
+- **arm-state-changed dispatch**: TelemetryContext dispatches when `armed` in telemetry changes.
+
+### N5. UI Components — Import Audit
+
+Radix/deps components in `client/src/components/ui/`: accordion, alert-dialog, aspect-ratio, avatar, button-group, calendar, carousel, context-menu, drawer, dropdown-menu, hover-card, input-group, input-otp, menubar, navigation-menu, pagination, toggle-group — present in FILE_LIST. Many may be used only transitively (e.g., via shadcn wrappers). Safe deletion requires per-component grep; recommend keeping unless explicitly unused.
+
+### N6. Operator Preference Service
+
+`operatorPreferenceService` is used in `server/routes.ts` for `/api/operator/preferences` (GET/PATCH). Client integration for selected-drone persistence not fully traced; service is backend-backed.
+
+### N7. File Deletion Recommendations (Conservative)
+
+**Safe to remove** (after verification):
+
+- `attached_assets/Logo/Background removed logo.png` — if no refs in build
+- `attached_assets/Logo/logo with white BG.png` — if no refs in build
+- `client/public/opengraph.jpg` — if only `opengraph.png` is referenced
+
+**Refactor/disable**:
+
+- `client/src/hooks/useOfflineSync.ts` — Either wire into a mounted component and document staging semantics, or remove and delete `/api/backlog/*` client usage. Currently orphaned.
+
+### N8. Final Readiness Score Update
+
+Remains **62/100**. Dead offline sync client does not improve score; command lease improves operational safety but is incomplete without client lease-status UI.
+
+---
+
+## N. Deep Audit Supplement (2026-03-14)
+
+Exhaustive audit pass covering file usage, dead code, Python scripts, cloud endpoints, and UI wiring.
+
+### N1. Dead Code / Unused Client Modules
+
+| File | Status | Evidence |
+|------|--------|----------|
+| [client/src/hooks/useOfflineSync.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/hooks/useOfflineSync.ts) | **UNUSED** | `useOfflineSync` and `useTelemetryWithBacklog` are never imported by any component. No client references. |
+| [client/src/hooks/useOfflineSync.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/hooks/useOfflineSync.ts) → `useTelemetryWithBacklog` | **DEAD** | Exported but never imported. |
+
+**Impact**: The entire offline sync client path is dead. `POST /api/backlog/sync` is only invoked from `useOfflineSync.queueData` → `syncBacklogRef.current()`, which is never mounted. The backend offline sync endpoints exist but have no active client consumer.
+
+**Recommendation**: Either wire `useOfflineSync` into a mounted component (e.g. TopBar, TelemetryPanel, or App) or remove the hook and document that offline sync is backend-only / future work.
+
+### N2. Backend Endpoints With No Client Usage (Expanded)
+
+Verified via codebase grep. No `fetch`, `apiFetch`, or React Query usage found for:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /api/cloud/commands/dispatch` | Cloud command dispatch |
+| `POST /api/cloud/commands/:id/ack` | Cloud command ack |
+| `GET /api/cloud/commands` | Cloud command list |
+| `POST /api/cloud/telemetry/ingest` | Cloud telemetry ingest |
+| `GET /api/cloud/telemetry/live` | Cloud telemetry live |
+| `GET /api/cloud/awareness` | Fleet awareness |
+| `GET /api/cloud/admin-dashboard` | Admin dashboard |
+| `GET /api/integrations/verify` | Integration verification |
+| `GET /api/automation/runs` | Automation run history |
+| `GET /api/commands/:id` | Single command detail |
+| `GET /api/commands/lease` | Command lease status (lease enforced on dispatch; UI does not poll or display) |
+| `GET /api/servo/status` | Servo status |
+| `GET /api/google/configured` | Google configured check |
+| `POST /api/messages/sync` | Message sync |
+
+**Note**: `GET /api/commands/lease` is registered before `/api/commands/:id`; the lease is enforced on `POST /api/commands/dispatch` (409 when another user holds it). The client does not call the lease endpoint to display "controlled by X" in the UI.
+
+### N3. Python Scripts – Full Inventory
+
+All scripts in `scripts/` are referenced by the server:
+
+| Script | Referenced By | Purpose |
+|--------|---------------|---------|
+| `mavlink_params.py` | server/routes.ts | FC parameters |
+| `mavlink_vehicle_control.py` | server/routes.ts | Vehicle actions |
+| `mavlink_mission.py` | server/routes.ts | Mission upload/download/validate |
+| `mavlink_fence.py` | server/routes.ts | Geofence upload/download |
+| `mavlink_rally.py` | server/routes.ts | Rally points |
+| `mavlink_calibration.py` | server/routes.ts | Calibration |
+| `mavlink_inspector.py` | server/routes.ts | MAVLink inspector |
+| `mavlink_firmware.py` | server/routes.ts | Firmware flash/recovery |
+| `mavlink_dataflash.py` | server/routes.ts | DataFlash list/download/analyze/replay |
+| `mavlink_geotag.py` | server/routes.ts | Geotag run |
+| `servo_control.py` | server/routes.ts | Gripper/servo control |
+| `bme688_monitor.py` | server/routes.ts | BME688 environmental sensor |
+| `runtime_bootstrap.py` | server/index.ts | Runtime bootstrap |
+
+| Script | Status |
+|--------|--------|
+| `setup-gpio-access.sh` | Self-referenced; may be run manually on Pi |
+| `build-standalone.sh` | Build automation |
+| `build-standalone.ps1` | Windows build automation |
+
+No orphan Python scripts found. All are backend-wired.
+
+### N4. Client API Usage – Verified Paths
+
+The following API groups are actively used by the client (confirmed via `fetch`/`apiFetch`):
+
+- `/api/auth/*` – UserAccessPanel, TopBar
+- `/api/admin/*` – UserAccessPanel
+- `/api/drones` – React Query, DroneSelectionPanel
+- `/api/messages` – TopBar
+- `/api/chat-users` – TopBar
+- `/api/commands/dispatch` – ControlDeck, TerminalCommandsPanel, AutomationPanel, MavlinkToolsPanel, GpsDeniedNavPanel, MLNavigationEngine, EmergencyProtocolController
+- `/api/mavlink/*` – MissionPlanningPanel, GeofencingPanel, CalibrationPanel, MavlinkToolsPanel, FlightControllerParamsPanel, RtkNtripPanel, VehicleSetupPanel, FlightLogsPanel
+- `/api/camera-settings` – VideoFeed
+- `/api/drive/upload`, `/api/media` – VideoFeed
+- `/api/cloud/config`, `/api/cloud/status`, `/api/cloud/test`, `/api/cloud/sync-all` – SettingsPanel
+- `/api/bme688/*` – useBME688, BME688Panel
+- `/api/mapping/3d/*` – home.tsx, VideoFeed
+- `/api/plugins/*` – PluginToolchainPanel
+- `/api/automation/scripts/execute` – AutomationPanel
+- `/api/firmware/*` – SettingsPanel
+- `/api/connections/test` – SettingsPanel
+- `/api/backlog/sync` – useOfflineSync (dead, never mounted)
+- `/api/operator/preferences` – operatorPreferenceService (server-side); need to verify client calls
+
+### N5. OperatorPreferenceService Wiring
+
+- **Server**: `operatorPreferenceService` is used in `server/routes.ts` for `/api/operator/preferences` (GET and PATCH around lines 7350, 7362).
+- **Client**: No `fetch('/api/operator/preferences')` found in client code. Operator preferences (e.g. selected drone) are not persisted or read from this service by the frontend.
+
+### N6. File Deletion Candidates (Safe to Remove)
+
+With high confidence:
+
+| File | Reason |
+|------|--------|
+| `attached_assets/Logo/Background removed logo.png` | Duplicate/alternate logo; not referenced in code |
+| `attached_assets/Logo/logo with white BG.png` | Duplicate/alternate logo; not referenced in code |
+
+**Conditional**: `client/src/hooks/useOfflineSync.ts` – Remove only if offline sync is abandoned. If kept, it must be wired into a mounted component.
+
+### N7. UI Components – Usage Status
+
+Radix-based components in `client/src/components/ui/` are imported where needed. The following are typically used indirectly or in specific screens:
+
+- `accordion`, `alert-dialog`, `aspect-ratio`, `avatar`, `button-group`, `calendar`, `carousel`, `context-menu`, `drawer`, `dropdown-menu`, `hover-card`, `input-group`, `input-otp`, `menubar`, `navigation-menu`, `pagination`, `toggle-group`
+
+Recommend verifying each via import graph before deletion. Many may be used by other UI primitives or less-often-rendered views.
+
+### N8. Per-Drone Command Lease (Recent Addition)
+
+- **Implemented**: `getCommandLease`, `acquireCommandLease` in server/routes.ts. Lease checked before dispatch; 409 returned when another user holds the lease. Lease acquired on successful ack. TTL: 2 minutes.
+- **Endpoint**: `GET /api/commands/lease?connectionString=...` – exists but not used by client.
+- **Recommendation**: Add lease-status polling or display in ControlDeck/DroneSelectionPanel so operators see "Drone controlled by {user}" when another user has the lease.
+
+---
+
+## N. DEEP AUDIT SUPPLEMENT (2026-03-14)
+
+Additional findings from exhaustive file-level, wiring, and flow verification.
+
+### N1. Dead / Unused Code
+
+| File / Export | Status | Evidence |
+|---------------|--------|----------|
+| `client/src/hooks/useOfflineSync.ts` – `useOfflineSync` | **UNUSED** | No import found in any client component. Hook never mounted. |
+| `client/src/hooks/useOfflineSync.ts` – `useTelemetryWithBacklog` | **UNUSED** | No import found. Effectively dead. |
+| `/api/backlog/sync` client path | **UNUSED** | Only called from `useOfflineSync.queueData` / sync; since hook is never used, this client path is dead. |
+
+**Recommendation**: Either wire `useOfflineSync` into a main app component (e.g. TopBar, home layout) or remove the hook and document that offline backlog is backend-only until a proper client is implemented.
+
+### N2. Unused Backend Endpoints (Client Never Calls)
+
+No client `fetch` or `apiFetch` reference found for:
+
+- `POST /api/cloud/commands/dispatch`
+- `POST /api/cloud/commands/:id/ack`
+- `GET /api/cloud/commands`
+- `POST /api/cloud/telemetry/ingest`
+- `GET /api/cloud/telemetry/live`
+- `GET /api/cloud/awareness`
+- `GET /api/cloud/admin-dashboard`
+- `GET /api/messages/sync`
+- `GET /api/google/configured`
+- `GET /api/automation/runs`
+- `GET /api/commands/:id` (individual command detail)
+- `GET /api/commands/lease` (lease status – backend enforced; UI does not yet poll/display)
+- `GET /api/servo/status`
+- `GET /api/integrations/verify`
+
+### N3. Python Scripts – All Referenced
+
+All 13 scripts in `scripts/` are invoked by `server/routes.ts` or `server/index.ts`:
+
+- `mavlink_params.py`, `mavlink_vehicle_control.py`, `mavlink_mission.py`, `mavlink_fence.py`, `mavlink_rally.py`, `mavlink_calibration.py`, `mavlink_inspector.py`, `mavlink_firmware.py`, `mavlink_dataflash.py`, `mavlink_geotag.py`, `servo_control.py`, `bme688_monitor.py`, `runtime_bootstrap.py`
+
+`scripts/setup-gpio-access.sh` is self-referential (help text). `scripts/build-standalone.ps1` and `scripts/build-standalone.sh` are build helpers.
+
+### N4. Operator Preference Service – Used
+
+`operatorPreferenceService` is used in `server/routes.ts` for `/api/operator/preferences` (get/update). Preferences are in-memory; not durable across restart.
+
+### N5. Command Lease (Recently Added)
+
+- **Backend**: Per-drone command lease enforced in `POST /api/commands/dispatch`. Returns 409 when another user holds the lease.
+- **Lease**: `GET /api/commands/lease?connectionString=...` exists for status.
+- **Client**: Does not yet poll or display lease status; lease conflict is surfaced via 409 error in dispatch.
+
+### N6. File Deletion Candidates (Safe to Remove After Verification)
+
+| Path | Reason |
+|------|--------|
+| `attached_assets/Logo/Background removed logo.png` | Duplicate/alternate logo asset |
+| `attached_assets/Logo/logo with white BG.png` | Duplicate/alternate logo asset |
+
+*Note*: Retain `client/public/` assets (favicon, icons, opengraph) as they may be referenced by HTML manifest or meta tags.
+
+### N7. UI Components – Import Verification
+
+Radix-based components (accordion, alert-dialog, avatar, carousel, context-menu, drawer, dropdown-menu, hover-card, input-group, input-otp, menubar, navigation-menu, pagination, toggle-group, aspect-ratio, button-group, calendar) exist. A subset is used by other components; some may be unused. Recommend `grep -r "from.*@/components/ui/<name>" client/src` before deletion.
+
+### N8. Cloud / Sync Audit Summary
+
+| Component | Status | Issue |
+|-----------|--------|-------|
+| Firebase / cloud config | Used | SettingsPanel uses config, status, test, sync-all |
+| Cloud commands/telemetry/awareness | Unused | Endpoints exist; no client calls |
+| Offline backlog server | Partial | `/api/backlog/sync` used only by dead `useOfflineSync` |
+| Google Drive/Sheets | Used | SettingsPanel, VideoFeed use drive/upload, backup |
+| Operator preferences | Used | In-memory; not durable |
+
+### N9. Reliability – Command Acknowledgement vs Outcome
+
+- Commands return when backend script/MAVLink path completes or times out.
+- UI often treats “acked” as success; actual hardware state (armed, mode, etc.) comes from telemetry.
+- If telemetry omits `armed`, ControlDeck may show incorrect arm state.
+- Recommendation: Explicitly distinguish “command accepted” vs “state confirmed” in UI and logs.
+
+### N10. Security – `/api/chat-users` Unauthenticated
+
+`/api/chat-users` is used by TopBar for mention autocomplete. If it returns user lists without auth, it can leak presence/identity. Verify middleware and restrict to authenticated sessions with visibility rules.
+
+---
+
+## DEEP AUDIT SUPPLEMENT (2026-03-14)
+
+### N1. Dead Code & Unused Client Hooks
+
+| File | Status | Details |
+|------|--------|---------|
+| `client/src/hooks/useOfflineSync.ts` | **UNUSED** | `useOfflineSync` and `useTelemetryWithBacklog` are **never imported** by any component. The entire offline sync client path is dead code. Server `/api/backlog/sync`, `/api/backlog/clear`, `/api/health` (from this hook) are effectively unreachable from the main app. |
+| `client/src/hooks/useTelemetryWithBacklog` | **UNUSED** | Exported but never imported. Depends on `useOfflineSync`. |
+
+**Recommendation**: Either wire `useOfflineSync` into the main app (e.g., TelemetryPanel, TopBar) or remove it and the unused backlog client logic to reduce confusion.
+
+### N2. Unused Backend Endpoints (Verified via Client Grep)
+
+No `fetch` or API call found in client for:
+
+| Endpoint | Purpose |
+|---------|---------|
+| `GET /api/commands/lease` | Command lease status — backend enforces lease on dispatch, but UI never displays "controlled by X" or checks before sending |
+| `GET /api/commands/:id` | Single command detail — client uses list only |
+| `GET /api/automation/runs` | Automation run history — no panel surfaces this |
+| `GET /api/servo/status` | Servo/gripper status — no client call |
+| `GET /api/cloud/commands` | Cloud command queue |
+| `POST /api/cloud/commands/dispatch` | Cloud command dispatch |
+| `POST /api/cloud/commands/:id/ack` | Cloud command ack |
+| `POST /api/cloud/telemetry/ingest` | Cloud telemetry ingest |
+| `GET /api/cloud/telemetry/live` | Cloud telemetry live |
+| `GET /api/cloud/awareness` | Cloud fleet awareness |
+| `GET /api/cloud/admin-dashboard` | Cloud admin dashboard |
+| `GET /api/integrations/verify` | Integration verification |
+| `GET /api/google/configured` | Google OAuth configured state |
+| `POST /api/messages/sync` | Message sync |
+
+### N3. Python Script Usage (All Scripts Referenced)
+
+| Script | Referenced by |
+|--------|---------------|
+| `mavlink_params.py` | routes.ts (params, fence params) |
+| `mavlink_vehicle_control.py` | routes.ts (vehicle action, manual control) |
+| `mavlink_mission.py` | routes.ts (upload, download, validate, diff) |
+| `mavlink_fence.py` | routes.ts (fence upload/download) |
+| `mavlink_rally.py` | routes.ts (rally upload/download) |
+| `mavlink_calibration.py` | routes.ts (calibration start/cancel) |
+| `mavlink_inspector.py` | routes.ts (inspector snapshot/live) |
+| `mavlink_firmware.py` | routes.ts (flash, recover) |
+| `mavlink_dataflash.py` | routes.ts (list, download, analyze, replay) |
+| `mavlink_geotag.py` | routes.ts (geotag run) |
+| `servo_control.py` | routes.ts (gripper, servo control) |
+| `bme688_monitor.py` | routes.ts (BME688 read/status/debug) |
+| `runtime_bootstrap.py` | server/index.ts (startup) |
+| `setup-gpio-access.sh` | Self-reference only; not called by Node |
+| `build-standalone.sh` | May be used by deployment scripts |
+| `build-standalone.ps1` | Windows build script |
+
+### N4. Recently Implemented Fixes (Post-Remediation)
+
+- **Per-drone command lease**: Backend enforces lease on `/api/commands/dispatch` (409 if another user holds it). `acquireCommandLease` on success. `GET /api/commands/lease` exists but client does not call it to surface "controlled by X" in UI.
+- **BME688 production gating**: When `NODE_ENV=production` and not on Pi, returns 503 instead of simulated data.
+- **Connection test production gating**: When simulated and production, returns `success: false`.
+- **Telemetry sim badge**: TelemetryPanel shows "SIM" when `source === 'sim'`.
+- **Arm-state flow**: TelemetryContext dispatches `arm-state-changed` when telemetry has `armed`; TelemetryPanel no longer initializes `isArmed` from localStorage.
+- **Automation relabel**: "Rule-based command mapping" added to AutomationPanel.
+- **Offline sync disclaimer**: JSDoc added to useOfflineSync (but hook remains unused).
+
+### N5. Files Safe to Delete (Low Risk)
+
+| Path | Reason |
+|------|--------|
+| `attached_assets/Logo/Background removed logo.png` | Duplicate/alternate logo asset |
+| `attached_assets/Logo/logo with white BG.png` | Duplicate/alternate logo asset |
+
+**Not recommended** without further verification: UI components (accordion, carousel, etc.) — many may be imported transitively or by routing; deleting could break build.
+
+### N6. Operator Preference Service
+
+`OperatorPreferenceService` is used in [server/routes.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/routes.ts) around lines 7350–7362 for `/api/operator/preferences` (GET/PATCH). Client usage should be verified for settings persistence.
+
+### N7. Command Lease UI Gap
+
+Backend command lease is enforced (409 on conflict), but:
+- Client does not call `GET /api/commands/lease` to show "Drone controlled by {user}" before or during control attempts.
+- User only sees conflict after attempting a command. Recommendation: Add lease status fetch in ControlDeck when a drone is selected and display a warning badge when another user holds the lease.

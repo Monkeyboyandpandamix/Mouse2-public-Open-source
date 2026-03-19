@@ -166,85 +166,9 @@ async function getGoogleDriveClient() {
   return google.drive({ version: 'v3', auth: oauth2Client });
 }
 
-export interface IStorage {
-  // Settings
-  getSetting(key: string): Promise<Settings | undefined>;
-  getSettingsByCategory(category: string): Promise<Settings[]>;
-  upsertSetting(setting: InsertSettings): Promise<Settings>;
-  
-  // Missions
-  getMission(id: string): Promise<Mission | undefined>;
-  getAllMissions(): Promise<Mission[]>;
-  createMission(mission: InsertMission): Promise<Mission>;
-  updateMission(id: string, mission: Partial<InsertMission>): Promise<Mission | undefined>;
-  deleteMission(id: string): Promise<void>;
-  
-  // Waypoints
-  getWaypointsByMission(missionId: string): Promise<Waypoint[]>;
-  createWaypoint(waypoint: InsertWaypoint): Promise<Waypoint>;
-  updateWaypoint(id: string, waypoint: Partial<InsertWaypoint>): Promise<Waypoint | undefined>;
-  deleteWaypoint(id: string): Promise<void>;
-  deleteWaypointsByMission(missionId: string): Promise<void>;
-  
-  // Flight Logs
-  createFlightLog(log: InsertFlightLog): Promise<FlightLog>;
-  getFlightLogsByMission(missionId: string, limit?: number): Promise<FlightLog[]>;
-  getRecentFlightLogs(limit: number): Promise<FlightLog[]>;
-  deleteFlightLog(id: string): Promise<void>;
-  
-  // Sensor Data
-  createSensorData(data: InsertSensorData): Promise<SensorData>;
-  getRecentSensorData(sensorType: string, limit: number): Promise<SensorData[]>;
-  
-  // Motor Telemetry
-  createMotorTelemetry(telemetry: InsertMotorTelemetry): Promise<MotorTelemetry>;
-  getRecentMotorTelemetry(limit: number): Promise<MotorTelemetry[]>;
-  
-  // Camera Settings
-  getCameraSettings(): Promise<CameraSettings | undefined>;
-  updateCameraSettings(settings: Partial<InsertCameraSettings>): Promise<CameraSettings>;
-  
-  // Drones
-  getDrone(id: string): Promise<Drone | undefined>;
-  getDroneByCallsign(callsign: string): Promise<Drone | undefined>;
-  getAllDrones(): Promise<Drone[]>;
-  createDrone(drone: InsertDrone): Promise<Drone>;
-  updateDrone(id: string, drone: Partial<InsertDrone>): Promise<Drone | undefined>;
-  updateDroneLocation(id: string, latitude: number, longitude: number, altitude: number, heading: number): Promise<Drone | undefined>;
-  deleteDrone(id: string): Promise<void>;
-  
-  // Media Assets
-  getMediaAsset(id: string): Promise<MediaAsset | undefined>;
-  getMediaAssetsByDrone(droneId: string, limit?: number): Promise<MediaAsset[]>;
-  getMediaAssetsBySession(sessionId: string): Promise<MediaAsset[]>;
-  getPendingMediaAssets(): Promise<MediaAsset[]>;
-  createMediaAsset(asset: InsertMediaAsset): Promise<MediaAsset>;
-  updateMediaAsset(id: string, asset: Partial<InsertMediaAsset>): Promise<MediaAsset | undefined>;
-  deleteMediaAsset(id: string): Promise<void>;
-  
-  // Offline Backlog
-  getBacklogItem(id: string): Promise<OfflineBacklog | undefined>;
-  getPendingBacklog(droneId?: string): Promise<OfflineBacklog[]>;
-  createBacklogItem(item: InsertOfflineBacklog): Promise<OfflineBacklog>;
-  updateBacklogItem(id: string, item: Partial<InsertOfflineBacklog>): Promise<OfflineBacklog | undefined>;
-  markBacklogSynced(id: string): Promise<void>;
-  deleteBacklogItem(id: string): Promise<void>;
-  clearSyncedBacklog(droneId?: string): Promise<void>;
-  
-  // User Messages (Team Communication)
-  getAllMessages(): Promise<UserMessage[]>;
-  getAllMessagesWithHistory(): Promise<UserMessage[]>; // For admin - includes originals
-  getMessagesForUser(userId: string): Promise<UserMessage[]>;
-  getMessageById(id: string): Promise<UserMessage | undefined>;
-  getChatUsers(): Promise<{ id: string; username: string; role: string }[]>;
-  createMessage(message: InsertUserMessage): Promise<UserMessage>;
-  updateMessage(id: string, content: string): Promise<UserMessage | undefined>;
-  deleteMessage(id: string, deletedBy?: string): Promise<void>;
-  syncMessagesToSheets(messages: UserMessage[]): Promise<void>;
-  
-  // Sync operations
-  syncToGoogle(): Promise<void>;
-}
+export type { IStorage } from "./storage/types.js";
+import type { IStorage } from "./storage/types.js";
+import { DbStorage } from "./storage/dbStorage.js";
 
 export class FileStorage implements IStorage {
   private syncPending = false;
@@ -524,11 +448,43 @@ export class FileStorage implements IStorage {
       .slice(0, limit);
   }
 
-  // Camera Settings
-  async getCameraSettings(): Promise<CameraSettings | undefined> {
-    const settings = await readJsonFile<CameraSettings>('camera_settings.json');
-    if (settings.length === 0) {
-      const defaults: CameraSettings = {
+  // Camera Settings (scoped by droneId; "default" when no drone selected)
+  async getCameraSettings(droneId?: string): Promise<CameraSettings | undefined> {
+    const key = (droneId || "default").trim() || "default";
+    const map = await readJsonFile<{ key: string; settings: CameraSettings }>('camera_settings_map.json');
+    const entry = map.find((e) => e.key === key);
+    if (entry) return entry.settings;
+    // Fallback: migrate from legacy camera_settings.json
+    const legacy = await readJsonFile<CameraSettings>('camera_settings.json');
+    if (legacy.length > 0) {
+      const migrated = legacy[0];
+      const newMap = [...map.filter((e) => e.key !== "default"), { key: "default", settings: migrated }];
+      await writeJsonFile('camera_settings_map.json', newMap);
+      return key === "default" ? migrated : undefined;
+    }
+    const defaults: CameraSettings = {
+      id: generateId(),
+      activeCamera: 'gimbal',
+      trackingEnabled: false,
+      model: 'Skydroid C12',
+      resolution: '2K HD (2560x1440)',
+      thermalResolution: '384x288',
+      lens: '7mm',
+      streamUrl: '',
+      streamEnabled: false,
+      recordingEnabled: false,
+      updatedAt: new Date().toISOString(),
+    };
+    const newMap = [...map.filter((e) => e.key !== key), { key, settings: defaults }];
+    await writeJsonFile('camera_settings_map.json', newMap);
+    return defaults;
+  }
+
+  async updateCameraSettings(settings: Partial<InsertCameraSettings>, droneId?: string): Promise<CameraSettings> {
+    const key = (droneId || "default").trim() || "default";
+    const existing = await this.getCameraSettings(droneId);
+    const updated: CameraSettings = {
+      ...(existing || {
         id: generateId(),
         activeCamera: 'gimbal',
         trackingEnabled: false,
@@ -540,21 +496,13 @@ export class FileStorage implements IStorage {
         streamEnabled: false,
         recordingEnabled: false,
         updatedAt: new Date().toISOString(),
-      };
-      await writeJsonFile('camera_settings.json', [defaults]);
-      return defaults;
-    }
-    return settings[0];
-  }
-
-  async updateCameraSettings(settings: Partial<InsertCameraSettings>): Promise<CameraSettings> {
-    const existing = await this.getCameraSettings();
-    const updated: CameraSettings = {
-      ...existing!,
+      }),
       ...settings,
       updatedAt: new Date().toISOString(),
     };
-    await writeJsonFile('camera_settings.json', [updated]);
+    const map = await readJsonFile<{ key: string; settings: CameraSettings }>('camera_settings_map.json');
+    const without = map.filter((e) => e.key !== key);
+    await writeJsonFile('camera_settings_map.json', [...without, { key, settings: updated }]);
     this.markSyncPending();
     return updated;
   }
@@ -1002,7 +950,10 @@ export class FileStorage implements IStorage {
   }
 }
 
-export const storage = new FileStorage();
+export const storage =
+  process.env.USE_DB === "1" || process.env.USE_DB === "true"
+    ? new DbStorage()
+    : new FileStorage();
 
 // Periodic sync to Google (every 5 minutes)
 setInterval(() => {

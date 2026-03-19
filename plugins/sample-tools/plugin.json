@@ -6,12 +6,14 @@
     {
       "id": "system_health",
       "name": "System Health",
-      "command": "bash plugins/sample-tools/tools/system_health.sh"
+      "exec": "bash",
+      "args": ["tools/system_health.sh"]
     },
     {
       "id": "list_data_dir",
       "name": "List Data Directory",
-      "command": "ls -lah data"
+      "exec": "bash",
+      "args": ["tools/list_data_dir.sh"]
     }
   ]
 }

@@ -79,11 +79,8 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
   const [manualReady, setManualReady] = useState(true);
   const [emergencyBusy, setEmergencyBusy] = useState(false);
 
-  // Messaging state
-  const [messages, setMessages] = useState<UserMessage[]>(() => {
-    const saved = localStorage.getItem('mouse_gcs_messages');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // Messaging state - server is source of truth; no localStorage backup
+  const [messages, setMessages] = useState<UserMessage[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState("");
@@ -98,22 +95,15 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
   const [mentionIndex, setMentionIndex] = useState(0);
   // Multi-recipient support: persistent array of recipients until @all or changed
   const [selectedRecipients, setSelectedRecipients] = useState<MessageRecipient[]>([]);
-  
-  // Save messages to localStorage as backup
-  useEffect(() => {
-    localStorage.setItem('mouse_gcs_messages', JSON.stringify(messages));
-  }, [messages]);
 
-  // Load messages from API on mount (filtered by user for DM privacy)
+  // Load messages from API on mount (filtered by user for DM privacy); server is source of truth
   useEffect(() => {
     const userId = session.user?.id;
     const url = userId ? `/api/messages?userId=${userId}` : '/api/messages';
     fetch(url)
       .then(res => res.ok ? res.json() : [])
       .then(data => {
-        if (Array.isArray(data) && data.length > 0) {
-          setMessages(data);
-        }
+        setMessages(Array.isArray(data) ? data : []);
       })
       .catch((err) => console.warn("[TopBar] messages fetch failed:", err));
   }, [session.user?.id]);
@@ -566,7 +556,6 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
         // best-effort logout; local session is still cleared below
       }
     }
-    localStorage.removeItem('mouse_gcs_messages');
     clearSession();
     clearStoredSession();
     toast.info("Logged out successfully");

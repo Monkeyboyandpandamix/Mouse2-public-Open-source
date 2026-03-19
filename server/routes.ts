@@ -103,7 +103,7 @@ import {
   loadSessionsAtStartup,
   type ServerSession,
 } from "./sessionStore";
-import { rateLimitMiddleware } from "./rateLimit";
+import { rateLimitMiddleware, rateLimitLoginMiddleware } from "./rateLimit";
 import { HARDCODED_FIREBASE_PROJECT } from "@shared/hardcodedFirebaseConfig";
 import { ROLE_PERMISSIONS, type PermissionId } from "@shared/permissions";
 import { 
@@ -115,7 +115,19 @@ import {
   removeAccount,
   isOAuthConfigured 
 } from "./googleAuth";
+import { missionExecutionService, automationService, operatorPreferenceService, fcStateService } from "./services/index.js";
+import { registerDebugRoutes } from "./routes/debug";
+import {
+  requestSession,
+  validateSession,
+  hasServerPermission,
+  requireAuth,
+  requirePermission,
+  apiPermissionForRequest,
+  PUBLIC_API_PATHS,
+} from "./routes/middleware";
 
+const USE_DB = process.env.USE_DB === "1" || process.env.USE_DB === "true";
 const commandService = new CommandService();
 const offlineSyncIdempotency = new OfflineSyncIdempotencyStore();
 interface MissionRunRecord {
@@ -155,6 +167,27 @@ interface AutomationRunRecord {
   };
 }
 const automationRuns = new Map<string, AutomationRunRecord>();
+
+// Per-drone command lease: connectionString -> { userId, userName, acquiredAt }
+const COMMAND_LEASE_TTL_MS = 2 * 60 * 1000;
+const commandLeases = new Map<string, { userId: string; userName: string; acquiredAt: number }>();
+const getCommandLease = (connectionString: string) => {
+  const key = String(connectionString || "").trim();
+  if (!key) return null;
+  const lease = commandLeases.get(key);
+  if (!lease) return null;
+  if (Date.now() - lease.acquiredAt > COMMAND_LEASE_TTL_MS) {
+    commandLeases.delete(key);
+    return null;
+  }
+  return lease;
+};
+const acquireCommandLease = (connectionString: string, userId: string, userName: string) => {
+  const key = String(connectionString || "").trim();
+  if (!key) return;
+  commandLeases.set(key, { userId, userName, acquiredAt: Date.now() });
+};
+
 const oauthStateStore = new Map<string, { createdAt: number; userId: string | null }>();
 const airspaceCache = new Map<string, { expiresAt: number; payload: any }>();
 const staticAirspaceCache = new Map<string, any>();
@@ -336,6 +369,22 @@ interface RtkProfile {
   updatedAt: string;
 }
 
+/** Redact credentials from RTK profiles. Never expose passwords in API responses. */
+function redactRtkProfile(p: RtkProfile): Omit<RtkProfile, "password"> & { password: "[REDACTED]" } {
+  return { ...p, password: "[REDACTED]" as const };
+}
+
+/** Redact password from shell command string (e.g. ntrip://user:PASS@host). */
+function redactCommand(cmd: string): string {
+  if (!cmd || typeof cmd !== "string") return "";
+  return cmd.replace(/^(ntrip:\/\/[^:]+:)([^@]+)(@)/, "$1****$3");
+}
+
+/** Redact RTK/NTRIP state for API response (command may contain password). */
+function redactRtkState(state: typeof rtkNtripState) {
+  return { ...state, command: redactCommand(state.command || "") };
+}
+
 async function readRtkProfiles(): Promise<RtkProfile[]> {
   try {
     if (!existsSync(RTK_PROFILE_FILE)) return [];
@@ -452,8 +501,8 @@ const persistRuntimeState = async () => {
     const payload: PersistedRuntimeState = {
       version: 1,
       savedAt: new Date().toISOString(),
-      missionRuns: Array.from(missionRuns.values()),
-      automationRuns: Array.from(automationRuns.values()),
+      missionRuns: USE_DB ? missionExecutionService.getAllRuns() : Array.from(missionRuns.values()),
+      automationRuns: USE_DB ? automationService.getAllRuns() : Array.from(automationRuns.values()),
       serialPassthroughState: { ...serialPassthroughState },
       rtkNtripState: { ...rtkNtripState },
       gpsInjectState: { ...gpsInjectState },
@@ -487,8 +536,38 @@ const scheduleRuntimeStatePersist = () => {
 };
 
 const setMissionRunRecord = (runId: string, run: MissionRunRecord) => {
-  missionRuns.set(runId, run);
-  scheduleRuntimeStatePersist();
+  if (USE_DB) {
+    const existing = missionExecutionService.getRun(runId);
+    if (existing) {
+      missionExecutionService.updateRun(runId, run);
+    } else {
+      missionExecutionService.createRun(run);
+    }
+  } else {
+    missionRuns.set(runId, run);
+    scheduleRuntimeStatePersist();
+  }
+};
+
+const getMissionRun = (runId: string): MissionRunRecord | undefined => {
+  if (USE_DB) return missionExecutionService.getRun(runId);
+  return missionRuns.get(runId);
+};
+
+const setAutomationRun = (runId: string, run: AutomationRunRecord) => {
+  if (USE_DB) {
+    const existing = automationService.getRun(runId);
+    if (existing) automationService.updateRun(runId, run);
+    else automationService.createRun(run);
+  } else {
+    automationRuns.set(runId, run);
+    scheduleRuntimeStatePersist();
+  }
+};
+
+const getAutomationRuns = (): AutomationRunRecord[] => {
+  if (USE_DB) return automationService.getAllRuns();
+  return Array.from(automationRuns.values());
 };
 
 const stopMissionRunProgressMonitor = (runId: string) => {
@@ -510,11 +589,20 @@ const loadRuntimeState = async () => {
   try {
     await loadSessionsAtStartup();
 
+    if (!existsSync(RUNTIME_STATE_FILE) && !USE_DB) return;
+    if (USE_DB) {
+      missionExecutionService.recoverInterruptedRuns();
+      const automationRunsFromDb = automationService.getAllRuns();
+      automationRuns.clear();
+      for (const run of automationRunsFromDb) {
+        automationRuns.set(run.id, run);
+      }
+    }
     if (!existsSync(RUNTIME_STATE_FILE)) return;
     const raw = await readFile(RUNTIME_STATE_FILE, "utf-8");
     const parsed = JSON.parse(raw) as Partial<PersistedRuntimeState>;
-    const runs = Array.isArray(parsed?.missionRuns) ? parsed.missionRuns : [];
-    const automation = Array.isArray(parsed?.automationRuns) ? parsed.automationRuns : [];
+    const runs = USE_DB ? [] : (Array.isArray(parsed?.missionRuns) ? parsed.missionRuns : []);
+    const automation = USE_DB ? [] : (Array.isArray(parsed?.automationRuns) ? parsed.automationRuns : []);
 
     const restartedAt = new Date().toISOString();
     for (const run of runs) {
@@ -547,29 +635,31 @@ const loadRuntimeState = async () => {
       missionRuns.set(runId, normalized);
     }
 
-    automationRuns.clear();
-    for (const run of automation) {
-      if (!run || typeof run !== "object") continue;
-      const runId = String((run as any).id || "").trim();
-      if (!runId) continue;
-      automationRuns.set(runId, {
-        id: runId,
-        scriptId: String((run as any).scriptId || ""),
-        scriptName: String((run as any).scriptName || ""),
-        trigger: String((run as any).trigger || "manual"),
-        reason: String((run as any).reason || ""),
-        status: (run as any).status || "failed",
-        error: (run as any).error ?? null,
-        result: (run as any).result ?? null,
-        createdAt: String((run as any).createdAt || restartedAt),
-        updatedAt: String((run as any).updatedAt || restartedAt),
-        commandId: (run as any).commandId ?? null,
-        requestedBy: {
-          userId: String((run as any)?.requestedBy?.userId || ""),
-          role: String((run as any)?.requestedBy?.role || "viewer"),
-          name: String((run as any)?.requestedBy?.name || "User"),
-        },
-      });
+    if (!USE_DB) {
+      automationRuns.clear();
+      for (const run of automation) {
+        if (!run || typeof run !== "object") continue;
+        const runId = String((run as any).id || "").trim();
+        if (!runId) continue;
+        automationRuns.set(runId, {
+          id: runId,
+          scriptId: String((run as any).scriptId || ""),
+          scriptName: String((run as any).scriptName || ""),
+          trigger: String((run as any).trigger || "manual"),
+          reason: String((run as any).reason || ""),
+          status: (run as any).status || "failed",
+          error: (run as any).error ?? null,
+          result: (run as any).result ?? null,
+          createdAt: String((run as any).createdAt || restartedAt),
+          updatedAt: String((run as any).updatedAt || restartedAt),
+          commandId: (run as any).commandId ?? null,
+          requestedBy: {
+            userId: String((run as any)?.requestedBy?.userId || ""),
+            role: String((run as any)?.requestedBy?.role || "viewer"),
+            name: String((run as any)?.requestedBy?.name || "User"),
+          },
+        });
+      }
     }
 
     if (parsed?.serialPassthroughState) Object.assign(serialPassthroughState, parsed.serialPassthroughState);
@@ -600,53 +690,6 @@ function generateSessionToken(): string {
   return randomBytes(32).toString('hex'); // 64 hex chars, 256 bits of entropy
 }
 
-// Validate session token (sync; reads from memory cache; Firestore used for persistence)
-function validateSession(token: string | undefined): ServerSession | null {
-  if (!token) return null;
-  const session = getSessionMap().get(token);
-  if (!session) return null;
-  if (Date.now() - session.createdAt > 24 * 60 * 60 * 1000) {
-    void deleteSession(token);
-    return null;
-  }
-  return session;
-}
-
-function requestSession(req: any): ServerSession | null {
-  const token = req.headers["x-session-token"] as string | undefined;
-  return validateSession(token);
-}
-
-function hasServerPermission(session: ServerSession | null, permission: PermissionId): boolean {
-  if (!session) return false;
-  const role = String(session.role || "viewer").toLowerCase();
-  if (role === "admin") return true;
-  return (ROLE_PERMISSIONS[role] || []).includes(permission);
-}
-
-function requireAuth(req: any, res: any, next: any) {
-  const session = requestSession(req);
-  if (!session) {
-    return res.status(401).json({ success: false, error: "Authentication required" });
-  }
-  req.serverSession = session;
-  next();
-}
-
-function requirePermission(permission: PermissionId) {
-  return (req: any, res: any, next: any) => {
-    const session = requestSession(req);
-    if (!session) {
-      return res.status(401).json({ success: false, error: "Authentication required" });
-    }
-    if (!hasServerPermission(session, permission)) {
-      return res.status(403).json({ success: false, error: "Insufficient permissions" });
-    }
-    req.serverSession = session;
-    next();
-  };
-}
-
 function requirePermissionForWrites(permission: PermissionId) {
   const writeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
   return (req: any, res: any, next: any) => {
@@ -655,98 +698,6 @@ function requirePermissionForWrites(permission: PermissionId) {
     }
     return requirePermission(permission)(req, res, next);
   };
-}
-
-const PUBLIC_API_PATHS = new Set([
-  "/api/health",
-  "/api/auth/login",
-  "/api/auth/logout",
-  "/api/google/callback",
-  "/api/runtime-config",
-]);
-
-function apiPermissionForRequest(apiPath: string, method: string, body?: any): PermissionId | null {
-  const normalizedPath = String(apiPath || "").trim();
-  const normalizedMethod = String(method || "GET").toUpperCase();
-  const isWrite = normalizedMethod !== "GET" && normalizedMethod !== "HEAD";
-
-  if (normalizedPath.startsWith("/api/admin/")) return "user_management";
-  if (normalizedPath === "/api/groups") return null;
-  if (normalizedPath === "/api/messages/history" || normalizedPath === "/api/messages/sync") return "user_management";
-  if (normalizedPath.startsWith("/api/messages") || normalizedPath === "/api/chat-users") return null;
-
-  if (normalizedPath.startsWith("/api/audio/")) return "broadcast_audio";
-  if (normalizedPath.startsWith("/api/mapping/3d/")) return isWrite ? "system_settings" : "view_map";
-  if (normalizedPath === "/api/mavlink/command") return "camera_control";
-  if (normalizedPath.startsWith("/api/mavlink/fence/")) return "manage_geofences";
-  if (normalizedPath.startsWith("/api/mavlink/mission/")) return "mission_planning";
-  if (normalizedPath.startsWith("/api/mavlink/rally/")) return "mission_planning";
-  if (normalizedPath.startsWith("/api/mavlink/mode-mapping")) return "system_settings";
-  if (normalizedPath.startsWith("/api/mavlink/airframe/")) return "system_settings";
-  if (normalizedPath.startsWith("/api/mavlink/optional-hardware/")) return "system_settings";
-  if (normalizedPath.startsWith("/api/mavlink/manual-control")) return "flight_control";
-  if (normalizedPath.startsWith("/api/mavlink/vehicle/action")) {
-    return normalizedPath.includes("arm") || normalizedPath.includes("disarm") ? "arm_disarm" : "flight_control";
-  }
-  if (
-    normalizedPath.startsWith("/api/mavlink/params") ||
-    normalizedPath.startsWith("/api/mavlink/calibration") ||
-    normalizedPath.startsWith("/api/mavlink/swarm/") ||
-    normalizedPath.startsWith("/api/mavlink/radio-sik/") ||
-    normalizedPath.startsWith("/api/mavlink/inspector/") ||
-    normalizedPath.startsWith("/api/mavlink/serial-passthrough/") ||
-    normalizedPath.startsWith("/api/mavlink/rtk/") ||
-    normalizedPath.startsWith("/api/mavlink/gps-inject/") ||
-    normalizedPath.startsWith("/api/mavlink/dataflash/") ||
-    normalizedPath.startsWith("/api/mavlink/geotag/")
-  ) {
-    return normalizedPath.startsWith("/api/mavlink/dataflash/") ? "access_flight_recorder" : "system_settings";
-  }
-
-  if (normalizedPath === "/api/commands/dispatch") {
-    const commandType = String(body?.commandType || body?.type || "").trim().toLowerCase();
-    if (commandType === "arm" || commandType === "disarm") return "arm_disarm";
-    if (commandType === "terminal" || commandType === "terminal_command" || commandType === "run_terminal") return "run_terminal";
-    return "flight_control";
-  }
-  if (normalizedPath.startsWith("/api/commands")) return null;
-  if (normalizedPath.startsWith("/api/missions")) return isWrite ? "mission_planning" : "mission_planning";
-  if (normalizedPath.startsWith("/api/waypoints")) return isWrite ? "mission_planning" : "mission_planning";
-  if (normalizedPath.startsWith("/api/flight-logs")) return normalizedMethod === "DELETE" ? "delete_records" : "access_flight_recorder";
-  if (normalizedPath.startsWith("/api/flight-sessions")) {
-    if (normalizedMethod === "DELETE") return "delete_records";
-    return "access_flight_recorder";
-  }
-  if (normalizedPath.startsWith("/api/motor-telemetry") || normalizedPath.startsWith("/api/sensor-data")) {
-    return normalizedMethod === "GET" ? "view_telemetry" : "system_settings";
-  }
-  if (normalizedPath.startsWith("/api/telemetry/record")) return "system_settings";
-  if (normalizedPath.startsWith("/api/camera-settings")) return normalizedMethod === "GET" ? "view_camera" : "camera_control";
-  if (normalizedPath.startsWith("/api/airspace/") || normalizedPath.startsWith("/api/geocode") || normalizedPath.startsWith("/api/reverse-geocode")) {
-    return "view_map";
-  }
-  if (
-    normalizedPath.startsWith("/api/backup/") ||
-    normalizedPath.startsWith("/api/drive/") ||
-    normalizedPath.startsWith("/api/google/") ||
-    normalizedPath.startsWith("/api/cloud/") ||
-    normalizedPath.startsWith("/api/debug/") ||
-    normalizedPath.startsWith("/api/connections/test") ||
-    normalizedPath.startsWith("/api/integrations/verify")
-  ) {
-    return "system_settings";
-  }
-  if (normalizedPath.startsWith("/api/drones")) return isWrite ? "system_settings" : "view_map";
-  if (normalizedPath.startsWith("/api/media")) return normalizedMethod === "GET" ? "view_camera" : "camera_control";
-  if (normalizedPath.startsWith("/api/backlog")) return "system_settings";
-  if (normalizedPath.startsWith("/api/servo/")) return "camera_control";
-  if (normalizedPath.startsWith("/api/bme688/")) return "view_telemetry";
-  if (normalizedPath.startsWith("/api/stabilization/")) return isWrite ? "flight_control" : "view_telemetry";
-  if (normalizedPath.startsWith("/api/settings")) return "system_settings";
-  if (normalizedPath.startsWith("/api/plugins/")) return "system_settings";
-  if (normalizedPath.startsWith("/api/automation/")) return "automation_scripts";
-  if (normalizedPath.startsWith("/api/auth/")) return null;
-  return null;
 }
 
 interface AirspaceZone {
@@ -1441,25 +1392,31 @@ export async function registerRoutes(
       try {
         const msg = JSON.parse(data.toString());
         if (msg.type === "auth" && msg.sessionToken) {
-          // Validate token against server session store
-          const session = validateSession(msg.sessionToken);
-          if (session) {
-            clientInfo.userId = session.userId;
-            clientInfo.session = session;
-            clientInfo.authenticated = true;
-            if (clientInfo.authDeadlineTimer) {
-              clearTimeout(clientInfo.authDeadlineTimer);
-              clientInfo.authDeadlineTimer = null;
-            }
-            ws.send(JSON.stringify({
-              type: "auth_ok",
-              data: { userId: session.userId, role: session.role, name: session.name },
-            }));
-            console.log(`WebSocket client authenticated as user: ${session.userId} (${session.name})`);
-          } else {
-            console.log("WebSocket auth failed: invalid or expired session token");
-            ws.send(JSON.stringify({ type: "auth_failed", data: { error: "Invalid or expired session token" } }));
-          }
+          // Validate token against shared session store (Firestore/file) for multi-instance support
+          getSession(msg.sessionToken)
+            .then((session) => {
+              if (!session) {
+                console.log("WebSocket auth failed: invalid or expired session token");
+                ws.send(JSON.stringify({ type: "auth_failed", data: { error: "Invalid or expired session token" } }));
+                return;
+              }
+              clientInfo.userId = session.userId;
+              clientInfo.session = session;
+              clientInfo.authenticated = true;
+              if (clientInfo.authDeadlineTimer) {
+                clearTimeout(clientInfo.authDeadlineTimer);
+                clientInfo.authDeadlineTimer = null;
+              }
+              ws.send(JSON.stringify({
+                type: "auth_ok",
+                data: { userId: session.userId, role: session.role, name: session.name },
+              }));
+              console.log(`WebSocket client authenticated as user: ${session.userId} (${session.name})`);
+            })
+            .catch((err) => {
+              console.warn("WebSocket auth error:", err);
+              ws.send(JSON.stringify({ type: "auth_failed", data: { error: "Session validation failed" } }));
+            });
           return;
         }
 
@@ -2092,7 +2049,7 @@ export async function registerRoutes(
   const startMissionRunProgressMonitor = (runId: string) => {
     stopMissionRunProgressMonitor(runId);
     const timer = setInterval(() => {
-      const activeRun = missionRuns.get(runId);
+      const activeRun = getMissionRun(runId);
       if (!activeRun) {
         stopMissionRunProgressMonitor(runId);
         return;
@@ -2188,10 +2145,8 @@ export async function registerRoutes(
     return { played: false, engine: "simulated" };
   };
 
-  // Health check endpoint for Electron app startup detection
-  app.get("/api/health", (req, res) => {
-    res.status(200).json({ status: "ok", timestamp: Date.now() });
-  });
+  // Health check endpoint for Electron app startup detection (intentionally unauthenticated)
+  registerDebugRoutes(app);
 
   app.use("/api", (req, res, next) => {
     const started = Date.now();
@@ -2239,6 +2194,7 @@ export async function registerRoutes(
   app.use("/api/debug", requirePermission("system_settings"));
   app.use("/api/messages", requireAuth);
   app.use("/api/chat-users", requireAuth);
+  app.use("/api/operator", requireAuth);
   app.use("/api/automation", requirePermission("automation_scripts"));
   app.use("/api/settings", requirePermission("system_settings"));
   app.use("/api/missions", requirePermission("mission_planning"));
@@ -3144,6 +3100,19 @@ export async function registerRoutes(
         try {
           const parsed = JSON.parse((out || "").trim() || "{}");
           if (parsed?.success) {
+            const droneId = (req as any).body?.droneId;
+            if (droneId) {
+              const fenceHash = JSON.stringify(primary?.points ?? []).slice(0, 64);
+              fcStateService.recordFenceApplied(droneId, fenceHash, (req as any).serverSession?.userId);
+            } else {
+              void storage.getAllDrones().then((drones) => {
+                const d = drones.find((dr) => dr.connectionString === connectionString);
+                if (d) {
+                  const fenceHash = JSON.stringify(primary?.points ?? []).slice(0, 64);
+                  fcStateService.recordFenceApplied(d.id, fenceHash, (req as any).serverSession?.userId);
+                }
+              });
+            }
             return res.json({ success: true, uploadedPoints: parsed.uploadedPoints, zoneName: primary?.name || null });
           }
           return res.status(500).json({ success: false, error: parsed?.error || err || "Fence upload failed" });
@@ -3215,7 +3184,19 @@ export async function registerRoutes(
       py.on("close", () => {
         try {
           const parsed = JSON.parse((out || "").trim() || "{}");
-          if (parsed?.success) return res.json(parsed);
+          if (parsed?.success) {
+            const droneId = (req as any).body?.droneId;
+            const missionHash = JSON.stringify(waypoints).slice(0, 64);
+            if (droneId) {
+              fcStateService.recordMissionApplied(droneId, missionHash, (req as any).serverSession?.userId);
+            } else {
+              void storage.getAllDrones().then((drones) => {
+                const d = drones.find((dr) => dr.connectionString === connectionString);
+                if (d) fcStateService.recordMissionApplied(d.id, missionHash, (req as any).serverSession?.userId);
+              });
+            }
+            return res.json(parsed);
+          }
           return res.status(500).json({ success: false, error: parsed?.error || err || "Mission upload failed" });
         } catch {
           return res.status(500).json({ success: false, error: err || "Invalid mission bridge response" });
@@ -3901,6 +3882,18 @@ export async function registerRoutes(
       }
 
       const connectionString = String(req.body?.connectionString || payload.connectionString || "").trim();
+      if (!connectionString) {
+        return res.status(400).json({ success: false, error: "connectionString is required" });
+      }
+
+      const lease = getCommandLease(connectionString);
+      if (lease && lease.userId !== session.userId) {
+        return res.status(409).json({
+          success: false,
+          error: `Drone controlled by ${lease.userName || lease.userId}. Command lease expires in ${Math.ceil((COMMAND_LEASE_TTL_MS - (Date.now() - lease.acquiredAt)) / 1000)}s.`,
+          lease: { heldBy: lease.userName || lease.userId },
+        });
+      }
 
       const record = await commandService.dispatchAndWait(
         {
@@ -3925,6 +3918,7 @@ export async function registerRoutes(
       );
 
       if (record.status === "acked") {
+        acquireCommandLease(connectionString, session.userId, session.name || session.userId);
         void publishCloudRealtime("command_acked", record, { session }).catch(logCloudErr);
       } else {
         void publishCloudRealtime("command_failed", record, { session }).catch(logCloudErr);
@@ -3935,6 +3929,19 @@ export async function registerRoutes(
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || "Command dispatch failed" });
     }
+  });
+
+  app.get("/api/commands/lease", async (req, res) => {
+    const session = (req as any).serverSession as ServerSession | undefined;
+    if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+    const connectionString = String(req.query?.connectionString || "").trim();
+    if (!connectionString) return res.json({ lease: null, currentUserId: session.userId });
+    const lease = getCommandLease(connectionString);
+    return res.json({
+      lease: lease ? { heldBy: lease.userName || lease.userId, acquiredAt: lease.acquiredAt, expiresInMs: Math.max(0, COMMAND_LEASE_TTL_MS - (Date.now() - lease.acquiredAt)) } : null,
+      currentUserId: session.userId,
+      hasLease: lease?.userId === session.userId,
+    });
   });
 
   app.get("/api/commands", async (req, res) => {
@@ -4262,7 +4269,7 @@ export async function registerRoutes(
   });
 
   app.get("/api/missions/runs/:runId", async (req, res) => {
-    const run = missionRuns.get(String(req.params.runId || "").trim());
+    const run = getMissionRun(String(req.params.runId || "").trim());
     if (!run) return res.status(404).json({ success: false, error: "Mission run not found" });
     return res.json({ success: true, run });
   });
@@ -4271,7 +4278,7 @@ export async function registerRoutes(
     try {
       const session = req.serverSession as ServerSession | undefined;
       if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
-      const run = missionRuns.get(String(req.params.runId || "").trim());
+      const run = getMissionRun(String(req.params.runId || "").trim());
       if (!run) return res.status(404).json({ success: false, error: "Mission run not found" });
 
       const stopRecord = await commandService.dispatchAndWait(
@@ -4300,7 +4307,7 @@ export async function registerRoutes(
     try {
       const session = req.serverSession as ServerSession | undefined;
       if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
-      const run = missionRuns.get(String(req.params.runId || "").trim());
+      const run = getMissionRun(String(req.params.runId || "").trim());
       if (!run) return res.status(404).json({ success: false, error: "Mission run not found" });
       if (run.status !== "running") {
         return res.status(409).json({ success: false, error: `Mission run is in '${run.status}' state` });
@@ -4354,6 +4361,62 @@ export async function registerRoutes(
     return null;
   };
 
+  app.get("/api/automation/scripts", async (req: any, res) => {
+    const session = req.serverSession as ServerSession | undefined;
+    if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+    const recipes = automationService.getRecipes(session.userId);
+    return res.json({ success: true, scripts: recipes });
+  });
+
+  app.post("/api/automation/scripts", async (req: any, res) => {
+    const session = req.serverSession as ServerSession | undefined;
+    if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+    const name = String(req.body?.name || "New Recipe").trim();
+    const description = String(req.body?.description || "").trim();
+    const trigger = String(req.body?.trigger || "manual").trim().toLowerCase();
+    const code = String(req.body?.code || "").trim();
+    const enabled = Boolean(req.body?.enabled ?? false);
+    const recipe = automationService.createRecipe({
+      userId: session.userId,
+      name,
+      description: description || undefined,
+      trigger,
+      code,
+      enabled,
+    });
+    return res.json({ success: true, script: recipe });
+  });
+
+  app.patch("/api/automation/scripts/:id", async (req: any, res) => {
+    const session = req.serverSession as ServerSession | undefined;
+    if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+    const id = String(req.params?.id || "").trim();
+    if (!id) return res.status(400).json({ success: false, error: "Script id required" });
+    const existing = automationService.getRecipe(id);
+    if (!existing) return res.status(404).json({ success: false, error: "Script not found" });
+    if (existing.userId !== session.userId) return res.status(403).json({ success: false, error: "Forbidden" });
+    const updates: Record<string, unknown> = {};
+    if (req.body?.name !== undefined) updates.name = String(req.body.name).trim();
+    if (req.body?.description !== undefined) updates.description = String(req.body.description).trim();
+    if (req.body?.trigger !== undefined) updates.trigger = String(req.body.trigger).trim().toLowerCase();
+    if (req.body?.code !== undefined) updates.code = String(req.body.code);
+    if (req.body?.enabled !== undefined) updates.enabled = Boolean(req.body.enabled);
+    const recipe = automationService.updateRecipe(id, updates);
+    return res.json({ success: true, script: recipe });
+  });
+
+  app.delete("/api/automation/scripts/:id", async (req: any, res) => {
+    const session = req.serverSession as ServerSession | undefined;
+    if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+    const id = String(req.params?.id || "").trim();
+    if (!id) return res.status(400).json({ success: false, error: "Script id required" });
+    const existing = automationService.getRecipe(id);
+    if (!existing) return res.status(404).json({ success: false, error: "Script not found" });
+    if (existing.userId !== session.userId) return res.status(403).json({ success: false, error: "Forbidden" });
+    automationService.deleteRecipe(id);
+    return res.json({ success: true });
+  });
+
   app.post("/api/automation/scripts/execute", async (req: any, res) => {
     try {
       const session = req.serverSession as ServerSession | undefined;
@@ -4391,8 +4454,8 @@ export async function registerRoutes(
           name: session.name,
         },
       };
-      automationRuns.set(runId, run);
-      if (automationRuns.size > 1000) {
+      setAutomationRun(runId, run);
+      if (!USE_DB && automationRuns.size > 1000) {
         const oldest = automationRuns.keys().next().value;
         if (oldest) automationRuns.delete(oldest);
       }
@@ -4403,7 +4466,7 @@ export async function registerRoutes(
         run.status = "failed";
         run.error = "Script has no safe executable backend command mapping";
         run.updatedAt = new Date().toISOString();
-        automationRuns.set(runId, run);
+        setAutomationRun(runId, run);
         scheduleRuntimeStatePersist();
         broadcast("automation_run_update", run);
         return res.status(400).json({ success: false, run, error: run.error });
@@ -4414,7 +4477,7 @@ export async function registerRoutes(
         run.status = "failed";
         run.error = `Insufficient permissions: ${requiredPermission} required`;
         run.updatedAt = new Date().toISOString();
-        automationRuns.set(runId, run);
+        setAutomationRun(runId, run);
         scheduleRuntimeStatePersist();
         broadcast("automation_run_update", run);
         return res.status(403).json({ success: false, run, error: run.error });
@@ -4422,7 +4485,7 @@ export async function registerRoutes(
 
       run.status = "running";
       run.updatedAt = new Date().toISOString();
-      automationRuns.set(runId, run);
+      setAutomationRun(runId, run);
       scheduleRuntimeStatePersist();
       broadcast("automation_run_update", run);
 
@@ -4450,12 +4513,16 @@ export async function registerRoutes(
       if (commandRecord.status === "acked") {
         run.status = "completed";
         run.error = null;
+        const recipe = automationService.getRecipe(scriptId);
+        if (recipe && recipe.userId === session.userId) {
+          automationService.updateRecipe(scriptId, { lastRun: now });
+        }
       } else {
         run.status = "failed";
         run.error = commandRecord.error || "Automation command failed";
       }
       run.updatedAt = new Date().toISOString();
-      automationRuns.set(runId, run);
+      setAutomationRun(runId, run);
       scheduleRuntimeStatePersist();
       broadcast("automation_run_update", run);
       void appendCloudDocument("automation_runs", run, { session }).catch(logCloudErr);
@@ -4473,7 +4540,7 @@ export async function registerRoutes(
   app.get("/api/automation/runs", async (req, res) => {
     const scriptId = String(req.query.scriptId || "").trim();
     const limit = Math.max(1, Math.min(500, Number(req.query.limit || 100)));
-    const all = Array.from(automationRuns.values()).reverse();
+    const all = getAutomationRuns().reverse();
     const filtered = scriptId ? all.filter((run) => run.scriptId === scriptId) : all;
     return res.json({ success: true, runs: filtered.slice(0, limit) });
   });
@@ -5122,7 +5189,7 @@ export async function registerRoutes(
   app.get("/api/mavlink/rtk/profiles", async (_req, res) => {
     try {
       const profiles = await readRtkProfiles();
-      res.json({ success: true, profiles });
+      res.json({ success: true, profiles: profiles.map(redactRtkProfile) });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error?.message || "Failed to list RTK profiles" });
     }
@@ -5133,7 +5200,7 @@ export async function registerRoutes(
       const profiles = await readRtkProfiles();
       res.setHeader("Content-Type", "application/json");
       res.setHeader("Content-Disposition", `attachment; filename="rtk-profiles-${Date.now()}.json"`);
-      res.send(JSON.stringify({ profiles }, null, 2));
+      res.send(JSON.stringify({ profiles: profiles.map(redactRtkProfile) }, null, 2));
     } catch (error: any) {
       res.status(500).json({ success: false, error: error?.message || "Failed to export RTK profiles" });
     }
@@ -5170,7 +5237,7 @@ export async function registerRoutes(
       if (existingIdx >= 0) profiles[existingIdx] = profile;
       else profiles.push(profile);
       await writeRtkProfiles(profiles);
-      res.json({ success: true, profile });
+      res.json({ success: true, profile: redactRtkProfile(profile) });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error?.message || "Failed to save RTK profile" });
     }
@@ -5231,7 +5298,8 @@ export async function registerRoutes(
   });
 
   app.get("/api/mavlink/rtk/status", async (_req, res) => {
-    res.json({ success: true, state: rtkNtripState });
+    const state = { ...rtkNtripState, command: redactCommand(rtkNtripState.command || "") };
+    res.json({ success: true, state });
   });
 
   app.post("/api/mavlink/rtk/start", async (req, res) => {
@@ -5247,7 +5315,7 @@ export async function registerRoutes(
       }
       const started = startRtkNtripProcess(host, port, mountpoint, username, password, connectionString);
       if (!started.ok) return res.status(409).json({ success: false, error: started.error });
-      res.json({ success: true, state: rtkNtripState });
+      res.json({ success: true, state: redactRtkState(rtkNtripState) });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error?.message || "Failed to start RTK/NTRIP" });
     }
@@ -5282,7 +5350,7 @@ export async function registerRoutes(
         connectionString,
       );
       if (!started.ok) return res.status(409).json({ success: false, error: started.error });
-      res.json({ success: true, state: rtkNtripState, profile });
+      res.json({ success: true, state: redactRtkState(rtkNtripState), profile: redactRtkProfile(profile) });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error?.message || "Failed to reconnect RTK/NTRIP" });
     }
@@ -6053,7 +6121,13 @@ export async function registerRoutes(
       process.env.DEVICE_ROLE === "ONBOARD" || existsSync("/sys/firmware/devicetree/base/model");
 
     const ok = (details: Record<string, unknown> = {}) =>
-      res.json({ success: true, simulated: !isRaspberryPi, ...details });
+      res.json({
+        success: !isRaspberryPi && process.env.NODE_ENV === "production" ? false : true,
+        simulated: !isRaspberryPi,
+        ...(process.env.NODE_ENV === "production" && !isRaspberryPi
+          ? { error: "Connection test simulated — not on onboard hardware" }
+          : details),
+      });
     const fail = (message: string, details: Record<string, unknown> = {}) =>
       res.status(200).json({ success: false, error: message, simulated: !isRaspberryPi, ...details });
 
@@ -6132,7 +6206,7 @@ export async function registerRoutes(
   });
 
   // Authentication: Create server-side session from server-validated credentials.
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", rateLimitLoginMiddleware, async (req, res) => {
     try {
       const username = String(req.body?.username || "").trim();
       const password = String(req.body?.password || "");
@@ -6202,7 +6276,7 @@ export async function registerRoutes(
   app.post("/api/auth/logout", async (req, res) => {
     try {
       const sessionToken = req.headers['x-session-token'] as string;
-      const session = validateSession(sessionToken);
+      const session = sessionToken ? await getSession(sessionToken) : null;
       if (sessionToken) {
         await deleteSession(sessionToken);
       }
@@ -6699,11 +6773,12 @@ export async function registerRoutes(
     }
   });
 
-  // Camera Settings API
+  // Camera Settings API (scoped by droneId query param)
   app.get("/api/camera-settings", async (req, res) => {
     try {
-      const settings = await storage.getCameraSettings();
-      res.json(settings);
+      const droneId = String(req.query?.droneId || "").trim() || undefined;
+      const settings = await storage.getCameraSettings(droneId);
+      res.json(settings || null);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch camera settings" });
     }
@@ -6711,9 +6786,10 @@ export async function registerRoutes(
 
   app.patch("/api/camera-settings", async (req, res) => {
     try {
-      const settings = await storage.updateCameraSettings(req.body);
-      broadcast("camera_settings", settings);
-      void syncCloudDocument("camera_settings", "active", settings, { session: requestSession(req) }).catch(logCloudErr);
+      const droneId = String(req.body?.droneId ?? req.query?.droneId ?? "").trim() || undefined;
+      const settings = await storage.updateCameraSettings(req.body, droneId);
+      broadcast("camera_settings", { ...settings, droneId });
+      void syncCloudDocument("camera_settings", droneId || "default", settings, { session: requestSession(req) }).catch(logCloudErr);
       res.json(settings);
     } catch (error) {
       res.status(500).json({ error: "Failed to update camera settings" });
@@ -7328,6 +7404,32 @@ export async function registerRoutes(
     res.json({ configured: isOAuthConfigured() });
   });
 
+  // Operator preferences (backend-owned selected drone, camera settings)
+  app.get("/api/operator/preferences", requireAuth, async (req: any, res) => {
+    try {
+      const session = req.serverSession;
+      if (!session?.userId) return res.status(401).json({ error: "Authentication required" });
+      const prefs = operatorPreferenceService.getPreferences(session.userId);
+      res.json(prefs ?? { selectedDroneId: null, cameraSettings: null });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch preferences" });
+    }
+  });
+
+  app.patch("/api/operator/preferences", requireAuth, async (req: any, res) => {
+    try {
+      const session = req.serverSession;
+      if (!session?.userId) return res.status(401).json({ error: "Authentication required" });
+      const { selectedDroneId } = req.body ?? {};
+      const prefs = operatorPreferenceService.updatePreferences(session.userId, {
+        selectedDroneId: selectedDroneId !== undefined ? (selectedDroneId || null) : undefined,
+      });
+      res.json(prefs);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update preferences" });
+    }
+  });
+
   // Drones API
   app.get("/api/drones", async (req, res) => {
     try {
@@ -7349,6 +7451,17 @@ export async function registerRoutes(
       res.json(drone);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch drone" });
+    }
+  });
+
+  app.get("/api/drones/:id/fc-state", async (req, res) => {
+    try {
+      const drone = await storage.getDrone(req.params.id);
+      if (!drone) return res.status(404).json({ error: "Drone not found" });
+      const state = fcStateService.getState(req.params.id);
+      res.json(state ?? { droneId: req.params.id, missionHash: null, fenceHash: null, profileHash: null, appliedAt: null, appliedBy: null });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch FC state" });
     }
   });
 
@@ -8884,8 +8997,16 @@ export async function registerRoutes(
         });
       };
       
-      // For non-Pi environments, return simulated data directly
+      // For non-Pi environments: in production, return unavailable; otherwise simulated for dev
       if (!isRaspberryPi) {
+        if (process.env.NODE_ENV === "production") {
+          return res.status(503).json({
+            success: false,
+            error: "BME688 unavailable when not running on onboard Raspberry Pi hardware",
+            simulated: false,
+            sensorAvailable: false,
+          });
+        }
         return returnSimulated();
       }
       
@@ -8908,7 +9029,11 @@ export async function registerRoutes(
       python.on('error', (err) => {
         if (!responded) {
           responded = true;
-          returnSimulated();
+          return res.status(500).json({
+            error: "BME688 script failed",
+            details: String(err),
+            simulated: false,
+          });
         }
       });
       
@@ -8942,13 +9067,21 @@ export async function registerRoutes(
       const isRaspberryPi = process.env.DEVICE_ROLE === 'ONBOARD' || 
                            existsSync('/sys/firmware/devicetree/base/model');
       
-      // For non-Pi environments, return status directly
+      // For non-Pi environments: in production return unavailable; otherwise dev message
       if (!isRaspberryPi) {
+        if (process.env.NODE_ENV === "production") {
+          return res.status(503).json({
+            success: false,
+            sensorAvailable: false,
+            platform: "other",
+            message: "BME688 unavailable when not on onboard hardware",
+          });
+        }
         return res.json({
           success: true,
           sensorAvailable: false,
-          platform: 'other',
-          message: 'BME688 sensor simulated (not on Raspberry Pi)'
+          platform: "other",
+          message: "BME688 sensor simulated (not on Raspberry Pi)",
         });
       }
       

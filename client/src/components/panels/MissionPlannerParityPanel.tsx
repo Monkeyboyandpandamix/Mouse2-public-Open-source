@@ -108,6 +108,9 @@ export function MissionPlannerParityPanel() {
             <ListChecks className="h-4 w-4" />
             Mission Planner Parity Checklist
           </CardTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            Static capability checklist — not live runtime verification. Items reflect code coverage, not hardware validation.
+          </p>
         </CardHeader>
         <CardContent>
           <ScrollArea className="h-[72vh] rounded border">

@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useTelemetry } from "@/contexts/TelemetryContext";
 import { useAppState } from "@/contexts/AppStateContext";
-import { flightSessionsApi } from "@/lib/api";
+import { flightSessionsApi, commandsApi } from "@/lib/api";
 import { queryClient } from "@/lib/queryClient";
 import { dispatchBackendCommand } from "@/lib/commandService";
 
@@ -57,6 +57,8 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
   const gamepadArmLatchRef = useRef(false);
   const gamepadBusyRef = useRef(false);
   const lastManualControlErrorRef = useRef(0);
+  const [leaseHeldBy, setLeaseHeldBy] = useState<string | null>(null);
+  const [hasLease, setHasLease] = useState<boolean>(true);
 
   const getCurrentDroneId = () => selectedDrone?.id || 'default';
 
@@ -200,6 +202,28 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
     window.addEventListener("arm-state-changed" as any, onArmState);
     return () => window.removeEventListener("arm-state-changed" as any, onArmState);
   }, []);
+
+  // Poll command lease status when a drone with connection is selected
+  useEffect(() => {
+    const connectionString = String(selectedDrone?.connectionString || "").trim();
+    if (!connectionString || !isLoggedIn) {
+      setLeaseHeldBy(null);
+      setHasLease(true);
+      return;
+    }
+    const poll = () => {
+      commandsApi.getLease(connectionString).then((res) => {
+        setHasLease(res.hasLease);
+        setLeaseHeldBy(res.lease && !res.hasLease ? res.lease.heldBy : null);
+      }).catch(() => {
+        setLeaseHeldBy(null);
+        setHasLease(true);
+      });
+    };
+    poll();
+    const interval = setInterval(poll, 10000);
+    return () => clearInterval(interval);
+  }, [selectedDrone?.connectionString, selectedDrone?.id, isLoggedIn]);
 
   useEffect(() => {
     const loadInputConfig = () => {
@@ -379,9 +403,21 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
     );
   }
 
+  const leaseBlocked = Boolean(leaseHeldBy);
+
   return (
     <div className="h-auto min-h-[120px] sm:min-h-[140px] lg:h-40 border-t border-border bg-card/80 backdrop-blur-md p-2 sm:p-4 flex flex-wrap sm:flex-nowrap gap-2 sm:gap-4 shrink-0 z-50 overflow-x-auto">
       
+      {/* Lease status — another user controls this drone */}
+      {leaseBlocked && (
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-500/20 border border-amber-500/50 rounded-md shrink-0 w-full sm:w-auto">
+          <Lock className="h-4 w-4 text-amber-600" />
+          <span className="text-[10px] sm:text-xs font-medium text-amber-700 dark:text-amber-400">
+            Controlled by {leaseHeldBy}
+          </span>
+        </div>
+      )}
+
       {/* Recording Indicator */}
       {isRecording && (
         <div className="flex items-center gap-1 px-2 py-1 bg-destructive/20 border border-destructive/50 rounded-md shrink-0">
@@ -402,7 +438,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
               ? "bg-destructive/10 border-destructive text-destructive hover:bg-destructive/20 hover:text-destructive" 
               : "bg-emerald-500/10 border-emerald-500 text-emerald-500 hover:bg-emerald-500/20 hover:text-emerald-500"
           )}
-          disabled={!canArmDisarm}
+          disabled={!canArmDisarm || leaseBlocked}
           onClick={async () => {
             if (!canArmDisarm) {
               toast.error("You don't have permission to arm/disarm");
@@ -433,7 +469,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
               "h-full flex flex-col gap-1 hover:bg-primary/20 hover:text-primary transition-colors p-2",
               !canFlightControl && "opacity-50 cursor-not-allowed"
             )}
-            disabled={!isArmed || !canFlightControl || !supportsTakeoff}
+            disabled={!isArmed || !canFlightControl || !supportsTakeoff || leaseBlocked}
             onClick={async () => {
               if (!canFlightControl) {
                 toast.error("You don't have flight control permission");
@@ -464,7 +500,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
               isReturning && "bg-amber-500/20 border-amber-500 text-amber-500",
               !canFlightControl && "opacity-50 cursor-not-allowed"
             )}
-            disabled={!isArmed || !baseLocation || !canFlightControl}
+            disabled={!isArmed || !baseLocation || !canFlightControl || leaseBlocked}
             onClick={handleReturnToBase}
             title={!canFlightControl ? "No flight control permission" : (baseLocation ? `Return to: ${baseLocation.name}` : "Configure base in Settings")}
             data-testid="button-rtl"

@@ -30,6 +30,9 @@ export function TelemetryProvider({ children }: { children: ReactNode }) {
       const detail = (e as CustomEvent<TelemetryData>).detail;
       if (detail && typeof detail === "object") {
         setTelemetry(detail);
+        if (typeof detail.armed === "boolean") {
+          window.dispatchEvent(new CustomEvent("arm-state-changed", { detail: { armed: detail.armed } }));
+        }
       }
     };
     window.addEventListener("telemetry-update" as any, handler);
