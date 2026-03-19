@@ -24,6 +24,25 @@ The highest-risk remaining problems are:
 
 Production readiness score: **62/100**
 
+## A1. Consolidated Unresolved Issues
+
+The following issues remain open after the current remediation passes:
+
+1. Route-local runtime state is still the active authority for mission runs, automation runs, serial passthrough, RTK/NTRIP, GPS injection, firmware jobs, calibration, audio, and 3D mapping in [server/routes.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/routes.ts).
+2. Runtime-state JSON snapshotting reduces restart loss, but it is not a transactional multi-instance state model.
+3. Core persistence for operational entities remains file-backed in [server/storage.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/server/storage.ts).
+4. Automation recipes are still stored in the browser and are not backend-owned or multi-user visible.
+5. Message state still keeps browser-local backup/cache behavior in [client/src/components/layout/TopBar.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/layout/TopBar.tsx).
+6. Offline sync still relies on browser staging in [client/src/hooks/useOfflineSync.ts](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/hooks/useOfflineSync.ts) instead of a receipt-driven server-first queue.
+7. Camera settings in [client/src/components/video/VideoFeed.tsx](/Users/mohammadaghamohammadi/Desktop/Projects/MOUSE2-app/client/src/components/video/VideoFeed.tsx) are backend-backed now, but not yet scoped by drone or session.
+8. Selected-drone context is still browser-scoped rather than server-scoped for multi-user coordination.
+9. Telemetry client authority is still split across websocket events, DOM events, and window globals instead of one typed store.
+10. Audio state is still backed by transient route state and partial polling rather than a durable session/service model.
+11. Mission/fence/applied-profile truth is not durably recorded per drone, so later operators cannot reliably inspect last-applied FC state.
+12. Cloud command, telemetry, awareness, and admin endpoints still appear underused or unused by the client.
+13. Several hardware-facing flows remain not fully verifiable from the repository alone: real FC actuation, servo/gripper actuation, onboard camera/media, BME688 hardware, RTK/GPS injection on target devices, firmware flashing outcome, and cloud account runtime behavior.
+14. Tracking and some media flows still over-rely on browser-local execution paths and should not be treated as proven onboard autonomy subsystems.
+
 ## B. Fully Working Features
 
 These are the flows the code most clearly proves.
