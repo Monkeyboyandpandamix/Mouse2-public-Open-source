@@ -3,7 +3,14 @@ dist
 .env
 .env.*
 firebase-debug.log
+.firebase/
+.firebaserc
 .DS_Store
 server/public
 vite.config.ts.*
 *.tar.gz
+data/*.json
+data/media_staging/
+data/dataflash/
+data/runtime_sessions.json
+data/cloud_runtime_config.json

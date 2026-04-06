@@ -8,7 +8,7 @@ firebase apphosting:backends:list
 firebase apphosting:backends:create
 ```
 
-Use a valid backend ID like `web-mouse` (lowercase + hyphens).
+Use a backend ID you control, such as `mouse2-web` (lowercase + hyphens).
 
 ## 2) Set required secrets/env on App Hosting
 Required runtime values:
@@ -26,6 +26,8 @@ npm run deploy:apphosting
 ```
 
 `deploy:web` is an alias to the same App Hosting deploy command.
+
+This repository is intentionally not linked to a Firebase project. Run `firebase use --add` against your own project before deploying.
 
 ## 4) Operator access control
 Protected backend endpoints require `x-session-token`.

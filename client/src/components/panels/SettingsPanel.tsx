@@ -435,7 +435,7 @@ function FirebaseCloudManager() {
               <Input
                 value={cloudConfig.projectId}
                 onChange={(e) => setCloudConfig((prev) => ({ ...prev, projectId: e.target.value }))}
-                placeholder="mouse-ee60c"
+                placeholder="your-project-id"
               />
             </div>
             <div className="space-y-1">
@@ -443,7 +443,7 @@ function FirebaseCloudManager() {
               <Input
                 value={cloudConfig.databaseURL}
                 onChange={(e) => setCloudConfig((prev) => ({ ...prev, databaseURL: e.target.value }))}
-                placeholder="https://...-default-rtdb.firebaseio.com"
+                placeholder="https://your-project-id-default-rtdb.firebaseio.com"
               />
             </div>
             <div className="space-y-1">
@@ -451,7 +451,7 @@ function FirebaseCloudManager() {
               <Input
                 value={cloudConfig.storageBucket}
                 onChange={(e) => setCloudConfig((prev) => ({ ...prev, storageBucket: e.target.value }))}
-                placeholder="mouse-ee60c.firebasestorage.app"
+                placeholder="your-storage-bucket"
               />
             </div>
             <div className="space-y-1">

@@ -810,6 +810,8 @@ Copy `.env.example` to `.env` and configure:
 cp .env.example .env
 ```
 
+For a clean public-repo onboarding flow, see `FIREBASE_SETUP.md`, `WEB_DEPLOY.md`, and `docs/OPEN_SOURCE_SETUP.md`.
+
 ### Required Variables
 
 | Variable | Description | Default |
@@ -1480,14 +1482,14 @@ The app now supports centralized Firebase synchronization for cross-operator vis
 ## Web Deployment (Firebase App Hosting)
 
 ### Prerequisites
-1. Firebase project configured (this project uses `mouse-ee60c`).
+1. Your own Firebase project configured.
 2. Firebase CLI login:
    ```bash
    npm install -g firebase-tools
    firebase login
    firebase use --add
    ```
-3. App Hosting backend created in Firebase project (`mouse-ee60c`).
+3. App Hosting backend created in your Firebase project.
 
 ### Deploy Web App
 ```bash
@@ -1510,6 +1512,7 @@ This command:
 For full setup details, also see:
 - `FIREBASE_SETUP.md`
 - `WEB_DEPLOY.md`
+- `docs/OPEN_SOURCE_SETUP.md`
 
 ---
 
@@ -1527,10 +1530,10 @@ Equivalent command:
 npm run deploy:web
 ```
 
-Both commands build first and deploy backend `web-mouse` using:
+Both commands build first and deploy the backend configured in `package.json` by default:
 
 ```bash
-firebase apphosting:rollouts:create web-mouse --git-branch main --force
+firebase apphosting:rollouts:create my-web-app --git-branch main --force
 ```
 
 If your backend ID is different:
