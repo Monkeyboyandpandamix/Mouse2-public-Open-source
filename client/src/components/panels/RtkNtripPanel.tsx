@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useAppState } from "@/contexts/AppStateContext";
+import { FcConnectionBadge, useFcConnectionString } from "@/components/shared/FcConnectionBadge";
 import { toast } from "sonner";
 import { Lock, Satellite, RefreshCw, Save, Trash2, RotateCw, Download, Upload } from "lucide-react";
 
@@ -23,7 +24,7 @@ export function RtkNtripPanel() {
   const { hasPermission } = usePermissions();
   const { selectedDrone } = useAppState();
   const canUse = hasPermission("system_settings") || hasPermission("run_terminal");
-  const [connectionString, setConnectionString] = useState("serial:/dev/ttyACM0:57600");
+  const connectionString = useFcConnectionString();
   const [host, setHost] = useState("");
   const [port, setPort] = useState("2101");
   const [mountpoint, setMountpoint] = useState("");
@@ -37,10 +38,7 @@ export function RtkNtripPanel() {
   const [busy, setBusy] = useState(false);
   const importRef = useRef<HTMLInputElement | null>(null);
 
-  useEffect(() => {
-    const next = String(selectedDrone?.connectionString || "").trim();
-    if (next) setConnectionString(next);
-  }, [selectedDrone?.connectionString]);
+  void selectedDrone;
 
   const loadProfiles = async () => {
     const res = await fetch("/api/mavlink/rtk/profiles");
@@ -346,7 +344,7 @@ export function RtkNtripPanel() {
             </div>
           </div>
           <Input value={profileName} onChange={(e) => setProfileName(e.target.value)} className="h-8 text-xs" placeholder="Profile name (e.g., Base Caster A)" />
-          <Input value={connectionString} onChange={(e) => setConnectionString(e.target.value)} className="h-8 text-xs font-mono" placeholder="serial:/dev/ttyACM0:57600" />
+          <FcConnectionBadge />
           <div className="grid grid-cols-2 gap-2">
             <Input value={host} onChange={(e) => setHost(e.target.value)} className="h-8 text-xs" placeholder="Caster host" />
             <Input value={port} onChange={(e) => setPort(e.target.value)} className="h-8 text-xs" placeholder="2101" />

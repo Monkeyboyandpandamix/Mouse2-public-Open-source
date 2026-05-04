@@ -542,10 +542,14 @@ export function UserAccessPanel() {
             <CardDescription>Enter your credentials to access the ground control station</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <form onSubmit={(e) => { e.preventDefault(); handleLogin(); }} autoComplete="on">
+            <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="username">Username</Label>
               <Input 
                 id="username"
+                name="username"
+                autoComplete="username"
                 value={loginForm.username}
                 onChange={(e) => setLoginForm(prev => ({ ...prev, username: e.target.value }))}
                 placeholder="Enter username"
@@ -557,11 +561,12 @@ export function UserAccessPanel() {
               <div className="relative">
                 <Input 
                   id="password"
+                  name="password"
+                  autoComplete="current-password"
                   type={showPassword ? "text" : "password"}
                   value={loginForm.password}
                   onChange={(e) => setLoginForm(prev => ({ ...prev, password: e.target.value }))}
                   placeholder="Enter password"
-                  onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
                   data-testid="input-login-password"
                 />
                 <Button 
@@ -580,10 +585,12 @@ export function UserAccessPanel() {
                 {loginError}
               </div>
             )}
-            <Button className="w-full" onClick={handleLogin} data-testid="button-login">
+            <Button type="submit" className="w-full" data-testid="button-login">
               <Key className="h-4 w-4 mr-2" />
               Login
             </Button>
+            </div>
+            </form>
             <p className="text-xs text-center text-muted-foreground mt-4">
               Default accounts: admin, operator, viewer (passwords are env-driven or generated at first bootstrap)
             </p>

@@ -87,7 +87,30 @@ export function SpeakerPanel({ isControllerMode, micRoutedToDrone }: SpeakerPane
   const [isListeningFromDrone, setIsListeningFromDrone] = useState(false);
   const [droneMicStatus, setDroneMicStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const micStreamRef = useRef<MediaStream | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const lastRealtimeUpdateRef = useRef(0);
+  // Suppression refs prevent WS-driven state updates from re-firing the debounced
+  // POST effect (which would echo back to the server and cause oscillation /
+  // ping-pong of the active output device or drone-mic listen state).
+  const suppressOutputPostRef = useRef(0);
+  const suppressDroneMicPostRef = useRef(0);
+  const lastUserDroneMicActionRef = useRef(0);
+  const isStreamingRef = useRef(false);
+  // Owner token for the sessionStorage `mouse_audio_sender` flag. Only the
+  // SpeakerPanel instance that wrote the current value should be allowed to
+  // clear it — otherwise a parallel instance (StrictMode double-mount, or a
+  // second panel in the same tab) could un-suppress active playback.
+  const senderOwnerTokenRef = useRef<string | null>(null);
+  const clearSenderFlagIfOwner = () => {
+    try {
+      const current = sessionStorage.getItem("mouse_audio_sender");
+      if (current && current === senderOwnerTokenRef.current) {
+        sessionStorage.removeItem("mouse_audio_sender");
+      }
+      // Always release our claim locally so a subsequent start can re-acquire.
+      senderOwnerTokenRef.current = null;
+    } catch {}
+  };
 
   const applyAudioState = (state: AudioStatusResponse["state"]) => {
     setAudioDevice(state.deviceType);
@@ -168,6 +191,11 @@ export function SpeakerPanel({ isControllerMode, micRoutedToDrone }: SpeakerPane
         micStreamRef.current.getTracks().forEach((track) => track.stop());
         micStreamRef.current = null;
       }
+      // If this tab is unmounted (navigation, hot reload, tab close) while
+      // it was the active sender, clear the flag so the next mount doesn't
+      // suppress incoming audio forever — but only if THIS instance owns it,
+      // so a parallel SpeakerPanel instance keeps its claim.
+      clearSenderFlagIfOwner();
     };
   }, []);
 
@@ -185,8 +213,17 @@ export function SpeakerPanel({ isControllerMode, micRoutedToDrone }: SpeakerPane
       const custom = event as CustomEvent<any>;
       if (custom.detail && typeof custom.detail === "object") {
         lastRealtimeUpdateRef.current = Date.now();
-        setAudioDevice(custom.detail.deviceType || "gpio");
-        setVolume([Number(custom.detail.volume ?? 80)]);
+        // Mark this state change as WS-originated so the debounced POST effect
+        // doesn't echo it back to the server (root cause of USB↔GPIO ping-pong).
+        suppressOutputPostRef.current = Date.now();
+        // Preserve the user's current selection if the WS event doesn't carry
+        // an explicit deviceType (don't blindly fall back to "gpio").
+        if (custom.detail.deviceType) {
+          setAudioDevice(custom.detail.deviceType);
+        }
+        if (custom.detail.volume != null) {
+          setVolume([Number(custom.detail.volume)]);
+        }
       }
     };
     const onLive = (event: Event) => {
@@ -194,15 +231,24 @@ export function SpeakerPanel({ isControllerMode, micRoutedToDrone }: SpeakerPane
       if (custom.detail && typeof custom.detail === "object") {
         lastRealtimeUpdateRef.current = Date.now();
         setIsRecording(Boolean(custom.detail.active));
+        isStreamingRef.current = Boolean(custom.detail.active);
       }
     };
     const onDroneMic = (event: Event) => {
       const custom = event as CustomEvent<any>;
       if (custom.detail && typeof custom.detail === "object") {
         lastRealtimeUpdateRef.current = Date.now();
+        // Ignore broadcast for ~1.2 s after a local user toggle, to prevent the
+        // server's authoritative echo from racing the optimistic local state
+        // and causing the "Hear" toggle to flicker connected/disconnected.
+        const sinceUserAction = Date.now() - lastUserDroneMicActionRef.current;
+        if (sinceUserAction < 1200) return;
+        suppressDroneMicPostRef.current = Date.now();
         setDroneMicEnabled(Boolean(custom.detail.enabled));
         setIsListeningFromDrone(Boolean(custom.detail.listening));
-        setDroneMicVolume([Number(custom.detail.volume ?? 70)]);
+        if (custom.detail.volume != null) {
+          setDroneMicVolume([Number(custom.detail.volume)]);
+        }
         setDroneMicStatus(custom.detail.enabled ? "connected" : "disconnected");
       }
     };
@@ -217,8 +263,12 @@ export function SpeakerPanel({ isControllerMode, micRoutedToDrone }: SpeakerPane
     };
   }, []);
 
-  // Single debounced effect for output selection (avoids duplicate API calls)
+  // Single debounced effect for output selection (avoids duplicate API calls).
+  // Skip the POST if the most recent state change was caused by a WS event —
+  // otherwise we'd echo it straight back to the server and create a feedback loop.
   useEffect(() => {
+    const sinceWsUpdate = Date.now() - suppressOutputPostRef.current;
+    if (sinceWsUpdate < 400) return;
     const t = window.setTimeout(() => {
       apiJson("/api/audio/output/select", {
         method: "POST",
@@ -266,26 +316,75 @@ export function SpeakerPanel({ isControllerMode, micRoutedToDrone }: SpeakerPane
       toast.error("Please enter a message");
       return;
     }
-
-    speechSynthesis.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = speechRate[0];
-    utterance.pitch = voiceType === "robotic" ? 0.5 : pitch[0];
-    utterance.volume = volume[0] / 100;
-    
-    const selectedVoice = getSelectedVoice();
-    if (selectedVoice) {
-      utterance.voice = selectedVoice;
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      toast.error("Text-to-speech is not supported in this browser");
+      return;
     }
 
-    if (isPreview) {
-      setIsPreviewing(true);
-      utterance.onend = () => setIsPreviewing(false);
-      utterance.onerror = () => setIsPreviewing(false);
-    }
+    // Some browsers leave speechSynthesis paused after long idle; wake it before speaking.
+    try {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.resume();
+    } catch {}
 
-    speechSynthesis.speak(utterance);
+    const doSpeak = () => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = speechRate[0];
+      utterance.pitch = voiceType === "robotic" ? 0.5 : pitch[0];
+      utterance.volume = volume[0] / 100;
+
+      const selectedVoice = getSelectedVoice();
+      if (selectedVoice) {
+        utterance.voice = selectedVoice;
+        utterance.lang = selectedVoice.lang || "en-US";
+      } else {
+        utterance.lang = "en-US";
+      }
+
+      if (isPreview) {
+        setIsPreviewing(true);
+        utterance.onstart = () => {
+          toast.success("Speaking preview...");
+        };
+        utterance.onend = () => setIsPreviewing(false);
+        utterance.onerror = (event) => {
+          console.warn("[SpeakerPanel] TTS error:", event);
+          setIsPreviewing(false);
+          const err = (event as any)?.error;
+          if (err === "interrupted" || err === "canceled") return;
+          toast.error(`TTS error${err ? `: ${err}` : ": no audio device"}`);
+        };
+      }
+
+      try {
+        window.speechSynthesis.speak(utterance);
+      } catch (err) {
+        console.error("[SpeakerPanel] speechSynthesis.speak failed:", err);
+        toast.error("TTS failed to start - try another voice");
+        setIsPreviewing(false);
+      }
+    };
+
+    // Voices are loaded async on Chromium; if the list is empty, wait once for voiceschanged.
+    if (window.speechSynthesis.getVoices().length === 0) {
+      let spoken = false;
+      const handler = () => {
+        if (spoken) return;
+        spoken = true;
+        window.speechSynthesis.removeEventListener("voiceschanged", handler);
+        doSpeak();
+      };
+      window.speechSynthesis.addEventListener("voiceschanged", handler);
+      // Fallback: even without voiceschanged we still attempt to speak using browser default.
+      setTimeout(() => {
+        if (spoken) return;
+        spoken = true;
+        window.speechSynthesis.removeEventListener("voiceschanged", handler);
+        doSpeak();
+      }, 250);
+    } else {
+      doSpeak();
+    }
   };
 
   const handlePreview = () => {
@@ -377,20 +476,138 @@ export function SpeakerPanel({ isControllerMode, micRoutedToDrone }: SpeakerPane
       }
       if (result?.live?.active === true) {
         setIsRecording(true);
+        isStreamingRef.current = true;
+        // Mark this tab as the active sender so GlobalAudioReceiver skips
+        // playing back our own broadcasted chunks (echo prevention). We
+        // store a unique owner token so a *different* SpeakerPanel instance
+        // (StrictMode double-mount, or another panel in the same tab) only
+        // clears the flag if it owns the current session — preventing one
+        // instance from accidentally un-suppressing another's playback.
+        try {
+          const ownerToken = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+          senderOwnerTokenRef.current = ownerToken;
+          sessionStorage.setItem("mouse_audio_sender", ownerToken);
+        } catch {}
       } else {
         throw new Error("Audio backend did not enter live mode");
       }
+
+      // Start streaming mic chunks to the drone speaker (two-way audio).
+      try {
+        if (typeof MediaRecorder !== "undefined") {
+          const preferredMime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+            ? "audio/webm;codecs=opus"
+            : MediaRecorder.isTypeSupported("audio/webm")
+              ? "audio/webm"
+              : "";
+          const recorder = preferredMime
+            ? new MediaRecorder(stream, { mimeType: preferredMime, audioBitsPerSecond: 32000 })
+            : new MediaRecorder(stream);
+          mediaRecorderRef.current = recorder;
+          let consecutiveStreamFailures = 0;
+          recorder.addEventListener("error", (ev: Event) => {
+            console.error("[SpeakerPanel] MediaRecorder error:", ev);
+            toast.error("Microphone recording error — voice streaming stopped");
+            // Clear sender flag so this tab resumes hearing other broadcasts
+            // even if the recorder errors out — but only if we still own it.
+            clearSenderFlagIfOwner();
+            isStreamingRef.current = false;
+            try { if (recorder.state !== "inactive") recorder.stop(); } catch {}
+          });
+          recorder.addEventListener("stop", () => {
+            // Belt-and-suspenders: any stop event clears the sender flag too,
+            // again only if we own it.
+            clearSenderFlagIfOwner();
+          });
+          recorder.addEventListener("dataavailable", async (event: BlobEvent) => {
+            if (!event.data || event.data.size === 0) return;
+            // Don't POST chunks after the recorder/live session was stopped.
+            // MediaRecorder can flush a final chunk AFTER stop() resolves, and
+            // the server returns 409 if /api/audio/live is no longer active.
+            if (!isStreamingRef.current || recorder.state === "inactive") return;
+            try {
+              const buf = await event.data.arrayBuffer();
+              const bytes = new Uint8Array(buf);
+              let bin = "";
+              for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+              const b64 = btoa(bin);
+              if (!isStreamingRef.current) return; // re-check after async work
+              const resp = await fetch("/api/audio/stream", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  chunk: b64,
+                  mimeType: recorder.mimeType || "audio/webm;codecs=opus",
+                  droneId: selectedDroneId || null,
+                }),
+              });
+              if (!resp.ok) {
+                // 409 = live session no longer active. That's an expected race
+                // around stop() — silently swallow it instead of toasting and
+                // halting the stream.
+                if (resp.status === 409) {
+                  isStreamingRef.current = false;
+                  return;
+                }
+                consecutiveStreamFailures++;
+                if (consecutiveStreamFailures === 1 || consecutiveStreamFailures % 10 === 0) {
+                  toast.warning(`Voice stream error (HTTP ${resp.status}) — chunks may be dropping`);
+                }
+                if (consecutiveStreamFailures >= 5) {
+                  toast.error("Voice streaming halted: too many failures. Stop & restart broadcast.");
+                  try { if ((recorder.state as string) !== "inactive") recorder.stop(); } catch {}
+                }
+              } else {
+                consecutiveStreamFailures = 0;
+              }
+            } catch (chunkErr) {
+              console.warn("[SpeakerPanel] chunk send failed:", chunkErr);
+              consecutiveStreamFailures++;
+            }
+          });
+          recorder.start(500);
+        }
+      } catch (recErr) {
+        // Recorder construction or .start() failed AFTER /api/audio/live/start
+        // succeeded. Without this branch, the sender flag would stay set
+        // forever (no recorder error/stop event will ever fire).
+        console.warn("[SpeakerPanel] MediaRecorder unavailable:", recErr);
+        toast.warning("Microphone recorder unavailable — broadcast started in TTS-only mode");
+        clearSenderFlagIfOwner();
+        isStreamingRef.current = false;
+      }
+
       toast.success("Live broadcast started - speak into microphone");
     } catch (error: any) {
       if (micStreamRef.current) {
         micStreamRef.current.getTracks().forEach((track) => track.stop());
         micStreamRef.current = null;
       }
+      // Failure path: ensure sender flag is cleared even if it was set just
+      // before the failure threw (e.g. server flips active=true but a later
+      // step throws). Owner-aware so we don't clobber another instance.
+      clearSenderFlagIfOwner();
+      isStreamingRef.current = false;
       toast.error(error?.message || "Microphone access denied");
     }
   };
 
   const handleStopRecording = async () => {
+    // Mark the streaming session inactive BEFORE stopping the MediaRecorder so
+    // the dataavailable handler skips the final flushed chunk (which would
+    // otherwise hit /api/audio/stream after live/stop and produce a 409).
+    isStreamingRef.current = false;
+    clearSenderFlagIfOwner();
+    if (mediaRecorderRef.current) {
+      try {
+        if (mediaRecorderRef.current.state !== "inactive") {
+          mediaRecorderRef.current.stop();
+        }
+      } catch (e) {
+        console.warn("[SpeakerPanel] recorder stop failed:", e);
+      }
+      mediaRecorderRef.current = null;
+    }
     if (micStreamRef.current) {
       micStreamRef.current.getTracks().forEach((track) => track.stop());
       micStreamRef.current = null;
@@ -456,6 +673,10 @@ export function SpeakerPanel({ isControllerMode, micRoutedToDrone }: SpeakerPane
 
   const handleToggleListenDrone = async () => {
     const nextListeningState = !isListeningFromDrone;
+    // Mark this as a user action so the WS broadcast handler doesn't immediately
+    // overwrite our optimistic state and cause toggle flicker.
+    lastUserDroneMicActionRef.current = Date.now();
+    setIsListeningFromDrone(nextListeningState);
     try {
       await apiJson("/api/audio/drone-mic", {
         method: "POST",

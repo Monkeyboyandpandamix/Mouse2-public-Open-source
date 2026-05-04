@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useAppState } from "@/contexts/AppStateContext";
+import { FcConnectionBadge, useFcConnectionString } from "@/components/shared/FcConnectionBadge";
 import { toast } from "sonner";
 import { reportApiError } from "@/lib/apiErrors";
 import { Label } from "@/components/ui/label";
@@ -16,7 +17,7 @@ export function MavlinkToolsPanel() {
   const { hasPermission } = usePermissions();
   const { selectedDrone } = useAppState();
   const canUse = hasPermission("system_settings") || hasPermission("run_terminal");
-  const [connectionString, setConnectionString] = useState("serial:/dev/ttyACM0:57600");
+  const connectionString = useFcConnectionString();
   const [snapshot, setSnapshot] = useState<any>(null);
   const [passthroughState, setPassthroughState] = useState<any>(null);
   const [localPort, setLocalPort] = useState("5760");
@@ -42,10 +43,8 @@ export function MavlinkToolsPanel() {
   const [liveLatest, setLiveLatest] = useState<any>(null);
   const [liveSeries, setLiveSeries] = useState<Array<{ t: string; total: number; attitude: number; gps: number; sys: number; heartbeat: number }>>([]);
 
-  useEffect(() => {
-    const next = String(selectedDrone?.connectionString || "").trim();
-    if (next) setConnectionString(next);
-  }, [selectedDrone?.connectionString]);
+  // connectionString is derived from the selected drone via useFcConnectionString();
+  // no setter is needed — it updates automatically when the operator switches drones.
 
   const refreshPassthrough = async () => {
     const res = await fetch("/api/mavlink/serial-passthrough/status");
@@ -341,7 +340,7 @@ export function MavlinkToolsPanel() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
-          <Input value={connectionString} onChange={(e) => setConnectionString(e.target.value)} className="h-8 text-xs font-mono" />
+          <FcConnectionBadge />
           <Button size="sm" variant="outline" onClick={fetchSnapshot} disabled={busy}>
             <RefreshCw className="h-4 w-4 mr-1" /> Snapshot
           </Button>

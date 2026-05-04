@@ -52,6 +52,7 @@ import { NoFlyZoneOverlay } from "@/components/map/NoFlyZoneOverlay";
 import { NoFlyZoneLegend } from "@/components/map/NoFlyZoneLegend";
 import { reportApiError } from "@/lib/apiErrors";
 import { useAppState } from "@/contexts/AppStateContext";
+import { FcConnectionBadge, useFcConnectionString } from "@/components/shared/FcConnectionBadge";
 
 interface FlightSession {
   id: string;
@@ -154,7 +155,7 @@ export function FlightLogsPanel() {
   const [dataViewDialog, setDataViewDialog] = useState<DataViewType>(null);
   const [videoDialog, setVideoDialog] = useState(false);
   const [mapDialog, setMapDialog] = useState(false);
-  const [fcConnectionString, setFcConnectionString] = useState("serial:/dev/ttyACM0:57600");
+  const fcConnectionString = useFcConnectionString();
   const [dataflashBusy, setDataflashBusy] = useState(false);
   const [dataflashLogs, setDataflashLogs] = useState<Array<{ id: number; size: number; timeUtc: number }>>([]);
   const [selectedDataflashFile, setSelectedDataflashFile] = useState<string | null>(null);
@@ -168,10 +169,6 @@ export function FlightLogsPanel() {
   const [geotagReport, setGeotagReport] = useState<any | null>(null);
   const noFlyZones = useNoFlyZones();
 
-  useEffect(() => {
-    const next = String(selectedDrone?.connectionString || "").trim();
-    if (next) setFcConnectionString(next);
-  }, [selectedDrone?.connectionString]);
 
   const { data: flightSessions = [], isLoading: sessionsLoading, refetch: refetchSessions } = useQuery<FlightSession[]>({
     queryKey: ['/api/flight-sessions'],
@@ -1222,12 +1219,7 @@ export function FlightLogsPanel() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="p-4 pt-0 space-y-3">
-                  <Input
-                    value={fcConnectionString}
-                    onChange={(e) => setFcConnectionString(e.target.value)}
-                    className="h-8 text-xs font-mono"
-                    placeholder="serial:/dev/ttyACM0:57600"
-                  />
+                  <FcConnectionBadge />
                   <Button variant="outline" className="w-full justify-start" onClick={loadDataflashLogs} disabled={dataflashBusy}>
                     <RefreshCw className={`h-4 w-4 mr-2 ${dataflashBusy ? "animate-spin" : ""}`} />
                     List DataFlash Logs from FC

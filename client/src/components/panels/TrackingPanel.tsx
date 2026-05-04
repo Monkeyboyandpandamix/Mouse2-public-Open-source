@@ -7,12 +7,15 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Target, Users, Car, Box, AlertCircle, Lock, Unlock, Camera, Play, Square, Loader2, Laptop, Video, Zap, ScanText, Trash2, Save } from "lucide-react";
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useDeviceContext } from "@/hooks/useDeviceContext";
+import { useOperatorPreferences } from "@/hooks/useOperatorPreferences";
+import { apiFetch } from "@/lib/api";
 import * as tf from "@tensorflow/tfjs";
 import * as cocoSsd from "@tensorflow-models/coco-ssd";
+import { AERIAL_CONFIDENCE_BOOST as SHARED_AERIAL_CONFIDENCE_BOOST } from "@/hooks/useObjectDetection";
 
 interface DetectedObject {
   id: string;
@@ -62,17 +65,14 @@ const AIRCRAFT_CLASSES = ['airplane', 'kite'];
 const PACKAGE_CLASSES = ['backpack', 'handbag', 'suitcase', 'umbrella'];
 const ALL_TRACKABLE_CLASSES = [...PERSON_CLASSES, ...VEHICLE_CLASSES, ...ANIMAL_CLASSES, ...AIRCRAFT_CLASSES, ...PACKAGE_CLASSES];
 
-const AERIAL_CONFIDENCE_BOOST: Record<string, number> = {
-  person: 12, car: 15, truck: 15, bus: 15, motorcycle: 10,
-  bicycle: 8, boat: 12, airplane: 18, bird: 5,
-  backpack: 5, suitcase: 5, umbrella: 5,
-  dog: 5, cat: 3, horse: 8, cow: 8,
-};
+// Shared with VideoFeed via @/hooks/useObjectDetection — keeps both views unified.
+const AERIAL_CONFIDENCE_BOOST = SHARED_AERIAL_CONFIDENCE_BOOST;
 const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
 
 export function TrackingPanel() {
   const { hasPermission } = usePermissions();
   const { isOnboard } = useDeviceContext();
+  const { selectedDroneId: prefSelectedDroneId } = useOperatorPreferences();
   const canTrack = hasPermission('object_tracking');
   const [trackingActive, setTrackingActive] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -146,7 +146,7 @@ export function TrackingPanel() {
   }, [modelLoading]);
   
   // Calculate IoU for object matching
-  const calculateIoU = (boxA: {x: number, y: number, width: number, height: number}, 
+  const calculateIoU = useCallback((boxA: {x: number, y: number, width: number, height: number},
                         boxB: {x: number, y: number, width: number, height: number}): number => {
     const xA = Math.max(boxA.x, boxB.x);
     const yA = Math.max(boxA.y, boxB.y);
@@ -159,9 +159,9 @@ export function TrackingPanel() {
     const unionArea = boxAArea + boxBArea - interArea;
     
     return unionArea > 0 ? interArea / unionArea : 0;
-  };
+  }, []);
 
-  const computeTrackMatchScore = (
+  const computeTrackMatchScore = useCallback((
     track: TrackedObject,
     det: { bbox: number[]; confidence: number; label: string },
   ) => {
@@ -192,10 +192,10 @@ export function TrackingPanel() {
 
     const classScore = classMatch ? 1 : 0.5;
     return (iou * 0.45 + centerScore * 0.3 + sizeScore * 0.2 + classScore * 0.05);
-  };
-  
+  }, [calculateIoU]);
+
   // Hungarian-style assignment for multi-object tracking
-  const assignDetectionsToTracks = (
+  const assignDetectionsToTracks = useCallback((
     detections: Array<{label: string, confidence: number, bbox: number[]}>,
     tracks: Map<string, TrackedObject>
   ): DetectedObject[] => {
@@ -397,7 +397,7 @@ export function TrackingPanel() {
     });
     
     return assignments;
-  };
+  }, [videoDimensions.width, videoDimensions.height, lockedTargets, trackingActive, computeTrackMatchScore]);
 
   // Start webcam and load model
   const startWebcam = async () => {
@@ -432,7 +432,7 @@ export function TrackingPanel() {
   };
 
   const stopWebcam = () => {
-    setIsDetecting(false);
+    setIsDetecting((prev) => (prev === false ? prev : false));
     if (webcamStream) {
       webcamStream.getTracks().forEach(track => track.stop());
       setWebcamStream(null);
@@ -446,10 +446,10 @@ export function TrackingPanel() {
       clearInterval(detectionIntervalRef.current);
       detectionIntervalRef.current = null;
     }
-    setDetectedObjects([]);
+    setDetectedObjects((prev) => (prev.length === 0 ? prev : []));
     trackedObjectsRef.current.clear();
-    setLockedTargets(new Set());
-    setVideoReady(false);
+    setLockedTargets((prev) => (prev.size === 0 ? prev : new Set()));
+    setVideoReady((prev) => (prev === false ? prev : false));
   };
 
   // Ref for motion detection fallback
@@ -634,10 +634,10 @@ export function TrackingPanel() {
 
   useEffect(() => {
     if (webcamStream) return;
-    setDetectedObjects([]);
+    setDetectedObjects((prev) => (prev.length === 0 ? prev : []));
     trackedObjectsRef.current.clear();
-    setLockedTargets(new Set());
-    setVideoReady(false);
+    setLockedTargets((prev) => (prev.size === 0 ? prev : new Set()));
+    setVideoReady((prev) => (prev === false ? prev : false));
   }, [webcamStream]);
 
   // Run detection loop
@@ -646,13 +646,17 @@ export function TrackingPanel() {
       detectionIntervalRef.current = setInterval(runDetection, 200);
     } else if (detectionIntervalRef.current) {
       clearInterval(detectionIntervalRef.current);
-      setDetectedObjects([]);
+      detectionIntervalRef.current = null;
+      setDetectedObjects((prev) => (prev.length === 0 ? prev : []));
       if (!trackingActive) {
         trackedObjectsRef.current.clear();
       }
     }
     return () => {
-      if (detectionIntervalRef.current) clearInterval(detectionIntervalRef.current);
+      if (detectionIntervalRef.current) {
+        clearInterval(detectionIntervalRef.current);
+        detectionIntervalRef.current = null;
+      }
     };
   }, [isDetecting, webcamStream, runDetection, trackingActive]);
 
@@ -675,15 +679,22 @@ export function TrackingPanel() {
     };
   }, []);
 
-  const filteredObjects = detectedObjects
-    .filter((obj) => targetType === "all" || obj.type === targetType)
-    .filter((obj) => {
-      // Preserve lock continuity even when confidence dips temporarily.
-      if (lockedTargets.has(obj.id)) return true;
-      const sizeBoost = obj.areaRatio && obj.areaRatio < 0.01 ? 8 : 0;
-      const temporalBoost = Math.min(12, obj.framesSeen * 1.1);
-      return obj.confidence + sizeBoost + temporalBoost >= confidenceThreshold[0];
-    });
+  // Memoized so the array identity is stable across renders. Without this, the downstream
+  // useEffects that depend on filteredObjects (tracking-update, obstacle-update, landing-zone-update,
+  // plate scan) would refire every render and dispatch CustomEvents whose listeners can update
+  // state elsewhere -> infinite render loop ("Maximum update depth exceeded") on stop-camera.
+  const filteredObjects = useMemo(
+    () =>
+      detectedObjects
+        .filter((obj) => targetType === "all" || obj.type === targetType)
+        .filter((obj) => {
+          if (lockedTargets.has(obj.id)) return true;
+          const sizeBoost = obj.areaRatio && obj.areaRatio < 0.01 ? 8 : 0;
+          const temporalBoost = Math.min(12, obj.framesSeen * 1.1);
+          return obj.confidence + sizeBoost + temporalBoost >= confidenceThreshold[0];
+        }),
+    [detectedObjects, targetType, lockedTargets, confidenceThreshold],
+  );
 
   // Publish tracking state for downstream control/stabilization logic.
   useEffect(() => {
@@ -899,6 +910,30 @@ export function TrackingPanel() {
         if (plate) {
           savePlateRecord(plate, Math.round(primary.confidence), primary.id);
           toast.success(`Plate captured: ${plate}`);
+          // Best-effort cloud upload of the cropped image so the record survives reload
+          // and is mirrored to Firebase Storage / Drive when configured.
+          try {
+            const cropCanvas = document.createElement("canvas");
+            cropCanvas.width = crop.width;
+            cropCanvas.height = crop.height;
+            const cctx = cropCanvas.getContext("2d");
+            if (cctx) {
+              cctx.putImageData(crop, 0, 0);
+              const dataUrl = cropCanvas.toDataURL("image/png");
+              const base64 = dataUrl.split(",")[1] || "";
+              await apiFetch("/api/license-plates", {
+                method: "POST",
+                body: JSON.stringify({
+                  plateText: plate,
+                  confidence: Math.round(primary.confidence),
+                  imageBase64: base64,
+                  targetId: primary.id,
+                }),
+              }).catch(() => {});
+            }
+          } catch {
+            // Cloud upload failed; the record is still kept locally.
+          }
         }
       } catch {
         // Keep silent to avoid toast flooding when OCR engine is absent or busy.
@@ -956,6 +991,68 @@ export function TrackingPanel() {
   const handleStopTracking = () => {
     setTrackingActive(false);
     toast.info("Tracking stopped");
+  };
+
+  // Lock-and-Follow: ask the backend to yaw toward a locked target's bbox center and
+  // (optionally) issue a small forward command. Falls back gracefully if the endpoint
+  // is unavailable so the UI does not crash on disconnected setups.
+  const handleFollowLocked = async () => {
+    const lockedList = filteredObjects.filter((obj) => lockedTargets.has(obj.id));
+    if (lockedList.length === 0) {
+      toast.error("Lock a target first");
+      return;
+    }
+    const target = lockedList[0];
+    const cx = target.x + target.width / 2;
+    const cy = target.y + target.height / 2;
+    const dx = cx / Math.max(1, videoDimensions.width) - 0.5;
+    const dy = cy / Math.max(1, videoDimensions.height) - 0.5;
+    const yawDeg = Math.round(dx * 60);
+    const pitchDeg = Math.round(-dy * 30);
+
+    // Resolve the active drone's connectionString so the backend can actually
+    // dispatch the gimbal command — without it the route just queues the intent.
+    // Use the shared operator-preferences cache so we don't double-fetch.
+    let connectionString = "";
+    try {
+      const droneId = prefSelectedDroneId;
+      if (droneId && droneId !== "preview-drone") {
+        const drone = await apiFetch<{ connectionString?: string } | null>(
+          `/api/drones/${encodeURIComponent(droneId)}`,
+        ).catch(() => null);
+        connectionString = String(drone?.connectionString || "").trim();
+      }
+    } catch {
+      /* fall through with empty connectionString */
+    }
+
+    try {
+      const data = await apiFetch<{ dispatched?: boolean; bridgeError?: string; error?: string }>(
+        "/api/drone/follow",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            targetId: target.id,
+            targetType: target.type,
+            bbox: { x: target.x, y: target.y, width: target.width, height: target.height },
+            frame: { width: videoDimensions.width, height: videoDimensions.height },
+            yawDeg,
+            pitchDeg,
+            followDistance: followDistance?.[0] ?? 5,
+            connectionString: connectionString || undefined,
+          }),
+        },
+      );
+      if (data?.dispatched === true) {
+        toast.success(`Following ${target.label || target.type} (yaw ${yawDeg}°, pitch ${pitchDeg}°)`);
+      } else {
+        toast.warning(
+          `Follow not dispatched: ${data?.bridgeError || (connectionString ? "MAVLink bridge unavailable" : "no drone connection — select an armed drone first")}`,
+        );
+      }
+    } catch (err: any) {
+      toast.warning(`Follow command failed: ${err?.message || "backend offline"}`);
+    }
   };
 
   const saveManualPlate = () => {
@@ -1201,33 +1298,74 @@ export function TrackingPanel() {
             </CardHeader>
             <CardContent className="p-3 pt-0 space-y-2">
               {filteredObjects.length > 0 ? (
-                filteredObjects.map((obj) => (
-                  <div
-                    key={obj.id}
-                    className={`flex items-center justify-between p-2 rounded-lg border cursor-pointer transition-colors ${
-                      lockedTargets.has(obj.id)
-                        ? "bg-primary/20 border-primary"
-                        : "bg-muted/50 border-border hover:bg-muted"
-                    }`}
-                    onClick={() => handleLockTarget(obj.id)}
-                    data-testid={`object-card-${obj.id}`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <div className={`p-1.5 rounded ${lockedTargets.has(obj.id) ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
-                        {getTypeIcon(obj.type)}
+                filteredObjects.map((obj) => {
+                  const vMag = Math.hypot(obj.velocity?.dx || 0, obj.velocity?.dy || 0);
+                  const isMoving = vMag > 1.2;
+                  // Bbox-area-based distance heuristic (matches map view's overlay).
+                  // Larger bbox -> closer object. Calibrated for ~30° HFOV.
+                  const area = obj.areaRatio ?? (obj.width * obj.height) / Math.max(1, videoDimensions.width * videoDimensions.height);
+                  const estDistanceM = area > 0 ? Math.max(1, Math.round(2.4 / Math.sqrt(area))) : null;
+                  return (
+                    <div
+                      key={obj.id}
+                      className={`flex items-center justify-between p-2 rounded-lg border cursor-pointer transition-colors ${
+                        lockedTargets.has(obj.id)
+                          ? "bg-primary/20 border-primary"
+                          : "bg-muted/50 border-border hover:bg-muted"
+                      }`}
+                      onClick={() => handleLockTarget(obj.id)}
+                      data-testid={`object-card-${obj.id}`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className={`p-1.5 rounded ${lockedTargets.has(obj.id) ? "bg-primary text-primary-foreground" : "bg-muted"}`}>
+                          {getTypeIcon(obj.type)}
+                        </div>
+                        <div className="min-w-0">
+                          <span className="font-mono text-xs capitalize">{obj.label || obj.type}</span>
+                          <div className="text-[10px] text-muted-foreground">{obj.confidence}% | {obj.framesSeen} frames</div>
+                          <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+                            <span
+                              className={`text-[9px] px-1 py-px rounded border ${
+                                isMoving
+                                  ? "bg-amber-500/15 text-amber-600 dark:text-amber-300 border-amber-500/40"
+                                  : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300 border-emerald-500/30"
+                              }`}
+                              data-testid={`text-motion-${obj.id}`}
+                            >
+                              {isMoving ? `Moving ${vMag.toFixed(1)} px/f` : "Stationary"}
+                            </span>
+                            {estDistanceM !== null && (
+                              <span
+                                className="text-[9px] px-1 py-px rounded border bg-sky-500/10 text-sky-600 dark:text-sky-300 border-sky-500/30"
+                                data-testid={`text-distance-${obj.id}`}
+                              >
+                                ~{estDistanceM}m
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                      <div>
-                        <span className="font-mono text-xs capitalize">{obj.label || obj.type}</span>
-                        <div className="text-[10px] text-muted-foreground">{obj.confidence}% | {obj.framesSeen} frames</div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {lockedTargets.has(obj.id) && (
+                          <Button
+                            size="sm"
+                            variant="default"
+                            className="h-7 px-2"
+                            onClick={(e) => { e.stopPropagation(); handleFollowLocked(); }}
+                            data-testid={`button-follow-${obj.id}`}
+                          >
+                            Follow
+                          </Button>
+                        )}
+                        {lockedTargets.has(obj.id) ? (
+                          <Lock className="h-4 w-4 text-primary" />
+                        ) : (
+                          <Unlock className="h-4 w-4 text-muted-foreground" />
+                        )}
                       </div>
                     </div>
-                    {lockedTargets.has(obj.id) ? (
-                      <Lock className="h-4 w-4 text-primary" />
-                    ) : (
-                      <Unlock className="h-4 w-4 text-muted-foreground" />
-                    )}
-                  </div>
-                ))
+                  );
+                })
               ) : (
                 <div className="text-center py-4 text-muted-foreground text-xs">
                   <AlertCircle className="h-6 w-6 mx-auto mb-1 opacity-50" />

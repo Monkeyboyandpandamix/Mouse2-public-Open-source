@@ -9,6 +9,7 @@ export const PUBLIC_API_PATHS = new Set([
   "/api/auth/logout",
   "/api/google/callback",
   "/api/runtime-config",
+  "/api/cloud/config/public",
 ]);
 
 /** Async session validation using shared store (Firestore/file on cache miss) for multi-instance support. */
@@ -148,6 +149,8 @@ export function apiPermissionForRequest(apiPath: string, method: string, body?: 
   ) {
     return "system_settings";
   }
+  if (normalizedPath === "/api/drone/follow") return "flight_control";
+  if (normalizedPath === "/api/license-plates" || normalizedPath.startsWith("/api/license-plates/")) return "camera_control";
   if (normalizedPath.startsWith("/api/drones")) return isWrite ? "system_settings" : "view_map";
   if (normalizedPath.startsWith("/api/media")) return normalizedMethod === "GET" ? "view_camera" : "camera_control";
   if (normalizedPath.startsWith("/api/backlog")) return "system_settings";

@@ -594,6 +594,13 @@ export class FileStorage implements IStorage {
       .slice(0, limit);
   }
 
+  async getAllMediaAssets(limit: number = 100): Promise<MediaAsset[]> {
+    const assets = await readJsonFile<MediaAsset>('media_assets.json');
+    return assets
+      .sort((a, b) => new Date(b.capturedAt || 0).getTime() - new Date(a.capturedAt || 0).getTime())
+      .slice(0, limit);
+  }
+
   async getMediaAssetsBySession(sessionId: string): Promise<MediaAsset[]> {
     const assets = await readJsonFile<MediaAsset>('media_assets.json');
     return assets

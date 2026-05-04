@@ -8,7 +8,12 @@ async function getSessionToken(): Promise<string | null> {
   return localStorage.getItem("mouse_gcs_session_token");
 }
 
-async function apiFetch<T = unknown>(
+/**
+ * Authenticated fetch helper used by the typed API clients below. Exported so
+ * shared TanStack hooks can reuse the same X-Session-Token / credentials
+ * behaviour without duplicating it.
+ */
+export async function apiFetch<T = unknown>(
   path: string,
   init?: RequestInit
 ): Promise<T> {
@@ -170,5 +175,4 @@ export const flightSessionsApi = {
     apiFetch<{ success: boolean }>(`/api/flight-sessions/${id}`, { method: "DELETE" }),
 };
 
-// Generic fetch for untyped endpoints
-export { apiFetch };
+// Generic fetch for untyped endpoints — already exported above

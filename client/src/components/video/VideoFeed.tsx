@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { useAppState } from "@/contexts/AppStateContext";
 import * as tf from "@tensorflow/tfjs";
 import * as cocoSsd from "@tensorflow-models/coco-ssd";
+import { AERIAL_CONFIDENCE_BOOST as SHARED_AERIAL_CONFIDENCE_BOOST } from "@/hooks/useObjectDetection";
 import { ARHudOverlay } from "./ARHudOverlay";
 import aerialImg from "@assets/generated_images/aerial_drone_view_of_a_suburban_street_with_overlaid_bounding_boxes.png";
 import fpvImg from "@assets/generated_images/fpv_drone_view_forward_facing_with_horizon.png";
@@ -40,12 +41,8 @@ const COCO_TO_TYPE: Record<string, "person" | "vehicle" | "animal" | "aircraft" 
   bench: "unknown", "traffic light": "unknown",
 };
 
-const AERIAL_CONFIDENCE_BOOST: Record<string, number> = {
-  person: 12, car: 15, truck: 15, bus: 15, motorcycle: 10,
-  bicycle: 8, boat: 12, airplane: 18, bird: 5,
-  backpack: 5, suitcase: 5, umbrella: 5,
-  "fire hydrant": 3, bench: 3, "stop sign": 3, "traffic light": 3,
-};
+// Shared with TrackingPanel via @/hooks/useObjectDetection — keeps both views unified.
+const AERIAL_CONFIDENCE_BOOST = SHARED_AERIAL_CONFIDENCE_BOOST;
 
 interface CameraConfig {
   model: string;
@@ -1799,8 +1796,14 @@ export function VideoFeed() {
           <button onClick={() => setIsMain(!isMain)} className="p-1 hover:text-white text-muted-foreground" data-testid="button-toggle-size">
             {isMain ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
           </button>
-          <button onClick={() => setVisible(false)} className="p-1 hover:text-white text-muted-foreground" data-testid="button-hide-feed">
+          <button
+            onClick={() => setVisible(false)}
+            className="px-2 py-1 hover:bg-destructive/80 hover:text-destructive-foreground bg-destructive/40 text-destructive-foreground rounded flex items-center gap-1"
+            data-testid="button-hide-feed"
+            title="Hide camera feed"
+          >
             <EyeOff className="h-3 w-3" />
+            <span className="text-[10px] font-medium hidden sm:inline">Hide</span>
           </button>
         </div>
       </div>

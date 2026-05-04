@@ -18,6 +18,7 @@ import { usePermissions } from "@/hooks/usePermissions";
 import { useNoFlyZones } from "@/hooks/useNoFlyZones";
 import { segmentIntersectsNoFlyZones } from "@/lib/noFlyZones";
 import type { NoFlyZone } from "@/lib/noFlyZones";
+import { FcConnectionBadge, useFcConnectionString } from "@/components/shared/FcConnectionBadge";
 import { missionsApi, waypointsApi } from "@/lib/api";
 import { reportApiError } from "@/lib/apiErrors";
 import { useAppState } from "@/contexts/AppStateContext";
@@ -165,15 +166,10 @@ export function MissionPlanningPanel() {
   const [isExecuting, setIsExecuting] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
-  const [fcConnectionString, setFcConnectionString] = useState("serial:/dev/ttyACM0:57600");
+  const fcConnectionString = useFcConnectionString();
   const [overrideNoFlyRestrictions, setOverrideNoFlyRestrictions] = useState(false);
   const [partTimeRestrictedZones, setPartTimeRestrictedZones] = useState<NoFlyZone[]>([]);
   const noFlyZones = useNoFlyZones();
-
-  useEffect(() => {
-    const next = String(selectedDrone?.connectionString || "").trim();
-    if (next) setFcConnectionString(next);
-  }, [selectedDrone?.connectionString]);
 
   useEffect(() => {
     let active = true;
@@ -564,32 +560,59 @@ export function MissionPlanningPanel() {
 
     const targetAltitude = parseFloat(coordAlt) || 50;
 
-    // Pull fresh restricted-airspace data for this route corridor.
-    const minLat = Math.min(startPoint.lat, destination.lat) - 0.05;
-    const maxLat = Math.max(startPoint.lat, destination.lat) + 0.05;
-    const minLng = Math.min(startPoint.lng, destination.lng) - 0.05;
-    const maxLng = Math.max(startPoint.lng, destination.lng) + 0.05;
-    const liveResp = await fetch(
-      `/api/airspace/restricted?bbox=${minLng},${minLat},${maxLng},${maxLat}`,
-    ).catch(() => null);
-    const liveData = liveResp ? await liveResp.json().catch(() => null) : null;
-    const liveZones = Array.isArray(liveData?.zones) ? liveData.zones : [];
-    const staticResp = await fetch(
-      `/api/airspace/static-restricted?bbox=${minLng},${minLat},${maxLng},${maxLat}`,
-    ).catch(() => null);
-    const staticData = staticResp && staticResp.ok ? await staticResp.json().catch(() => null) : null;
-    const staticZones = Array.isArray(staticData?.zones) ? staticData.zones : [];
-    const effectiveZones = [...noFlyZones, ...partTimeRestrictedZones, ...staticZones, ...liveZones];
+    // Optimistic feedback so the click feels responsive.
+    const pendingToastId = toast.loading("Adding waypoint…");
 
-    if (liveResp && !liveResp.ok && effectiveZones.length === 0) {
-      toast.error("Restricted-airspace provider unavailable. Routing aborted for safety.");
-      return;
-    }
+    // If the operator already authorized a no-fly override, skip the network roundtrip
+    // entirely (the airspace check would only block, never approve, on success).
+    let directPathCrossesRestricted = false;
+    if (!overrideNoFlyRestrictions) {
+      const minLat = Math.min(startPoint.lat, destination.lat) - 0.05;
+      const maxLat = Math.max(startPoint.lat, destination.lat) + 0.05;
+      const minLng = Math.min(startPoint.lng, destination.lng) - 0.05;
+      const maxLng = Math.max(startPoint.lng, destination.lng) + 0.05;
+      const bbox = `${minLng},${minLat},${maxLng},${maxLat}`;
 
-    const directPathCrossesRestricted = segmentIntersectsNoFlyZones(startPoint, destination, effectiveZones);
-    if (directPathCrossesRestricted && !overrideNoFlyRestrictions) {
-      toast.error("Route blocked by restricted/no-fly airspace. Enable 'Override Restrictions' to continue.");
-      return;
+      // Fetch live + static restricted airspace in parallel (was sequential, ~2x faster).
+      // Each fetch is bounded by a 1.5s timeout so a slow upstream can't stall the click.
+      // We track failure separately from "no zones returned" so the safety-stop below still
+      // fires when the live provider is genuinely unreachable AND no fallback data exists.
+      const fetchWithTimeout = async (url: string, ms: number) => {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), ms);
+        try {
+          const r = await fetch(url, { signal: ctrl.signal });
+          return { resp: r, failed: !r.ok };
+        } catch {
+          return { resp: null as Response | null, failed: true };
+        } finally {
+          clearTimeout(timer);
+        }
+      };
+      const [liveResult, staticResult] = await Promise.all([
+        fetchWithTimeout(`/api/airspace/restricted?bbox=${bbox}`, 1500),
+        fetchWithTimeout(`/api/airspace/static-restricted?bbox=${bbox}`, 1500),
+      ]);
+      const liveData = liveResult.resp && liveResult.resp.ok ? await liveResult.resp.json().catch(() => null) : null;
+      const liveZones = Array.isArray(liveData?.zones) ? liveData.zones : [];
+      const staticData = staticResult.resp && staticResult.resp.ok ? await staticResult.resp.json().catch(() => null) : null;
+      const staticZones = Array.isArray(staticData?.zones) ? staticData.zones : [];
+      const effectiveZones = [...noFlyZones, ...partTimeRestrictedZones, ...staticZones, ...liveZones];
+
+      // Safety stop: if the live restricted-airspace provider call failed and we have no
+      // cached/static zones to evaluate against, abort routing rather than silently allow it.
+      if (liveResult.failed && effectiveZones.length === 0) {
+        toast.dismiss(pendingToastId);
+        toast.error("Restricted-airspace provider unavailable. Routing aborted for safety.");
+        return;
+      }
+
+      directPathCrossesRestricted = segmentIntersectsNoFlyZones(startPoint, destination, effectiveZones);
+      if (directPathCrossesRestricted) {
+        toast.dismiss(pendingToastId);
+        toast.error("Route blocked by restricted/no-fly airspace. Enable 'Override Restrictions' to continue.");
+        return;
+      }
     }
 
     const pointsToCreate = [destination];
@@ -757,12 +780,18 @@ export function MissionPlanningPanel() {
   };
 
   const handleMapClick = useCallback(async (lat: number, lng: number) => {
-    if (selectedMission && targetMethod === "map") {
-      try {
-        await createWaypointsForDestination(lat, lng, null);
-      } catch {
-        toast.error("Failed to add waypoint");
-      }
+    if (!selectedMission) {
+      toast.error("Select or create a mission first");
+      return;
+    }
+    // Auto-switch to map mode when user clicks the map (better UX)
+    if (targetMethod !== "map") {
+      setTargetMethod("map");
+    }
+    try {
+      await createWaypointsForDestination(lat, lng, null);
+    } catch {
+      toast.error("Failed to add waypoint");
     }
   }, [selectedMission, targetMethod, createWaypointsForDestination]);
 
@@ -1284,13 +1313,8 @@ export function MissionPlanningPanel() {
                   )}
                 </div>
               </div>
-              <div className="grid grid-cols-1 lg:grid-cols-6 gap-2">
-                <Input
-                  className="lg:col-span-2 h-8 text-xs font-mono"
-                  value={fcConnectionString}
-                  onChange={(e) => setFcConnectionString(e.target.value)}
-                  placeholder="serial:/dev/ttyACM0:57600"
-                />
+              <div className="flex items-center gap-2 flex-wrap">
+                <FcConnectionBadge />
                 <Button size="sm" variant="outline" className="h-8 text-xs" disabled={syncBusy} onClick={downloadMissionFromFc}>
                   Download Mission
                 </Button>
@@ -1314,13 +1338,13 @@ export function MissionPlanningPanel() {
                   waypoints={orderedWaypoints}
                   homePosition={selectedMissionData ? [selectedMissionData.homeLatitude, selectedMissionData.homeLongitude] : undefined}
                   onMapClick={handleMapClick}
-                  clickEnabled={targetMethod === "map"}
+                  clickEnabled={true}
                   showClickHint={targetMethod === "map"}
                 />
               </div>
 
               {/* Right Panel - Waypoint Controls */}
-              <div className="w-80 border-l border-border bg-card/50 flex flex-col overflow-hidden">
+              <div className="w-80 border-l border-border bg-card/50 flex flex-col overflow-y-auto overflow-x-hidden">
                 <div className="p-3 border-b border-border shrink-0">
                   <h4 className="font-bold text-sm mb-2">Add Waypoint</h4>
                   
@@ -1684,7 +1708,7 @@ export function MissionPlanningPanel() {
                 </div>
 
                 {/* Waypoint List */}
-                <ScrollArea className="flex-1">
+                <div className="flex-1">
                   <div className="p-2 space-y-2">
                     <h4 className="font-bold text-xs text-muted-foreground uppercase px-1">Waypoints</h4>
                     
@@ -2034,7 +2058,7 @@ export function MissionPlanningPanel() {
                       </div>
                     )}
                   </div>
-                </ScrollArea>
+                </div>
               </div>
             </div>
           </>

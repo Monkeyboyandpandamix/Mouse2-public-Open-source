@@ -11,7 +11,8 @@ import { Progress } from "@/components/ui/progress";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useState, useEffect, useRef } from "react";
-import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cable, Upload, AlertTriangle, CheckCircle, RefreshCw, Cloud, Database, ExternalLink, Cpu, Radio, Terminal, HardDrive, MapPin, Home, Shield, User, LogOut, UserPlus, Lock } from "lucide-react";
+import { Loader2, Save, RotateCcw, Plus, Trash2, Check, Wifi, WifiOff, Usb, Cable, Upload, AlertTriangle, CheckCircle, RefreshCw, Cloud, Database, ExternalLink, Cpu, Radio, Terminal, HardDrive, MapPin, Home, Shield, User, LogOut, UserPlus, Lock, Gamepad2 } from "lucide-react";
+import { GamepadMappingDialog } from "@/components/controls/GamepadMappingDialog";
 import { operationsLog, LogEntry, LogType } from "@/lib/operationsLog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { usePermissions } from "@/hooks/usePermissions";
@@ -31,6 +32,8 @@ import {
   getUsbRadioPortOptions,
 } from "@/lib/platform";
 import { readStoredSelectedDrone, readStoredSession, writeStoredSelectedDrone } from "@/lib/clientState";
+import { useFcConnectionString, FcConnectionBadge } from "@/components/shared/FcConnectionBadge";
+import { uploadFenceToFc, downloadFenceFromFc, downloadMissionFromFc, uploadMissionToFc } from "@/lib/fcSync";
 
 interface FirmwareCatalogEntry {
   id: string;
@@ -283,6 +286,12 @@ function FirebaseCloudManager() {
       serviceAccount?: string;
     };
   } | null>(null);
+  const [webConfig, setWebConfig] = useState<{
+    enabled: boolean;
+    apiKey: string | null;
+    projectId: string | null;
+    databaseURL: string | null;
+  } | null>(null);
   const [cloudConfig, setCloudConfig] = useState({
     projectId: "",
     databaseURL: "",
@@ -308,7 +317,7 @@ function FirebaseCloudManager() {
   const isAdmin = session?.user?.role === 'admin';
 
   useEffect(() => {
-    void Promise.all([fetchCloudStatus(), fetchCloudConfig()]).finally(() => setLoading(false));
+    void Promise.all([fetchCloudStatus(), fetchCloudConfig(), fetchWebConfig()]).finally(() => setLoading(false));
   }, []);
 
   const fetchCloudStatus = async () => {
@@ -316,6 +325,14 @@ function FirebaseCloudManager() {
       const res = await fetch('/api/cloud/status');
       const data = await res.json();
       setCloudStatus(data);
+    } catch {}
+  };
+
+  const fetchWebConfig = async () => {
+    try {
+      const res = await fetch('/api/cloud/config/public');
+      const data = await res.json();
+      setWebConfig(data);
     } catch {}
   };
 
@@ -421,12 +438,22 @@ function FirebaseCloudManager() {
             </CardTitle>
             <CardDescription>Real-time cloud sync, remote drone control, and data persistence via Firebase</CardDescription>
           </div>
-          <Badge className={cloudStatus?.enabled ? "bg-emerald-500" : "bg-amber-500"}>
-            {cloudStatus?.enabled ? "Connected" : "Not Configured"}
-          </Badge>
+          <div className="flex flex-col items-end gap-1">
+            <Badge className={webConfig?.enabled ? "bg-blue-500" : "bg-slate-500"} title="Browser writes directly to Firestore using the public Web SDK config">
+              Web SDK: {webConfig?.enabled ? "Configured" : "Missing"}
+            </Badge>
+            <Badge className={cloudStatus?.enabled ? "bg-emerald-500" : "bg-amber-500"} title="Server-side Admin SDK (requires service account JSON) for telemetry/event ingest">
+              Admin SDK: {cloudStatus?.enabled ? "Connected" : "Not Configured"}
+            </Badge>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {webConfig?.enabled && !cloudStatus?.enabled && (
+          <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg text-xs text-foreground">
+            <strong className="text-blue-500">Web SDK active:</strong> The browser is configured to write directly to project <span className="font-mono">{webConfig.projectId}</span>. Server-side ingest (telemetry, mission logs) requires a service account below.
+          </div>
+        )}
         <div className="p-3 bg-muted/30 rounded-lg space-y-3">
           <p className="text-sm font-medium">Cloud Configuration (editable from dashboard)</p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -640,28 +667,51 @@ function FirebaseCloudManager() {
           <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg space-y-3">
             <p className="text-sm font-medium">Firebase Cloud is not configured</p>
             <p className="text-sm text-muted-foreground">
-              Save Firebase values in the Cloud Configuration block above, then run “Test Connection”.
+              You can connect Firebase entirely from this dashboard — no <code className="bg-muted px-1 rounded font-mono text-xs">.env</code> editing required.
             </p>
-            <div className="text-sm space-y-2">
-              <p className="font-medium">Required:</p>
-              <ol className="list-decimal list-inside space-y-1 text-muted-foreground text-xs">
-                <li>Create a Firebase project at <a href="https://console.firebase.google.com" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">console.firebase.google.com</a></li>
-                <li>Enable Firestore, Realtime Database, and Cloud Storage</li>
-                <li>Generate a service account key (Project Settings &gt; Service Accounts)</li>
-                <li>Set <code className="bg-muted px-1 rounded font-mono">FIREBASE_PROJECT_ID</code> to your project ID</li>
-                <li>Set <code className="bg-muted px-1 rounded font-mono">FIREBASE_SERVICE_ACCOUNT_JSON</code> to the full JSON key contents</li>
-              </ol>
-              <p className="font-medium mt-3">Optional:</p>
-              <ul className="list-disc list-inside space-y-1 text-muted-foreground text-xs">
-                <li><code className="bg-muted px-1 rounded font-mono">FIREBASE_DATABASE_URL</code> — Realtime Database URL (for real-time command relay)</li>
-                <li><code className="bg-muted px-1 rounded font-mono">FIREBASE_STORAGE_BUCKET</code> — Storage bucket (for video/media uploads)</li>
-                <li><code className="bg-muted px-1 rounded font-mono">FIREBASE_SERVICE_ACCOUNT_BASE64</code> — Alternative: base64-encoded key</li>
-                <li><code className="bg-muted px-1 rounded font-mono">FIREBASE_SERVICE_ACCOUNT_PATH</code> — Alternative: path to JSON key file</li>
-              </ul>
-            </div>
+            <ol className="list-decimal list-inside space-y-1 text-xs text-muted-foreground ml-1">
+              <li>
+                In the <strong>Cloud Configuration</strong> form above, enter your <strong>Firebase Project ID</strong>{" "}
+                (e.g. <code className="bg-muted px-1 rounded font-mono">your-project-id</code>),{" "}
+                <strong>Realtime DB URL</strong>, and <strong>Storage Bucket</strong>.
+              </li>
+              <li>
+                Paste the full <strong>Service Account JSON</strong> (from Firebase Console → Project Settings → Service Accounts → Generate new private key) into the Service Account JSON box.
+              </li>
+              <li>
+                Click <strong>Save Cloud Config</strong> — the server will probe Firestore, RTDB, and Storage and report results below.
+              </li>
+            </ol>
+            <p className="text-[11px] text-muted-foreground">
+              Need a project? Create one at{" "}
+              <a href="https://console.firebase.google.com" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                console.firebase.google.com
+              </a>{" "}
+              and enable Firestore, Realtime Database, and Cloud Storage.
+            </p>
+
+            <details className="rounded border border-border/40 bg-muted/20">
+              <summary className="cursor-pointer text-xs px-2 py-1 text-muted-foreground hover:text-foreground">
+                Advanced — environment variable equivalents
+              </summary>
+              <div className="px-3 pb-2 pt-1 text-xs space-y-1 text-muted-foreground">
+                <p>
+                  Equivalent server-side env vars. <strong>Note:</strong> if both an env var and a dashboard value are set, the env var wins — clear the env var (or restart without it) to use the dashboard value.
+                </p>
+                <ul className="list-disc list-inside space-y-0.5 ml-1">
+                  <li><code className="bg-muted px-1 rounded font-mono">FIREBASE_PROJECT_ID</code></li>
+                  <li><code className="bg-muted px-1 rounded font-mono">FIREBASE_DATABASE_URL</code></li>
+                  <li><code className="bg-muted px-1 rounded font-mono">FIREBASE_STORAGE_BUCKET</code></li>
+                  <li><code className="bg-muted px-1 rounded font-mono">FIREBASE_SERVICE_ACCOUNT_JSON</code> — full JSON contents</li>
+                  <li><code className="bg-muted px-1 rounded font-mono">FIREBASE_SERVICE_ACCOUNT_BASE64</code> — alternative: base64-encoded JSON</li>
+                  <li><code className="bg-muted px-1 rounded font-mono">FIREBASE_SERVICE_ACCOUNT_PATH</code> — alternative: absolute path to a key file</li>
+                </ul>
+              </div>
+            </details>
+
             {cloudStatus?.hasServiceAccount && !cloudStatus?.projectId && (
               <div className="p-2 bg-red-500/10 rounded text-xs text-destructive">
-                Service account detected but FIREBASE_PROJECT_ID is not set.
+                Service account detected but Firebase Project ID is not set. Add the project ID above and click Save Cloud Config.
               </div>
             )}
           </div>
@@ -1091,6 +1141,26 @@ export function SettingsPanel() {
     gamepadDevice: "none",
     joystickDeadzone: "5",
   });
+  const [gamepadDialogOpen, setGamepadDialogOpen] = useState(false);
+  const [detectedPad, setDetectedPad] = useState<string | null>(null);
+
+  // Detect any connected gamepad (USB or Bluetooth — same Gamepad API).
+  useEffect(() => {
+    const refresh = () => {
+      const pads = navigator.getGamepads?.() ?? [];
+      const first = Array.from(pads).find(Boolean) as Gamepad | undefined;
+      setDetectedPad(first ? first.id : null);
+    };
+    refresh();
+    const onConnect = (e: GamepadEvent) => setDetectedPad(e.gamepad.id);
+    const onDisconnect = () => refresh();
+    window.addEventListener("gamepadconnected", onConnect as any);
+    window.addEventListener("gamepaddisconnected", onDisconnect as any);
+    return () => {
+      window.removeEventListener("gamepadconnected", onConnect as any);
+      window.removeEventListener("gamepaddisconnected", onDisconnect as any);
+    };
+  }, []);
 
   const [cameraSettings, setCameraSettings] = useState({
     resolution: "1080p",
@@ -2623,6 +2693,8 @@ export function SettingsPanel() {
           </TabsContent>
 
           <TabsContent value="connections" className="space-y-4 mt-4">
+            <FcSyncCard />
+
             <Card>
               <CardHeader>
                 <CardTitle>Connection Type</CardTitle>
@@ -3536,41 +3608,81 @@ export function SettingsPanel() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Gamepad/Joystick</CardTitle>
-                <CardDescription>USB controller for manual override</CardDescription>
+                <CardTitle>Gamepad / Joystick</CardTitle>
+                <CardDescription>
+                  USB or Bluetooth controller for manual override. Xbox, PlayStation, and any
+                  HID-compliant gamepad pair through your OS — Replit detects them automatically
+                  via the standard Gamepad API.
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                <div className="rounded-md border p-3 bg-muted/30">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Gamepad2 className={detectedPad ? "h-4 w-4 text-emerald-500" : "h-4 w-4 text-muted-foreground"} />
+                      <span className="text-xs font-mono" data-testid="text-detected-gamepad">
+                        {detectedPad || "No controller detected — connect via USB or pair Bluetooth, then press any button to wake it."}
+                      </span>
+                    </div>
+                    {detectedPad && (
+                      <Badge variant="outline" className="border-emerald-500 text-emerald-500 text-[9px]">
+                        LIVE
+                      </Badge>
+                    )}
+                  </div>
+                </div>
                 <div className="space-y-2">
-                  <Label htmlFor="gamepad">Connected Device</Label>
-                  <Select 
+                  <Label htmlFor="gamepad">Input mode</Label>
+                  <Select
                     value={inputSettings.gamepadDevice}
                     onValueChange={(v) => updateSetting(setInputSettings, "gamepadDevice", v)}
                   >
-                    <SelectTrigger id="gamepad">
+                    <SelectTrigger id="gamepad" data-testid="select-gamepad-mode">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none">None detected</SelectItem>
-                      <SelectItem value="xbox">Xbox Controller</SelectItem>
-                      <SelectItem value="ps4">PlayStation 4 Controller</SelectItem>
-                      <SelectItem value="ps5">PlayStation 5 Controller</SelectItem>
-                      <SelectItem value="logitech">Logitech Gamepad</SelectItem>
+                      <SelectItem value="none">Disabled</SelectItem>
+                      <SelectItem value="enabled">Enabled (auto-detect)</SelectItem>
+                      <SelectItem value="xbox">Force Xbox profile</SelectItem>
+                      <SelectItem value="ps">Force PlayStation profile</SelectItem>
+                      <SelectItem value="logitech">Force Logitech profile</SelectItem>
                     </SelectContent>
                   </Select>
+                  <p className="text-[11px] text-muted-foreground">
+                    Set to "Enabled" to use any connected controller. The mapping editor below
+                    works for every standard HID gamepad regardless of brand.
+                  </p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="deadzone">Joystick Deadzone (%)</Label>
-                  <Input 
-                    id="deadzone" 
+                  <Label htmlFor="deadzone">Joystick deadzone (%)</Label>
+                  <Input
+                    id="deadzone"
                     type="number"
                     min="0"
                     max="20"
                     value={inputSettings.joystickDeadzone}
                     onChange={(e) => updateSetting(setInputSettings, "joystickDeadzone", e.target.value)}
+                    data-testid="input-joystick-deadzone"
                   />
+                </div>
+                <div className="pt-2 border-t">
+                  <Button
+                    variant="default"
+                    onClick={() => setGamepadDialogOpen(true)}
+                    className="w-full"
+                    data-testid="button-open-gamepad-mapping"
+                  >
+                    <Gamepad2 className="h-4 w-4 mr-2" />
+                    Customize button & axis mapping…
+                  </Button>
+                  <p className="text-[11px] text-muted-foreground mt-2">
+                    Re-assign every button and stick. Critical actions (arm, RTH, emergency stop)
+                    keep a safe default and cannot be left unbound.
+                  </p>
                 </div>
               </CardContent>
             </Card>
+            <GamepadMappingDialog open={gamepadDialogOpen} onClose={() => setGamepadDialogOpen(false)} />
           </TabsContent>
 
           <TabsContent value="camera" className="space-y-4 mt-4">
@@ -4608,5 +4720,147 @@ export function SettingsPanel() {
         </div>
       </div>
     </div>
+  );
+}
+
+function FcSyncCard() {
+  const fcConnectionString = useFcConnectionString();
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const guard = (label: string) => {
+    if (!fcConnectionString) {
+      toast.error("No FC connection. Configure in Drone Selection.");
+      return false;
+    }
+    setBusy(label);
+    return true;
+  };
+
+  const handleDownloadFence = async () => {
+    if (!guard("download-fence")) return;
+    try {
+      const res = await downloadFenceFromFc({ connectionString: fcConnectionString });
+      if (res.success) {
+        try {
+          const existing = await fetch("/api/geofences").then(r => r.json());
+          const others = Array.isArray(existing) ? existing.filter((z: any) => !z.name?.startsWith?.("FC Fence (Imported)")) : [];
+          const actionMap: Record<number, string> = { 0: "warn", 1: "rtl", 2: "land", 3: "hover" };
+          const imported = {
+            id: `fc_${Date.now()}`,
+            name: "FC Fence (Imported)",
+            type: "polygon" as const,
+            enabled: true,
+            action: (actionMap[Number(res.action)] || "warn") as any,
+            points: res.points,
+            minAltitude: Number.isFinite(Number(res.minAltitude)) ? Number(res.minAltitude) : 0,
+            maxAltitude: Number.isFinite(Number(res.maxAltitude)) ? Number(res.maxAltitude) : 120,
+          };
+          await fetch("/api/geofences", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ zones: [imported, ...others] }),
+          });
+        } catch (e) {
+          console.warn("[FcSyncCard] Failed to persist imported fence", e);
+        }
+      }
+    } finally { setBusy(null); }
+  };
+
+  const handleUploadFence = async () => {
+    if (!guard("upload-fence")) return;
+    try {
+      const zones = await fetch("/api/geofences").then(r => r.ok ? r.json() : []);
+      await uploadFenceToFc({ connectionString: fcConnectionString, zones: Array.isArray(zones) ? zones : [] });
+    } finally { setBusy(null); }
+  };
+
+  const handleDownloadMission = async () => {
+    if (!guard("download-mission")) return;
+    try { await downloadMissionFromFc({ connectionString: fcConnectionString }); }
+    finally { setBusy(null); }
+  };
+
+  const handleUploadMission = async () => {
+    if (!guard("upload-mission")) return;
+    try {
+      const missions = await fetch("/api/missions").then(r => r.ok ? r.json() : []);
+      const active = Array.isArray(missions) && missions.length > 0 ? missions[0] : null;
+      if (!active) { toast.error("No active mission to upload"); return; }
+      const waypoints = await fetch(`/api/missions/${active.id}/waypoints`).then(r => r.ok ? r.json() : []);
+      await uploadMissionToFc({ connectionString: fcConnectionString, waypoints: Array.isArray(waypoints) ? waypoints : [] });
+    } finally { setBusy(null); }
+  };
+
+  return (
+    <Card data-testid="card-fc-sync">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Cable className="h-4 w-4" />
+          Flight Controller Sync
+        </CardTitle>
+        <CardDescription>
+          Centralized fence and mission sync with the active flight controller.
+          Connection string is taken from the selected drone in Drone Selection.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <FcConnectionBadge />
+
+        <div>
+          <Label className="text-xs">Geofence</Label>
+          <div className="grid grid-cols-2 gap-2 mt-1">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!!busy}
+              onClick={handleDownloadFence}
+              data-testid="button-download-fc-fence"
+            >
+              {busy === "download-fence" ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Cloud className="h-3 w-3 mr-1" />}
+              Download Fence
+            </Button>
+            <Button
+              size="sm"
+              disabled={!!busy}
+              onClick={handleUploadFence}
+              data-testid="button-upload-fc-fence"
+            >
+              {busy === "upload-fence" ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Upload className="h-3 w-3 mr-1" />}
+              Upload Fence
+            </Button>
+          </div>
+        </div>
+
+        <div>
+          <Label className="text-xs">Mission</Label>
+          <div className="grid grid-cols-2 gap-2 mt-1">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!!busy}
+              onClick={handleDownloadMission}
+              data-testid="button-download-fc-mission"
+            >
+              {busy === "download-mission" ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Cloud className="h-3 w-3 mr-1" />}
+              Download Mission
+            </Button>
+            <Button
+              size="sm"
+              disabled={!!busy}
+              onClick={handleUploadMission}
+              data-testid="button-upload-fc-mission"
+            >
+              {busy === "upload-mission" ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Upload className="h-3 w-3 mr-1" />}
+              Upload Mission
+            </Button>
+          </div>
+        </div>
+
+        <p className="text-[10px] text-muted-foreground italic">
+          Note: ArduPilot supports a single polygon fence at a time on the FC. Mission upload sends the most recently created mission.
+        </p>
+      </CardContent>
+    </Card>
   );
 }

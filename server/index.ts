@@ -44,13 +44,18 @@ declare module "http" {
 
 app.use(
   express.json({
+    // Default is 100kb which is too small for legitimate payloads we accept,
+    // notably license-plate captures (cap 1.5MB base64) and small mission
+    // exports. Route-level Zod schemas still enforce their own per-field caps
+    // so this just raises the body-parser ceiling.
+    limit: "2mb",
     verify: (req, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(express.urlencoded({ extended: false }));
+app.use(express.urlencoded({ extended: false, limit: "2mb" }));
 
 async function ensureRuntimeDependencies() {
   const runningInCloud =

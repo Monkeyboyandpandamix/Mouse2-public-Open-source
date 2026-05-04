@@ -2,7 +2,7 @@
 
 ## Overview
 
-M.O.U.S.E (Multi-purpose Operational Unmanned Aerial System for Emergency Response & Environmental Monitoring) is a comprehensive ground control station application for autonomous drone control. The system is designed to run on Raspberry Pi for onboard control and desktop/laptop for the primary ground control interface. It provides real-time telemetry, mission planning, object tracking, and two-way communication capabilities for drone operations, including GPS-denied environment support.
+M.O.U.S.E (Multi-purpose Operational Unmanned Aerial System for Emergency Response & Environmental Monitoring) is a ground control station for autonomous drone control. It provides real-time telemetry, mission planning, object tracking, and two-way communication, with support for GPS-denied environments. The system operates on Raspberry Pi for onboard control and on desktop/laptop for the primary ground control interface, aiming for robust, versatile, and AI-enhanced drone operations in critical situations.
 
 ## User Preferences
 
@@ -10,204 +10,62 @@ Preferred communication style: Simple, everyday language.
 
 ## System Architecture
 
-### Frontend Architecture
-- **Framework**: React with TypeScript using Vite as the build tool
-- **Routing**: Wouter for lightweight client-side routing
-- **State Management**: TanStack React Query for server state and caching
-- **UI Components**: shadcn/ui component library built on Radix UI primitives
-- **Styling**: Tailwind CSS with custom CSS variables for theming
-- **Mapping**: Leaflet for interactive map display with satellite, 2D, and hybrid views
+### Frontend
+- **Framework**: React with TypeScript (Vite)
+- **UI/UX**: shadcn/ui (Radix UI) for components, Tailwind CSS for styling, Wouter for routing.
+- **State Management**: TanStack React Query.
+- **Mapping**: Leaflet for satellite, 2D, and hybrid map views.
+- **Deployment**: Ground Control Mode (desktop/laptop), Onboard Mode (Raspberry Pi), Standalone (local JSON), and Desktop Application (Electron).
 
-### Backend Architecture
+### Backend
 - **Runtime**: Node.js with Express
-- **Language**: TypeScript with ESM modules
-- **Real-time Communication**: WebSocket server (ws) for live telemetry streaming
-- **API Design**: RESTful endpoints for CRUD operations on missions, waypoints, settings, and telemetry data
+- **Language**: TypeScript (ESM modules)
+- **Real-time Communication**: WebSocket server (`ws`).
+- **API Design**: RESTful endpoints.
 
 ### Data Storage
-- **Local Storage**: JSON files in `./data` directory for offline-first operation
-- **Cloud Backup**: Google Drive for file storage, Google Sheets for structured data backup
-- **Firebase Cloud Sync**: Optional Firebase integration for real-time cloud sync, remote drone control, and multi-device collaboration. Syncs settings, missions, waypoints, drones, flight logs, swarm actions, vehicle commands, calibration events, manual control, audio/media assets, and team messages. Configured via `FIREBASE_PROJECT_ID` + `FIREBASE_SERVICE_ACCOUNT_JSON` environment variables.
-- **Schema Location**: `shared/schema.ts` contains all type definitions using Zod
-- **Data Files**: settings.json, missions.json, waypoints.json, drones.json, flight_logs.json, etc.
-- **Auto-sync**: Data automatically syncs to Google Drive/Sheets when online (every 5 minutes)
-
-### Deployment Modes
-- **Ground Control Mode** (default): Runs on desktop/laptop, shows drone selection screen after login, requires manual drone connection
-- **Onboard Mode**: Set `DEVICE_ROLE=ONBOARD` environment variable when running on Raspberry Pi; automatically skips drone selection and connects to local MAVLink at `/dev/ttyACM0`
-- Runtime configuration available via `/api/runtime-config` endpoint
-
-### Standalone Deployment
-This application is fully portable and can be deployed without Replit:
-- **No database required** - uses local JSON files in `./data` directory
-- **Environment template**: Copy `.env.example` to `.env` and customize
-- **Google integration optional** - set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` for cloud backup
-- **Browser auto-launch optional** - set `NO_BROWSER=1` to disable
-
-### Deployment Scripts
-- **Windows**: `start-windows.bat` - Double-click to launch the ground control station
-- **Linux**: `start-linux.sh` - Run with `./start-linux.sh` to launch
-- **Raspberry Pi (Onboard)**: `start-pi-onboard.sh` - Run with `sudo ./start-pi-onboard.sh` for onboard mode
-- All scripts: Install dependencies, build, and start the production server
-
-### Standalone Build Scripts
-- **Linux/macOS**: `scripts/build-standalone.sh` - Creates a complete distribution package with all dependencies
-- **Windows PowerShell**: `scripts/build-standalone.ps1` - Creates a Windows-ready distribution package
-- Output: `standalone/mouse-gcs-1.0.0/` folder with pre-installed dependencies, launchers, and archives (.tar.gz, .zip)
-
-### Desktop Application (Electron)
-The application can be run as a native desktop app using Electron:
-- **Run Desktop App**: `./start-electron.sh` (Linux/macOS) or `start-electron.bat` (Windows)
-- **Build Installers**: `./build-electron.sh` creates platform-specific installers in `electron-dist/`
-- **Supported Platforms**: Windows (.exe installer, portable), macOS (.dmg), Linux (.AppImage, .deb)
-- **Data Location**: User data stored in OS-specific app data directory (auto-created)
-- **Features**: Native window, auto-starts embedded server, works completely offline
+- **Local**: JSON files (`./data`) for offline-first.
+- **Cloud Integration**: Google Drive (files), Google Sheets (structured data) for backup and optional Firebase for real-time sync, remote control, and multi-device collaboration.
+- **Schema**: Zod-based type definitions (`shared/schema.ts`).
+- **Auto-sync**: Data automatically syncs to Google Drive/Sheets when online.
 
 ### Key Features
-- **Multi-drone management**: Connect and control multiple drones from a single ground station with drone selection screen after login, real-time status display for all drones on map, individual geofencing per drone, and TopBar logo click to switch between drones
-- **Preview mode**: Explore the interface without connecting a real drone by clicking "Preview Control Page" on drone selection
-- Real-time telemetry panel showing altitude, speed, attitude, and motor data
-- Interactive map with all connected drones visible, waypoints, flight path visualization from operator location, address search, hover tooltips showing drone status/battery/GPS/mission, and map controls for centering on drone or operator
-- Mission planning with waypoint management and actions (hover, photo, drop/pickup payload, open gripper, RTL)
-- Advanced AI-powered object tracking using TensorFlow.js COCO-SSD model for detecting stationary and moving objects (people, vehicles, animals, aircraft, packages/bags, and 80+ COCO object types), with multi-object tracking via IoU-based Hungarian assignment, velocity prediction for temporary occlusions, temporal confidence smoothing (0.7 EMA), aerial perspective confidence boosting, frame-persistence confidence bonuses, and fallback motion detection for offline/degraded scenarios
-- Audio broadcast system with Pi GPIO speaker, USB speaker, and Orange Cube+ buzzer support
-- Flight controls including arm/disarm, takeoff, land, RTL, and emergency stop
-- **Automatic Flight Recording**: Flight sessions auto-start on takeoff and auto-end on landing. Captures enhanced telemetry including motor RPM/current, vibration XYZ, battery temp, GPS HDOP, air speed, wind speed/direction, and distance from home. Calculates total flight time, max altitude, and distance traveled. Sessions sync to Google Sheets on completion
-- **Servo/Gripper Control**: Hardware gripper control via GPIO 4 on Raspberry Pi using pigpio (preferred) or RPi.GPIO. API endpoints `/api/servo/control` (POST) and `/api/servo/status` (GET) available. On non-Pi platforms, returns simulated responses. Run `sudo ./scripts/setup-gpio-access.sh` once on Pi to enable sudo-less operation
-- **BME688 Environmental Monitoring**: Real-time environmental sensor integration with AI-based gas classification. Features include:
-  - Temperature (°F/°C), humidity, pressure, and altitude readings
-  - Indoor Air Quality (IAQ) score calculation
-  - AI gas classification detecting VOC, VSC, CO₂, H₂, CO, and ethanol levels
-  - Health risk assessment (GOOD, MODERATE, HIGH, CRITICAL) with color-coded alerts
-  - API endpoints `/api/bme688/read` and `/api/bme688/status` with simulation fallback for non-Pi environments
-  - Environment panel in sidebar with auto-refresh and safe levels reference
-- Google Sheets backup integration for data persistence
-- Google Drive integration for video footage storage
-- Laptop webcam testing mode for camera validation with object detection overlay
-- Hardware presets for Skydroid C12, LW20/HA Lidar, Here3+ GPS configuration
-- Base location configuration in Settings for RTL functionality
-- Real system diagnostics (no simulations) - shows actual connection status
-- Operations console always active with memory-conscious log trimming
-- User authentication with role-based access (admin, operator, viewer) and full name display
-- **Team Communication**: Real-time messaging between users in the Comms panel with timestamps, edit/delete functionality, and automatic Google Sheets backup for message history
-- **Direct Messaging**: Type @ in the message input to DM specific users with autocomplete, Enter to confirm selection. DMs are private and only visible to sender and recipient via WebSocket user tracking
-- **Message History**: Admins can view full message history including original content of edited/deleted messages via `/api/messages/history` endpoint (requires admin role)
-- **Google Account Management**: Admins can sign in, switch, and remove Google accounts directly in the app (Settings > Storage). Supports both Replit integration mode and standalone OAuth mode for production deployments. Set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` environment variables for standalone mode
-- **Server-Side Session Tokens**: Login creates cryptographically secure session tokens (256-bit entropy) stored server-side; tokens required for WebSocket DM routing and admin API access; sessions expire after 24 hours
-- Automation scripts panel for custom flight automation with triggers (takeoff, landing, waypoint, battery low, GPS lost, disconnect)
-- GPS-denied navigation failsafe using visual odometry, dead reckoning, and flight path history
-- Autonomous mission completion on ground control disconnect with configurable RTL/hover/land actions
-- Flight log management with delete functionality and confirmation dialogs
-- Terminal commands panel with custom command creation and deletion
-- GUI configuration with immediate "Apply Now" functionality, dark/light theme support with automatic persistence, and Google Sheets backup for tabs/panels/widgets
-- **GUI Permission Controls**: Only administrators can create and delete custom tabs/widgets; all users with configure_gui_advanced permission can reorder and toggle visibility
-- **Flight Path Optimizer**: Intelligent route optimization panel that analyzes missions based on real-time weather data (Open-Meteo API), terrain considerations, and waypoint ordering. Provides actionable suggestions for battery savings, time reduction, headwind avoidance, altitude optimization, and safety improvements with estimated savings percentages. Requires mission_planning permission.
-- **Flight Logbook**: Comprehensive mission logging system that automatically records and categorizes all drone flights. Features include:
-  - Mission categorization (training, survey, inspection, emergency, delivery, monitoring, other)
-  - Searchable and filterable flight history with date ranges and category filters
-  - Flight replay with animated map playback showing drone position, telemetry data, and progress slider
-  - Editable flight records with mission names, ratings (1-5 stars), tags, weather conditions, notes, and incident reports
-  - Statistics dashboard showing total flights, flight time, distance, monthly comparisons, and category breakdown
-  - CSV export of filtered logbook data for external analysis
+- **Multi-drone Management**: Control multiple drones with real-time status, geofencing, and switching.
+- **Real-time Telemetry**: Displays altitude, speed, attitude, and motor data.
+- **Interactive Map**: Displays drone positions, waypoints, and flight paths.
+- **Mission Planning**: Waypoint management with various actions.
+- **AI-powered Object Tracking**: TensorFlow.js COCO-SSD for object detection and tracking with confidence boosting.
+- **Audio Broadcast System**: Operator mic and TTS fan out from the GCS to every connected tab via WebSocket. `client/src/components/audio/GlobalAudioReceiver.tsx` is mounted globally in `App.tsx` and listens for two CustomEvents that `TopBar.tsx` dispatches from the WS feed: `audio-chunk-incoming` (base64 mic chunks) and `audio-tts-broadcast` (TTS text). Mic chunks are fed into a single MediaSource (`audio/webm;opus`) for continuous low-latency playback, with an AudioContext fallback for codecs MediaSource can't handle (raw PCM/WAV). The receiver caps the SourceBuffer at ~30 s to prevent QuotaExceededError on long streams, prunes old data on every `updateend`, registers a one-shot click/keydown/touchstart listener to satisfy autoplay policies, queues failed AudioContext decodes until the context is resumed by a user gesture, and revokes ObjectURLs / removes listeners on teardown. The operator's own tab is prevented from echoing itself via a `sessionStorage.mouse_audio_sender` flag set by `SpeakerPanel.tsx` on Start Live and cleared on Stop, MediaRecorder error, the recorder's `stop` event, and component unmount. Hardware paths: Pi GPIO speaker, USB speaker, and Orange Cube+ buzzer.
+- **Gamepad / Joystick Control**: USB and Bluetooth Xbox/PS controllers polled in `client/src/components/controls/ControlDeck.tsx` via the standard `navigator.getGamepads()` API. 18 actions defined in `shared/gamepadMapping.ts` (critical / flight / payload / axis groups) with safe defaults that map emergency stop to a button you can't accidentally hit with a thumbstick. Mappings are persisted to `localStorage.mouse_gamepad_mapping`, broadcast across panels via the `gamepad-mapping-changed` window event, and edited through `GamepadMappingDialog.tsx` (press-to-assign, axis invert, reset-to-defaults). `normalizeMapping()` rejects any stored binding whose `kind` doesn't match the action's default kind — so a corrupt config that tries to bind emergency stop to an axis silently falls back to the safe default. Per-action cooldowns prevent double-fire while ensuring `emergency_stop` always bypasses cooldowns and is never blocked by another in-flight action.
+- **Flight Controls**: Arm/disarm, takeoff, land, RTL, emergency stop.
+- **Automatic Flight Recording**: Auto-starts/ends on takeoff/landing, captures telemetry, syncs to Google Sheets.
+- **Hardware Control**: Servo/gripper control via Raspberry Pi GPIO.
+- **Environmental Monitoring**: BME688 sensor integration for temperature, humidity, pressure, IAQ, and AI-based gas classification.
+- **Google Integration**: Sheets backup, Drive for video, account management.
+- **User Authentication**: Role-based access (admin, operator, viewer).
+- **Team Communication**: Real-time messaging with Google Sheets backup.
+- **Automation Scripts**: Custom flight automation with triggers.
+- **GPS-Denied Navigation**: ML navigation engine with visual scene matching, IMU, and landmark recognition.
+- **Flight Log Management**: Records, categorizes, replays, and provides statistics.
+- **GUI Configuration**: Customizable interface with themes and Google Sheets backup.
+- **Flight Path Optimizer**: Analyzes missions with weather and terrain data.
+- **ML Flight Stabilization System**: Multi-architecture stabilization with Extended Kalman Filter, neural network for disturbance prediction, adaptive PID, and compensation for payload/weather.
+- **Unified App-Config**: Centralized backend source-of-truth for every operator-facing setting (theme, GUI layout, hardware/GPIO, primary camera, AR HUD, motor count, ML stabilization config, base location, input mappings, geofence cache, telemetry sim, comms primary). Registry lives in `shared/appConfig.ts`. Reads via `GET /api/app-config`, writes via `PUT/PATCH /api/app-config[/<key>]` (system_settings perm). Each write persists to Postgres `settings` table, mirrors to Firebase RTDB at `/app_config/<key>`, mirrors to Firestore `app_config/<key>`, and broadcasts WS `app_config_updated` so all connected GCS instances reflect the change in-flight without a reload. RTDB child_added+child_changed listener fans external admin changes back into the local cache (origin-tagged to prevent loops). Client write-through bridges (in `client/src/lib/centralConfig.ts` + `useAppConfig` hook) automatically migrate legacy localStorage keys, mirror local writes to the backend, and apply incoming WS updates to localStorage so existing panels need no refactor. Communication board is now RTDB-primary: every message is also persisted at `/messages/<id>`.
 
-### ML Flight Stabilization System
-- **ML Stabilization Engine** (`client/src/components/controls/MLStabilizationEngine.tsx`): Client-side machine learning stabilization controller running at 5Hz with:
-  - 15-state Extended Kalman Filter fusing IMU, GPS, barometer, and rangefinder data for state estimation
-  - 3-layer neural network (24→48→24→9) for disturbance prediction with online backpropagation training
-  - Adaptive PID controllers for roll, pitch, yaw, and altitude with wind/payload-aware gain scheduling
-  - Camera-based ground distance estimation using feature scale analysis and optical flow fusion
-  - Wind speed/direction estimation from IMU residuals and airspeed-vs-groundspeed differential
-  - Payload compensation with CG shift detection, thrust adjustment, and payload release detection
-  - Weather adaptation adjusting thrust multiplier and drag based on air density, temperature, and humidity
-  - Takeoff assist with phased launch (pre-check → lift → initial hover → stable) using sensor-fused altitude
-  - Configuration persisted in localStorage (`mouse_ml_stabilization_config`)
-  - Emits events: `flight-command` (stabilize_adjust), `stabilizer-status`, `ml-stabilization-status`
-  - Listens to: `telemetry-update`, `arm-state-changed`, `flight-command`, `weather-update`, `imu-update`, `camera-features`, `payload-release`
-- **Flight Dynamics Engine** (`server/flightDynamics.ts`): Server-side physics engine with:
-  - Full quadrotor dynamics model (thrust, torque, drag, rain drag, payload effects)
-  - Extended Kalman Filter for server-side state estimation
-  - ML disturbance predictor with Xavier initialization and mini-batch SGD training
-  - Wind model with base wind, gusts, and turbulence simulation
-  - Camera ground distance estimator with attitude correction
-  - API endpoints: GET/POST `/api/stabilization/status`, `/api/stabilization/sensors`, `/api/stabilization/environment`, `/api/stabilization/payload`, `/api/stabilization/compute`, `/api/stabilization/motors`, `/api/stabilization/params`
-- **Stabilization Panel** (`client/src/components/panels/StabilizationPanel.tsx`): Dedicated UI panel with Monitor/Configure/Dynamics tabs showing real-time corrections visualization, ML training status, wind estimation, payload compensation, camera ground distance, weather adaptation, Kalman filter state, and adaptive PID gains. Accessible via Brain icon in sidebar.
-- **Legacy AutoStabilizationController** (`client/src/components/controls/AutoStabilizationController.tsx`): Original PID controller with adaptive gains, still active alongside ML engine for redundancy
-
-### Hardware Configuration
-- **Companion Computer**: Raspberry Pi 5 (16GB) running Trixie 13.2
+### Hardware Configuration (Target)
+- **Companion Computer**: Raspberry Pi 5 (16GB)
 - **Flight Controller**: Orange Cube+ with ADSB Carrier Board
 - **GPS**: Here3+ GPS Module (CAN-connected)
-- **Lidar**: LW20/HA high-accuracy laser altimeter
-- **Camera/Gimbal**: Skydroid C12 2K (2560x1440 HD + 384x288 Thermal, 7mm lens)
+- **Lidar**: LW20/HA
+- **Camera/Gimbal**: Skydroid C12 2K
 - **Propulsion**: Mad Motors XP6S Arms (x4)
-
-### Project Structure
-- `client/` - React frontend application
-- `server/` - Express backend with API routes and WebSocket handling
-- `shared/` - Shared TypeScript types and Zod schemas
-- `data/` - Local JSON data storage (created automatically)
-- `scripts/` - Build and deployment scripts
-- `electron/` - Electron main process, preload scripts, and icons
-- `attached_assets/` - Project requirements and reference documents
 
 ## External Dependencies
 
-### Data Storage
-- Local JSON files for offline-first operation
-- Google Drive API for cloud file backup (via googleapis)
-- Google Sheets API for structured data backup (via googleapis)
-
-### Frontend Libraries
-- Leaflet for mapping functionality
-- Radix UI primitives for accessible components
-- TanStack React Query for data fetching
-- TensorFlow.js and COCO-SSD for AI object detection
-- Various shadcn/ui components (accordion, dialog, tabs, etc.)
-
-### Build Tools
-- Vite for frontend development and bundling
-- esbuild for server-side bundling
-- TypeScript for type checking across the codebase
-- Electron + electron-builder for desktop application packaging
-
-### Real-time Communication
-- WebSocket (ws) for live telemetry streaming between drone and ground station
-
-### FAA Regulatory Overlays
-- GeoJSON files in `client/public/airspace/` for restricted areas, national security zones, part-time/pending zones
-- FAA Facility Map (480MB) kept defaultOff due to size; National Security layer uses 200MB maxBytes
-- GeoJSON `key` prop includes feature count + display range to force react-leaflet re-renders on data changes
-- Clickable features show popup with facility name, state, proponent, and airspace details
-- Live TFR endpoint at `/api/airspace/tfr` pulls from tfr.faa.gov (free, no API key)
-- Airspace sources endpoint at `/api/airspace/sources` lists all configured data sources
-- Control panel is collapsible (dropdown toggle) and fully draggable with position persistence in localStorage
-
-### Camera & Detection
-- Tesseract.js v5 loaded via CDN (`client/index.html`) for license plate OCR in TrackingPanel
-- VideoFeed.tsx supports gimbal, thermal, FPV, webcam (getUserMedia), and RTSP stream modes
-- Object detection uses TensorFlow.js COCO-SSD (lite_mobilenet_v2) with all 80 COCO classes mapped, aerial perspective confidence boosting, and fallback motion/edge detection
-- COCO_TO_TYPE and AERIAL_CONFIDENCE_BOOST are module-level constants (not inside component) to prevent React re-render loops
-- **AR HUD Overlay** (`ARHudOverlay.tsx`): Toggle via "AR" button in camera header. Shows fighter-jet style heads-up display over the camera feed with:
-  - Artificial horizon with pitch ladder and roll indicator (SVG-based, rotates with attitude)
-  - Compass heading tape at top with cardinal/intercardinal labels
-  - Speed tape (left) and altitude tape (right) with scrolling tick marks and current value boxes
-  - Vertical speed indicator with directional arrows
-  - Flight mode, GPS status (3D/2D/NO + satellite count), battery percent + voltage
-  - Lat/long coordinates, distance from home, gimbal pitch/yaw, camera mode
-  - Detected object count, recording indicator
-  - All elements use green HUD color (#00ff88) with glow filter; state persists in localStorage
-  - Listens to `telemetry-update` and `flight-command` window events for real-time data
-- Gimbal D-pad controls: Up/Down (pitch ±10°), Left/Right (yaw ±15°), Center (-45° pitch), Auto-Follow toggle
-- Gimbal auto-follow: When enabled + object locked, gimbal automatically tracks target and dispatches tracking-update events for AutoStabilizationController
-- Server endpoint: POST `/api/mavlink/command` with `command: "gimbal_control"` for hardware gimbal control via MAVLink
-- 3D mapping frame capture posts to `/api/mapping/3d/frame` for reconstruction
-
-### Python Dependencies
-- Python 3.11 at `/home/runner/workspace/.pythonlibs/bin/python3` (server uses `python3` via PATH)
-- pymavlink, Pillow, piexif installed for MAVLink communication and image processing
-
-### Known Replit Limitations
-- Vite HMR WebSocket errors in browser console are expected (Replit iframe proxy issue) — non-blocking
-- Camera access requires HTTPS or localhost — getUserMedia works in Replit preview with permissions
-- OPENAIP_API_KEY not configured (airspace restricted zones API returns 503)
-- WebSocket DM auth failures expected when not logged in
+- **Data Storage**: Local JSON files, Google Drive API, Google Sheets API.
+- **Frontend Libraries**: Leaflet, Radix UI, TanStack React Query, TensorFlow.js (COCO-SSD), shadcn/ui.
+- **Build Tools**: Vite, esbuild, TypeScript, Electron.
+- **Real-time Communication**: WebSocket (`ws`).
+- **Regulatory Data**: FAA GeoJSON files, Live TFR endpoint (`tfr.faa.gov`).
+- **Camera & Detection**: Tesseract.js v5 (OCR), TensorFlow.js COCO-SSD, MAVLink for gimbal control.
+- **Python Dependencies**: Python 3.11, `pymavlink`, `Pillow`, `piexif`.

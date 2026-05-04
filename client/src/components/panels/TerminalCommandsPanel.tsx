@@ -890,10 +890,18 @@ export function TerminalCommandsPanel() {
     fetch("/api/terminal-commands")
       .then((r) => r.json())
       .then((data) => {
-        if (data?.success && Array.isArray(data?.commands)) {
+        if (data?.success && Array.isArray(data?.commands) && data.commands.length > 0) {
           setCommands(filterSupported(data.commands));
         } else {
-          setCommands(filterSupported(defaultCommands));
+          // First load (or user has cleared everything) — seed the editable
+          // catalog with the built-in defaults and persist so reloads keep them.
+          const seeded = filterSupported(defaultCommands);
+          setCommands(seeded);
+          fetch("/api/terminal-commands", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ commands: seeded }),
+          }).catch(() => {});
         }
       })
       .catch(() => setCommands(filterSupported(defaultCommands)))
@@ -1095,10 +1103,9 @@ export function TerminalCommandsPanel() {
             </div>
           </div>
           <p className="text-xs text-muted-foreground">
-            Only commands with a verified backend implementation are available here.
-          </p>
-          <p className="text-[11px] text-amber-500 mt-1">
-            Placeholder shell snippets and unsupported backend actions were removed.
+            Curated MAVLink and onboard-Python commands organized by category. Each command's full
+            text is shown before execution; click <Play className="inline h-3 w-3" /> to dispatch via the
+            connected flight controller. Add your own with <Plus className="inline h-3 w-3" />.
           </p>
           
           {showAddCommand && (
@@ -1233,7 +1240,8 @@ export function TerminalCommandsPanel() {
                   )}
                 </CardContent>
               </Card>
-            ))}
+            ))
+            )}
           </div>
         </ScrollArea>
       </div>

@@ -29,6 +29,7 @@ import { toast } from "sonner";
 import { reportApiError } from "@/lib/apiErrors";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useAppState } from "@/contexts/AppStateContext";
+import { FcConnectionBadge, useFcConnectionString } from "@/components/shared/FcConnectionBadge";
 import { Lock } from "lucide-react";
 import { MapContainer, TileLayer, Circle as LeafletCircle, Polygon, Marker, useMapEvents, useMap } from "react-leaflet";
 import L from "leaflet";
@@ -122,8 +123,8 @@ export function GeofencingPanel() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [fcSyncBusy, setFcSyncBusy] = useState(false);
-  const [fcConnectionString, setFcConnectionString] = useState("serial:/dev/ttyACM0:57600");
+  void useFcConnectionString();
+  void selectedDrone;
 
   const [newZone, setNewZone] = useState({
     name: "",
@@ -138,11 +139,6 @@ export function GeofencingPanel() {
   const [drawingPoints, setDrawingPoints] = useState<{ lat: number; lng: number }[]>([]);
   const [mapCenter, setMapCenter] = useState<{ lat: number; lng: number }>({ lat: DEFAULT_LAT, lng: DEFAULT_LNG });
   const [mapStyle, setMapStyle] = useState<"standard" | "dark" | "satellite">("standard");
-
-  useEffect(() => {
-    const next = String(selectedDrone?.connectionString || "").trim();
-    if (next) setFcConnectionString(next);
-  }, [selectedDrone?.connectionString]);
 
   // Get user's actual GPS location on mount
   useEffect(() => {
@@ -358,71 +354,8 @@ export function GeofencingPanel() {
   const previewCenter = newZone.lat && newZone.lng ? { lat: parseFloat(newZone.lat), lng: parseFloat(newZone.lng) } : null;
   const previewRadius = parseFloat(newZone.radius) || 500;
 
-  const uploadFenceToFc = async () => {
-    const enabledZones = zones.filter((z) => z.enabled !== false);
-    if (enabledZones.length > 1) {
-      toast.warning(
-        "FC supports a single polygon fence. Only the first enabled zone will be uploaded; others are for planning reference.",
-        { duration: 5000 }
-      );
-    }
-    setFcSyncBusy(true);
-    try {
-      const res = await fetch("/api/mavlink/fence/upload", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          connectionString: fcConnectionString,
-          zones,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "Upload failed");
-      toast.success(`Uploaded FC fence (${data.uploadedPoints || 0} points)`);
-    } catch (e: any) {
-      toast.error(e.message || "Failed to upload fence to FC");
-    } finally {
-      setFcSyncBusy(false);
-    }
-  };
-
-  const downloadFenceFromFc = async () => {
-    setFcSyncBusy(true);
-    try {
-      const res = await fetch(`/api/mavlink/fence/download?connectionString=${encodeURIComponent(fcConnectionString)}`);
-      const data = await res.json();
-      if (!res.ok || !data.success) throw new Error(data.error || "Download failed");
-      const points = Array.isArray(data.points) ? data.points : [];
-      if (points.length < 3) {
-        toast.error("No valid polygon fence found on FC");
-        return;
-      }
-      const actionMap: Record<number, GeofenceZone["action"]> = {
-        0: "warn",
-        1: "rtl",
-        2: "land",
-        3: "hover",
-      };
-      const imported: GeofenceZone = {
-        id: `fc_${Date.now()}`,
-        name: "FC Fence (Imported)",
-        type: "polygon",
-        enabled: true,
-        action: actionMap[Number(data.action)] || "warn",
-        points,
-        minAltitude: Number.isFinite(Number(data.minAltitude)) ? Number(data.minAltitude) : 0,
-        maxAltitude: Number.isFinite(Number(data.maxAltitude)) ? Number(data.maxAltitude) : 120,
-      };
-      setZones(prev => [imported, ...prev.filter(z => !z.name.startsWith("FC Fence (Imported)"))]);
-      setSelectedZone(imported);
-      setMapCenter(points[0]);
-      toast.success(`Imported ${points.length} fence points from FC`);
-    } catch (e: any) {
-      reportApiError(e, "Failed to download fence from FC");
-    } finally {
-      setFcSyncBusy(false);
-    }
-  };
+  // FC fence sync logic moved to SettingsPanel → Flight Controller section.
+  // Use `client/src/lib/fcSync.ts` utilities (uploadFenceToFc / downloadFenceFromFc).
 
   // Show permission denied if user doesn't have access
   if (!canManageGeofences) {
@@ -640,21 +573,11 @@ export function GeofencingPanel() {
               {zones.filter(z => z.enabled).length} Active
             </Badge>
           </div>
-          <div className="mt-3 flex flex-col gap-2">
-            <Input
-              value={fcConnectionString}
-              onChange={(e) => setFcConnectionString(e.target.value)}
-              className="h-8 text-xs font-mono"
-              placeholder="serial:/dev/ttyACM0:57600 or udp:127.0.0.1:14550"
-            />
-            <div className="grid grid-cols-2 gap-2">
-              <Button size="sm" variant="outline" disabled={fcSyncBusy} onClick={downloadFenceFromFc}>
-                Download FC Fence
-              </Button>
-              <Button size="sm" disabled={fcSyncBusy} onClick={uploadFenceToFc}>
-                Upload to FC
-              </Button>
-            </div>
+          <div className="mt-3 flex items-center gap-2 flex-wrap">
+            <FcConnectionBadge />
+            <span className="text-[10px] text-muted-foreground italic">
+              Sync with FC available in Settings → Flight Controller
+            </span>
           </div>
         </div>
 

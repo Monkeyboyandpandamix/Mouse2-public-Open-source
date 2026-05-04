@@ -16,6 +16,7 @@ interface SyncMeta {
   recipientId?: string | null;
   recipientName?: string | null;
   session?: SessionInfo;
+  lastUpdated?: number;
 }
 
 function toSafeFirestoreValue(value: any): any {

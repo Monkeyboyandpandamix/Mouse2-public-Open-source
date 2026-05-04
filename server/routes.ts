@@ -77,7 +77,7 @@ import {
   insertOfflineBacklogSchema,
   insertBme688ReadingSchema,
 } from "@shared/schema";
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 import { fromError } from "zod-validation-error";
 import { syncDataToSheets, getOrCreateBackupSpreadsheet, getSpreadsheetUrl } from "./googleSheets";
 import { uploadFileToDrive, listDriveFiles, checkDriveConnection, deleteFileFromDrive } from "./googleDrive";
@@ -116,6 +116,17 @@ import {
   isOAuthConfigured 
 } from "./googleAuth";
 import { missionExecutionService, automationService, terminalCommandPresetService, operatorPreferenceService, fcStateService, mapping3DService } from "./services/index.js";
+import { enforceGeofence } from "./services/geofenceEnforcer.js";
+import {
+  getAppConfigSnapshot,
+  getAppConfigValue,
+  setAppConfigValue,
+  patchAppConfig,
+  isKnownAppConfigKey,
+  setAppConfigBroadcast,
+  startRtdbAppConfigListener,
+  APP_CONFIG_KEY_LIST,
+} from "./services/appConfigService.js";
 import { registerDebugRoutes } from "./routes/debug";
 import {
   requestSession,
@@ -535,6 +546,16 @@ const scheduleRuntimeStatePersist = () => {
   }, 250);
 };
 
+// Module-level WebSocket broadcast bridge — set inside registerRoutes once the
+// `broadcast` closure is created. Used here so module-level helpers (mission
+// run writes, autonomous decisions) can emit `mission_updated` etc. without
+// having to plumb the closure through every helper.
+let wsBroadcast: ((type: string, data: any) => void) | null = null;
+export const setWsBroadcast = (fn: (type: string, data: any) => void) => {
+  wsBroadcast = fn;
+};
+export const getWsBroadcast = () => wsBroadcast;
+
 const setMissionRunRecord = (runId: string, run: MissionRunRecord) => {
   if (USE_DB) {
     const existing = missionExecutionService.getRun(runId);
@@ -547,6 +568,21 @@ const setMissionRunRecord = (runId: string, run: MissionRunRecord) => {
     missionRuns.set(runId, run);
     scheduleRuntimeStatePersist();
   }
+  // Broadcast mission_updated so the GCS dashboard, mission planner, and any
+  // remote operator clients see autonomous edits in real time.
+  try {
+    const r = run as any;
+    wsBroadcast?.("mission_updated", {
+      runId,
+      missionId: run.missionId,
+      status: run.status,
+      progress: r.progress ?? 0,
+      currentWaypointIndex: run.currentWaypointIndex ?? null,
+      waypointCount: run.waypointCount ?? null,
+      droneId: r.droneId ?? null,
+      updatedAt: run.updatedAt,
+    });
+  } catch {}
 };
 
 const getMissionRun = (runId: string): MissionRunRecord | undefined => {
@@ -1077,21 +1113,29 @@ export async function registerRoutes(
       return next();
     }
 
-    const session = requestSession(req);
-    if (!session) {
-      return res.status(401).json({ success: false, error: "Authentication required" });
-    }
+    const token = req?.headers?.["x-session-token"];
+    const normalizedToken = typeof token === "string" ? token : Array.isArray(token) ? token[0] : undefined;
 
-    req.serverSession = session;
-    const requiredPermission = apiPermissionForRequest(apiPath, req.method, req.body);
-    if (requiredPermission && !hasServerPermission(session, requiredPermission)) {
-      return res.status(403).json({
-        success: false,
-        error: `Insufficient permissions: ${requiredPermission} required`,
-      });
-    }
+    getSession(normalizedToken)
+      .then((session) => {
+        if (!session) {
+          res.status(401).json({ success: false, error: "Authentication required" });
+          return;
+        }
 
-    return next();
+        req.serverSession = session;
+        const requiredPermission = apiPermissionForRequest(apiPath, req.method, req.body);
+        if (requiredPermission && !hasServerPermission(session, requiredPermission)) {
+          res.status(403).json({
+            success: false,
+            error: `Insufficient permissions: ${requiredPermission} required`,
+          });
+          return;
+        }
+
+        next();
+      })
+      .catch((err) => next(err));
   });
 
   // DataFlash 48-hour cleanup: remove GROUND-STATION copies only.
@@ -1315,6 +1359,13 @@ export async function registerRoutes(
     projectId: String(cfg.projectId || "").trim() || null,
     databaseURL: String(cfg.databaseURL || "").trim() || null,
     storageBucket: String(cfg.storageBucket || "").trim() || null,
+    // Public client SDK config (safe to expose to the browser).
+    apiKey: String(cfg.apiKey || "").trim() || null,
+    authDomain: String(cfg.authDomain || "").trim() || null,
+    messagingSenderId: String(cfg.messagingSenderId || "").trim() || null,
+    appId: String(cfg.appId || "").trim() || null,
+    measurementId: String(cfg.measurementId || "").trim() || null,
+    // Server-side admin credentials (never returned by /public endpoints).
     serviceAccountPath: String(cfg.serviceAccountPath || "").trim() || null,
     serviceAccountJson: String(cfg.serviceAccountJson || "").trim() || null,
     serviceAccountBase64: String(cfg.serviceAccountBase64 || "").trim() || null,
@@ -1470,6 +1521,14 @@ export async function registerRoutes(
     });
     void publishCloudRealtime(type, data).catch(logCloudErr);
   };
+  // Expose to module-level helpers (mission run writes, geofence enforcer,
+  // autonomous decisions) so they can broadcast without a closure handle.
+  setWsBroadcast(broadcast);
+  // Wire the unified app-config service so writes propagate via WS.
+  setAppConfigBroadcast(broadcast);
+  // Subscribe to RTDB so changes pushed by other instances or external admin
+  // tooling fan out to this instance's WS clients.
+  startRtdbAppConfigListener();
 
   // Send to specific users only (for DMs)
   const sendToUsers = (type: string, data: any, userIds: string[]) => {
@@ -1681,17 +1740,34 @@ export async function registerRoutes(
 
   const runMavlinkVehicleControl = async (args: string[]) => {
     return await new Promise<any>((resolve) => {
-      const py = spawn(PYTHON_EXEC, [path.join(SCRIPTS_DIR, "mavlink_vehicle_control.py"), ...args]);
+      let py: ReturnType<typeof spawn>;
+      try {
+        py = spawn(PYTHON_EXEC, [path.join(SCRIPTS_DIR, "mavlink_vehicle_control.py"), ...args]);
+      } catch (spawnErr: any) {
+        resolve({ ok: false, data: null, error: spawnErr?.message || `Failed to launch ${PYTHON_EXEC}` });
+        return;
+      }
       let out = "";
       let err = "";
-      py.stdout.on("data", (d: Buffer) => (out += d.toString()));
-      py.stderr.on("data", (d: Buffer) => (err += d.toString()));
+      let settled = false;
+      const finish = (result: any) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+      // Critical: capture spawn errors (ENOENT, EPERM, …) so they never become
+      // unhandled 'error' events that would crash the entire server process.
+      py.on("error", (spawnErr: any) => {
+        finish({ ok: false, data: null, error: spawnErr?.message || `Failed to launch ${PYTHON_EXEC}` });
+      });
+      py.stdout?.on("data", (d: Buffer) => (out += d.toString()));
+      py.stderr?.on("data", (d: Buffer) => (err += d.toString()));
       py.on("close", () => {
         try {
           const parsed = JSON.parse((out || "").trim() || "{}");
-          resolve({ ok: Boolean(parsed?.success), data: parsed, error: parsed?.error || err || null });
+          finish({ ok: Boolean(parsed?.success), data: parsed, error: parsed?.error || err || null });
         } catch {
-          resolve({ ok: false, data: null, error: err || "Invalid bridge response" });
+          finish({ ok: false, data: null, error: err || "Invalid bridge response" });
         }
       });
     });
@@ -2238,7 +2314,12 @@ export async function registerRoutes(
   });
   app.use("/api/connections", requirePermission("system_settings"));
   app.use("/api/integrations", requirePermission("system_settings"));
-  app.use("/api/cloud/config", requirePermission("system_settings"));
+  app.use("/api/cloud/config", (req, res, next) => {
+    // /api/cloud/config/public exposes only client-safe Firebase Web SDK values
+    // (apiKey/appId/etc.) and must be reachable from unauthenticated bootstraps.
+    if (req.path === "/public" || req.path === "/public/") return next();
+    return requirePermission("system_settings")(req, res, next);
+  });
   app.use("/api/cloud/status", requirePermission("system_settings"));
   app.use("/api/cloud/test", requirePermission("system_settings"));
   app.use("/api/cloud/media", requirePermission("camera_control"));
@@ -2438,6 +2519,69 @@ export async function registerRoutes(
     scheduleRuntimeStatePersist();
     void syncCloudDocument("audio_state", "live", audioState.live, { session: null, visibility: "admin" }).catch(logCloudErr);
     res.json({ success: true, live: audioState.live });
+  });
+
+  // Two-way audio: ground operator mic → drone speaker streaming.
+  // Auth: covered by `app.use("/api/audio", requireAuth, requirePermissionForWrites("broadcast_audio"))` above.
+  // Accepts base64-encoded Opus/WebM/PCM chunks from MediaRecorder and broadcasts
+  // them over the WebSocket `audio_chunk` channel for the connected drone (or any
+  // on-board listener) to play.
+  const AUDIO_STREAM_MAX_CHUNK_BYTES = 256 * 1024; // 256 KB per chunk hard cap
+  const AUDIO_ALLOWED_MIME_PREFIXES = [
+    "audio/webm",
+    "audio/ogg",
+    "audio/opus",
+    "audio/wav",
+    "audio/mpeg",
+    "audio/x-pcm",
+  ];
+
+  app.post("/api/audio/stream", async (req, res) => {
+    try {
+      const chunkBase64 = String(req.body?.chunk || "");
+      const mimeTypeRaw = String(req.body?.mimeType || "audio/webm;codecs=opus");
+      const mimeType = mimeTypeRaw.split(";")[0].trim().toLowerCase();
+      const targetDroneId = req.body?.droneId ? String(req.body.droneId) : null;
+
+      if (!chunkBase64 || chunkBase64.length < 16) {
+        res.status(400).json({ success: false, error: "missing or invalid chunk" });
+        return;
+      }
+      const sizeBytes = Math.floor((chunkBase64.length * 3) / 4);
+      if (sizeBytes > AUDIO_STREAM_MAX_CHUNK_BYTES) {
+        res.status(413).json({ success: false, error: `chunk too large (max ${AUDIO_STREAM_MAX_CHUNK_BYTES} bytes)` });
+        return;
+      }
+      if (!AUDIO_ALLOWED_MIME_PREFIXES.some((prefix) => mimeType.startsWith(prefix))) {
+        res.status(415).json({ success: false, error: "unsupported audio mime type" });
+        return;
+      }
+      if (!audioState.live.active) {
+        res.status(409).json({ success: false, error: "live audio session not active" });
+        return;
+      }
+
+      // Broadcast the audio chunk over WebSocket so the connected drone (or any
+      // on-board listener subscribed to the audio_chunk channel) plays it.
+      broadcast("audio_chunk", {
+        droneId: targetDroneId,
+        mimeType: mimeTypeRaw,
+        chunk: chunkBase64,
+        size: sizeBytes,
+        ts: Date.now(),
+      });
+
+      // Best-effort: log occasional samples for diagnostics; do NOT persist raw audio.
+      if (Math.random() < 0.02) {
+        console.log(
+          `[audio/stream] forwarded ${sizeBytes}B (${mimeTypeRaw}) → ${targetDroneId || "broadcast"}`,
+        );
+      }
+
+      res.json({ success: true, forwarded: sizeBytes });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e?.message || "stream failed" });
+    }
   });
 
   app.get("/api/audio/drone-mic", async (_req, res) => {
@@ -3871,40 +4015,196 @@ export async function registerRoutes(
     }
   });
 
+  // Lock-and-Follow: receives a locked-target bbox center and dispatches a single
+  // gimbal+yaw nudge toward it. Best-effort: when no MAVLink connection is supplied
+  // we record the intent (debug + cloud) and respond with `dispatched: false` so the
+  // UI can be honest about whether the vehicle actually moved.
+  const followBodySchema = z.object({
+    targetId: z.string().max(128).optional().default(""),
+    targetType: z.string().max(64).optional().default(""),
+    yawDeg: z.coerce.number().min(-180).max(180).optional().default(0),
+    pitchDeg: z.coerce.number().min(-90).max(45).optional().default(0),
+    followDistance: z.coerce.number().min(1).max(100).optional().default(5),
+    connectionString: z.string().max(256).optional().default(""),
+  });
+  app.post("/api/drone/follow", async (req: any, res) => {
+    try {
+      const session = req.serverSession as ServerSession | undefined;
+      if (!session) return res.status(401).json({ success: false, error: "Authentication required" });
+      const parsed = followBodySchema.safeParse(req.body || {});
+      if (!parsed.success) {
+        return res.status(400).json({ success: false, error: parsed.error.message });
+      }
+      const { targetId, targetType, yawDeg, pitchDeg, followDistance, connectionString } = parsed.data;
+
+      let dispatched = false;
+      let bridgeError: string | null = null;
+      const trimmedConn = connectionString.trim();
+      if (trimmedConn) {
+        const bridge = await runMavlinkVehicleControl([
+          "action",
+          "--connection",
+          trimmedConn,
+          "--action",
+          "gimbal",
+          "--timeout",
+          "5",
+          "--pitch",
+          String(pitchDeg),
+          "--yaw",
+          String(yawDeg),
+        ]);
+        dispatched = Boolean(bridge?.ok);
+        bridgeError = bridge?.error || null;
+      }
+
+      pushDebugEvent("info", "drone.follow", "Follow command issued", {
+        userId: session.userId,
+        targetId,
+        targetType,
+        yawDeg,
+        pitchDeg,
+        followDistance,
+        dispatched,
+      });
+      void appendCloudDocument(
+        "follow_commands",
+        {
+          targetId,
+          targetType,
+          yawDeg,
+          pitchDeg,
+          followDistance,
+          dispatched,
+          timestamp: new Date().toISOString(),
+          requestedBy: { userId: session.userId, role: session.role, name: session.name },
+        },
+        { session },
+      ).catch(logCloudErr);
+
+      res.json({
+        success: true,
+        action: "follow",
+        dispatched,
+        bridgeError,
+        target: { id: targetId, type: targetType },
+        yawDeg,
+        pitchDeg,
+        followDistance,
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to dispatch follow command" });
+    }
+  });
+
+  // License-plate capture: persist the cropped image + extracted text as a media asset.
+  // We cap the inline base64 payload at 1.5 MB (≈1.1 MB raw) to keep the asset record
+  // safely under JSON/Firestore document limits; oversize crops are rejected with 413
+  // so the client can downscale and retry instead of corrupting the asset store.
+  // Firestore documents have a hard 1 MiB limit; with metadata + base64 overhead
+  // we cap the inline image at 700 KB so the mirrored cloud document stays under
+  // that ceiling. Larger crops should be downscaled client-side before upload —
+  // Firebase Storage object upload (when configured) is a future improvement.
+  const PLATE_MAX_BASE64_BYTES = 700_000;
+  const licensePlateSchema = z.object({
+    plateText: z.string().trim().min(1).max(32),
+    confidence: z.coerce.number().min(0).max(100).optional().default(0),
+    imageBase64: z.string().max(PLATE_MAX_BASE64_BYTES).optional().default(""),
+    droneId: z.string().max(128).optional().default(""),
+    sessionId: z.string().max(128).optional().default(""),
+    targetId: z.string().max(128).optional().default(""),
+  });
+  app.post("/api/license-plates", async (req: any, res) => {
+    try {
+      const session = req.serverSession as ServerSession | undefined;
+      const rawImage = String(req.body?.imageBase64 || "");
+      if (rawImage.length > PLATE_MAX_BASE64_BYTES) {
+        return res.status(413).json({
+          success: false,
+          error: `image too large (${rawImage.length} > ${PLATE_MAX_BASE64_BYTES} bytes); downscale crop client-side and retry`,
+        });
+      }
+      const parsed = licensePlateSchema.safeParse(req.body || {});
+      if (!parsed.success) {
+        return res.status(400).json({ success: false, error: parsed.error.message });
+      }
+      const plateText = parsed.data.plateText.toUpperCase();
+      const { confidence, imageBase64, droneId: droneIdRaw, sessionId: sessionIdRaw, targetId } = parsed.data;
+      const droneId = droneIdRaw || null;
+      const sessionId = sessionIdRaw || null;
+
+      const filename = `plate_${plateText.replace(/[^A-Z0-9]/g, "_")}_${Date.now()}.png`;
+      const cleanBase64 = imageBase64 ? imageBase64.replace(/^data:image\/[a-z]+;base64,/, "") : "";
+      const storagePath = cleanBase64 ? `data:image/png;base64,${cleanBase64}` : null;
+      const asset = await storage.createMediaAsset({
+        droneId,
+        sessionId,
+        type: "photo",
+        filename,
+        storagePath,
+        mimeType: "image/png",
+        fileSize: cleanBase64 ? Math.floor((cleanBase64.length * 3) / 4) : null,
+        capturedAt: new Date().toISOString(),
+        syncStatus: "pending",
+        syncError: null,
+      } as any);
+      broadcast("license_plate_captured", { asset, plateText, confidence, targetId });
+      void syncCloudDocument(
+        "license_plates",
+        asset.id,
+        { ...asset, plateText, confidence, targetId },
+        { session },
+      ).catch(logCloudErr);
+      res.json({ success: true, asset, plateText, confidence });
+    } catch (error: any) {
+      res.status(500).json({ success: false, error: error?.message || "Failed to save license plate" });
+    }
+  });
+
   app.post("/api/mavlink/manual-control", async (req, res) => {
     try {
       const connectionString = String(req.body?.connectionString || "").trim();
       if (!connectionString) return res.status(400).json({ success: false, error: "connectionString is required" });
 
-      const x = Number(req.body?.x ?? 0);
-      const y = Number(req.body?.y ?? 0);
-      const z = Number(req.body?.z ?? 500);
-      const r = Number(req.body?.r ?? 0);
-      const buttons = Number(req.body?.buttons ?? 0);
-      const durationMs = Number(req.body?.durationMs ?? 400);
+      // Clamp ALL manual-control values to MAVLink-safe ranges before
+      // shelling out to the python bridge. A corrupted gamepad mapping
+      // (axis scale of 9999) or a malicious client could otherwise push
+      // wildly out-of-range values into the flight controller. MAVLink
+      // MANUAL_CONTROL spec: x/y/r ∈ [-1000, 1000], z ∈ [0, 1000].
+      const clamp = (v: unknown, lo: number, hi: number, fallback: number) => {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return fallback;
+        return Math.max(lo, Math.min(hi, n));
+      };
+      const x = clamp(req.body?.x, -1000, 1000, 0);
+      const y = clamp(req.body?.y, -1000, 1000, 0);
+      const z = clamp(req.body?.z, 0, 1000, 500);
+      const r = clamp(req.body?.r, -1000, 1000, 0);
+      const buttons = clamp(req.body?.buttons, 0, 65535, 0);
+      const durationMs = clamp(req.body?.durationMs, 50, 2000, 400);
 
       const result = await runMavlinkVehicleControl([
         "manual",
         "--connection",
         connectionString,
         "--x",
-        String(Number.isFinite(x) ? x : 0),
+        String(Math.round(x)),
         "--y",
-        String(Number.isFinite(y) ? y : 0),
+        String(Math.round(y)),
         "--z",
-        String(Number.isFinite(z) ? z : 500),
+        String(Math.round(z)),
         "--r",
-        String(Number.isFinite(r) ? r : 0),
+        String(Math.round(r)),
         "--buttons",
-        String(Number.isFinite(buttons) ? buttons : 0),
+        String(Math.round(buttons)),
         "--duration-ms",
-        String(Number.isFinite(durationMs) ? durationMs : 400),
+        String(Math.round(durationMs)),
         "--timeout",
         "6",
       ]);
 
       if (!result.ok) return res.status(500).json({ success: false, error: result.error || "Manual control failed" });
-      void publishCloudRealtime("manual_control", { connectionString, x: Number(x), y: Number(y), z: Number(z), r: Number(r) }).catch(logCloudErr);
+      void publishCloudRealtime("manual_control", { connectionString, x, y, z, r }).catch(logCloudErr);
       res.json({ success: true, result: result.data });
     } catch (error: any) {
       res.status(500).json({ success: false, error: error?.message || "Manual control failed" });
@@ -6620,6 +6920,76 @@ export async function registerRoutes(
     }
   });
 
+  // ── Unified App Config ────────────────────────────────────────────────
+  // Single source of truth for client/operator-facing settings (theme, GUI
+  // layout, hardware/GPIO, primary camera, ML stabilization, base location,
+  // input mappings, etc). All writes also mirror to Firebase RTDB at
+  // /app_config/<key> and broadcast `app_config_updated` over WS so every
+  // connected GCS reflects the change in-flight.
+
+  // Anyone authenticated can read the snapshot (the values are needed to
+  // render UI). Writes are gated below by system_settings permission.
+  app.get("/api/app-config", requireAuth, async (_req, res) => {
+    try {
+      const snapshot = await getAppConfigSnapshot();
+      res.json({ success: true, snapshot, keys: APP_CONFIG_KEY_LIST });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || "Failed to load app config" });
+    }
+  });
+
+  app.get("/api/app-config/:key", requireAuth, async (req, res) => {
+    try {
+      const key = String(req.params.key);
+      if (!isKnownAppConfigKey(key)) {
+        return res.status(404).json({ success: false, error: `Unknown key: ${key}` });
+      }
+      const value = await getAppConfigValue(key);
+      res.json({ success: true, key, value });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message });
+    }
+  });
+
+  app.put("/api/app-config/:key", requirePermission("system_settings"), async (req, res) => {
+    try {
+      const key = String(req.params.key);
+      if (!isKnownAppConfigKey(key)) {
+        return res.status(404).json({ success: false, error: `Unknown key: ${key}` });
+      }
+      const session = requestSession(req);
+      const value = (req.body && Object.prototype.hasOwnProperty.call(req.body, "value"))
+        ? req.body.value
+        : req.body;
+      const stored = await setAppConfigValue(key, value, {
+        actorUserId: session?.userId ?? null,
+        actorRole: session?.role ?? null,
+      });
+      res.json({ success: true, key, value: stored });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err?.message || "Failed to save" });
+    }
+  });
+
+  app.patch("/api/app-config", requirePermission("system_settings"), async (req, res) => {
+    try {
+      const patch = (req.body && typeof req.body === "object" && req.body.patch && typeof req.body.patch === "object")
+        ? req.body.patch
+        : req.body;
+      if (!patch || typeof patch !== "object") {
+        return res.status(400).json({ success: false, error: "Body must be {key:value,...} or {patch:{...}}" });
+      }
+      const session = requestSession(req);
+      const snapshot = await patchAppConfig(patch as Record<string, unknown>, {
+        actorUserId: session?.userId ?? null,
+        actorRole: session?.role ?? null,
+      });
+      res.json({ success: true, snapshot });
+    } catch (err: any) {
+      res.status(400).json({ success: false, error: err?.message || "Failed to apply patch" });
+    }
+  });
+
   // Settings API
   app.get("/api/settings/:category", async (req, res) => {
     try {
@@ -6759,6 +7129,26 @@ export async function registerRoutes(
       const validated = insertFlightLogSchema.parse(req.body);
       const log = await storage.createFlightLog(validated);
       broadcast("telemetry", log);
+      // Server-side geofence enforcement: evaluate position vs configured
+      // zones for this drone; on breach, dispatch RTL/land via MAVLink and
+      // emit `geofence_breach` over WS. Flight-control dispatch is gated on
+      // the requesting session having the `flight_control` permission so an
+      // unauthenticated browser cannot trigger MAVLink commands by POSTing
+      // crafted telemetry — it can only ever produce an advisory broadcast.
+      if (log.droneId && Number.isFinite(log.latitude) && Number.isFinite(log.longitude)) {
+        const session = requestSession(req);
+        const canDispatchActions = hasServerPermission(session, "flight_control");
+        void enforceGeofence({
+          droneId: log.droneId,
+          position: {
+            lat: Number(log.latitude),
+            lng: Number(log.longitude),
+            altitude: log.altitude == null ? null : Number(log.altitude),
+          },
+          broadcast,
+          canDispatchActions,
+        }).catch((err) => console.warn("[geofence] enforce error:", err?.message));
+      }
       void appendCloudDocument("flight_logs", log, { session: requestSession(req) }).catch(logCloudErr);
       res.json(log);
     } catch (error) {
@@ -7630,7 +8020,19 @@ export async function registerRoutes(
       } else if (status === "pending") {
         assets = await storage.getPendingMediaAssets();
       } else {
-        assets = await storage.getMediaAssetsByDrone("", 100);
+        // Return the most recent assets across ALL drones (file-storage backend
+        // historically filtered by droneId === "" which never matched real
+        // entries — empty/null droneId was treated as "no drone" and dropped).
+        const all = (await (storage as any).getAllMediaAssets?.()) as any[] | undefined;
+        if (Array.isArray(all)) {
+          assets = all
+            .sort((a: any, b: any) =>
+              new Date(b.capturedAt || 0).getTime() - new Date(a.capturedAt || 0).getTime(),
+            )
+            .slice(0, 100);
+        } else {
+          assets = await storage.getMediaAssetsByDrone("", 100);
+        }
       }
       
       res.json(assets);
@@ -7949,6 +8351,21 @@ export async function registerRoutes(
         recipients,
       });
       smartBroadcast("new_message", message);
+      // Communication board → Firebase Realtime DB is the primary cloud
+      // datastore. Persist a canonical copy at /messages/<id> so any GCS can
+      // rehydrate without hitting Postgres. Firestore is kept as a mirror
+      // (see syncCloudDocument call below) for analytics/long-term audit.
+      void (async () => {
+        try {
+          const rtdb = getFirebaseAdminRtdb();
+          if (rtdb) {
+            await rtdb.ref(`messages/${message.id}`).set({
+              ...message,
+              __syncedAt: new Date().toISOString(),
+            });
+          }
+        } catch (err) { logCloudErr(err); }
+      })();
       void syncCloudDocument("messages", message.id, message, {
         session,
         visibility: message.recipientId || (Array.isArray(message.recipients) && message.recipients.length > 0) ? "dm" : "shared",
@@ -7996,6 +8413,18 @@ export async function registerRoutes(
       }
       // Use smartBroadcast for DM privacy
       smartBroadcast("message_updated", message);
+      // Mirror canonical edit to RTDB primary store.
+      void (async () => {
+        try {
+          const rtdb = getFirebaseAdminRtdb();
+          if (rtdb) {
+            await rtdb.ref(`messages/${message.id}`).set({
+              ...message,
+              __syncedAt: new Date().toISOString(),
+            });
+          }
+        } catch (err) { logCloudErr(err); }
+      })();
       void syncCloudDocument("messages", message.id, message, {
         session,
         visibility: message.recipientId || (Array.isArray(message.recipients) && message.recipients.length > 0) ? "dm" : "shared",
@@ -8043,6 +8472,13 @@ export async function registerRoutes(
       } else {
         broadcast("message_deleted", { id: req.params.id });
       }
+      // Remove from RTDB primary store as well as Firestore mirror.
+      void (async () => {
+        try {
+          const rtdb = getFirebaseAdminRtdb();
+          if (rtdb) await rtdb.ref(`messages/${req.params.id}`).remove();
+        } catch (err) { logCloudErr(err); }
+      })();
       void deleteCloudDocument("messages", req.params.id).catch(logCloudErr);
       res.json({ success: true });
       
@@ -8263,17 +8699,42 @@ export async function registerRoutes(
 
   app.get("/api/cloud/config", async (_req, res) => {
     const effective = await getEffectiveCloudConfig();
+    const runtimeRaw = sanitizeCloudConfig(await readCloudRuntimeConfig());
     const serviceAccountPathExists = Boolean(effective.serviceAccountPath && existsSync(effective.serviceAccountPath));
     res.json({
       success: true,
       projectId: effective.projectId || "",
       databaseURL: effective.databaseURL || "",
       storageBucket: effective.storageBucket || "",
+      apiKey: runtimeRaw.apiKey || "",
+      authDomain: runtimeRaw.authDomain || "",
+      messagingSenderId: runtimeRaw.messagingSenderId || "",
+      appId: runtimeRaw.appId || "",
+      measurementId: runtimeRaw.measurementId || "",
       serviceAccountPath: effective.serviceAccountPath || "",
       hasServiceAccountJson: Boolean(effective.serviceAccountJson),
       hasServiceAccountBase64: Boolean(effective.serviceAccountBase64),
       hasServiceAccountPath: serviceAccountPathExists,
       source: effective.source,
+    });
+  });
+
+  // Public, unauthenticated endpoint exposing only the client-side Firebase Web SDK config
+  // (apiKey/authDomain/etc.). These values are public by design — they identify the project
+  // to Firebase and are bundled into web apps. Server admin credentials are NEVER returned.
+  app.get("/api/cloud/config/public", async (_req, res) => {
+    const effective = await getEffectiveCloudConfig();
+    const runtimeRaw = sanitizeCloudConfig(await readCloudRuntimeConfig());
+    res.json({
+      enabled: Boolean(runtimeRaw.apiKey && effective.projectId),
+      apiKey: runtimeRaw.apiKey || null,
+      authDomain: runtimeRaw.authDomain || null,
+      databaseURL: effective.databaseURL || null,
+      projectId: effective.projectId || null,
+      storageBucket: effective.storageBucket || null,
+      messagingSenderId: runtimeRaw.messagingSenderId || null,
+      appId: runtimeRaw.appId || null,
+      measurementId: runtimeRaw.measurementId || null,
     });
   });
 
@@ -8284,6 +8745,11 @@ export async function registerRoutes(
         projectId: body.projectId,
         databaseURL: body.databaseURL,
         storageBucket: body.storageBucket,
+        apiKey: body.apiKey,
+        authDomain: body.authDomain,
+        messagingSenderId: body.messagingSenderId,
+        appId: body.appId,
+        measurementId: body.measurementId,
         serviceAccountPath: body.serviceAccountPath,
         serviceAccountJson: body.serviceAccountJson,
         serviceAccountBase64: body.serviceAccountBase64,

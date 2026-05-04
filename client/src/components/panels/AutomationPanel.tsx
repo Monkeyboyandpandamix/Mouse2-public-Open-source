@@ -367,7 +367,13 @@ rtl`
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Rule-based command mapping — event recipes map to backend-supported actions only.
+            Bind events (takeoff, landing, low battery, GPS lost, GCS disconnect, manual) to safe
+            backend actions: <code className="text-primary">arm</code>,{" "}
+            <code className="text-primary">disarm</code>,{" "}
+            <code className="text-primary">takeoff(20)</code>,{" "}
+            <code className="text-primary">land</code>,{" "}
+            <code className="text-primary">rtl</code>. Toggle each recipe on/off; click{" "}
+            <Play className="inline h-3 w-3" /> to test now.
           </p>
         </div>
 

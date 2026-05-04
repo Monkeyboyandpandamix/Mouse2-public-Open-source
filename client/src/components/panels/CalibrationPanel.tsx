@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useAppState } from "@/contexts/AppStateContext";
+import { FcConnectionBadge, useFcConnectionString } from "@/components/shared/FcConnectionBadge";
 import { reportApiError } from "@/lib/apiErrors";
 import { toast } from "sonner";
 import { Compass, SlidersHorizontal, Radio, AlertTriangle, Lock, StopCircle, RefreshCw } from "lucide-react";
@@ -68,7 +69,8 @@ export function CalibrationPanel() {
   const { hasPermission } = usePermissions();
   const { selectedDrone } = useAppState();
   const canUse = hasPermission("system_settings") || hasPermission("run_terminal");
-  const [connectionString, setConnectionString] = useState("serial:/dev/ttyACM0:57600");
+  const connectionString = useFcConnectionString();
+  void selectedDrone;
   const [busy, setBusy] = useState(false);
   const [state, setState] = useState<Record<CalMode, CalState>>({
     compass: { status: "idle", lastRunAt: null },
@@ -102,10 +104,6 @@ export function CalibrationPanel() {
     return () => window.clearInterval(t);
   }, []);
 
-  useEffect(() => {
-    const next = String(selectedDrone?.connectionString || "").trim();
-    if (next) setConnectionString(next);
-  }, [selectedDrone?.connectionString]);
 
   const startCalibration = async (mode: CalMode) => {
     setBusy(true);
@@ -167,12 +165,7 @@ export function CalibrationPanel() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <Input
-            value={connectionString}
-            onChange={(e) => setConnectionString(e.target.value)}
-            className="h-8 font-mono text-xs"
-            placeholder="serial:/dev/ttyACM0:57600"
-          />
+          <FcConnectionBadge />
           <div className="flex gap-2">
             <Button size="sm" variant="outline" onClick={refreshStatus} disabled={busy}>
               <RefreshCw className="h-4 w-4 mr-1" /> Refresh

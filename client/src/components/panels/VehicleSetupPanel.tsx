@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useAppState } from "@/contexts/AppStateContext";
+import { FcConnectionBadge, useFcConnectionString } from "@/components/shared/FcConnectionBadge";
 import { toast } from "sonner";
 import { Lock, Save } from "lucide-react";
 
@@ -48,7 +49,7 @@ export function VehicleSetupPanel() {
   const { hasPermission } = usePermissions();
   const { selectedDrone } = useAppState();
   const canUse = hasPermission("system_settings") || hasPermission("run_terminal");
-  const [connectionString, setConnectionString] = useState("serial:/dev/ttyACM0:57600");
+  const connectionString = useFcConnectionString();
   const [vehicleType, setVehicleType] = useState<"rover" | "plane" | "sub">("rover");
   const [airframeProfile, setAirframeProfile] = useState("quad_x");
   const [airframeProfiles, setAirframeProfiles] = useState<Record<string, any>>({});
@@ -58,10 +59,7 @@ export function VehicleSetupPanel() {
   const [busy, setBusy] = useState(false);
   const [rawPatch, setRawPatch] = useState('[\n  { "name": "PARAM_NAME", "value": 1 }\n]');
 
-  useEffect(() => {
-    const next = String(selectedDrone?.connectionString || "").trim();
-    if (next) setConnectionString(next);
-  }, [selectedDrone?.connectionString]);
+  void selectedDrone;
 
   const presets = useMemo(() => VEHICLE_PRESETS[vehicleType], [vehicleType]);
   const modeHints = useMemo(() => VEHICLE_ACTION_MODES[vehicleType], [vehicleType]);
@@ -265,12 +263,7 @@ export function VehicleSetupPanel() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <Input
-            value={connectionString}
-            onChange={(e) => setConnectionString(e.target.value)}
-            className="h-8 text-xs font-mono"
-            placeholder="serial:/dev/ttyACM0:57600"
-          />
+          <FcConnectionBadge />
 
           <Tabs value={vehicleType} onValueChange={(v) => setVehicleType(v as any)}>
             <TabsList className="grid grid-cols-3 w-full">

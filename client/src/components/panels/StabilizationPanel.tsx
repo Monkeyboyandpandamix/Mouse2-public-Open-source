@@ -222,6 +222,15 @@ export function StabilizationPanel() {
   const updateConfig = (updates: Partial<StabilizationConfig>) => {
     const newConfig = { ...config, ...updates };
     setConfig(newConfig);
+    // Track explicit user-disabled timestamp so SensorAnomalyMonitor doesn't
+    // immediately re-engage after the user manually turns ML stabilization off.
+    if (Object.prototype.hasOwnProperty.call(updates, "enabled")) {
+      if (updates.enabled === false) {
+        localStorage.setItem("mouse_ml_stabilization_user_disabled_at", String(Date.now()));
+      } else if (updates.enabled === true) {
+        localStorage.removeItem("mouse_ml_stabilization_user_disabled_at");
+      }
+    }
     if (configTimerRef.current) clearTimeout(configTimerRef.current);
     configTimerRef.current = setTimeout(() => {
       localStorage.setItem("mouse_ml_stabilization_config", JSON.stringify(newConfig));
@@ -659,6 +668,13 @@ export function StabilizationPanel() {
                     {expandedSections.kalman ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
                   </CardTitle>
                 </CardHeader>
+                {expandedSections.kalman && !status?.kalmanState && (
+                  <CardContent className="p-3 pt-2">
+                    <div className="text-[11px] text-muted-foreground italic" data-testid="text-kalman-empty">
+                      Awaiting telemetry — connect a flight controller (or start the simulator) to see live EKF state. The 15-state filter fuses IMU + GPS + barometer.
+                    </div>
+                  </CardContent>
+                )}
                 {expandedSections.kalman && status?.kalmanState && (
                   <CardContent className="p-3 pt-2 space-y-2">
                     <div className="text-[10px] text-muted-foreground font-medium">Position Estimate</div>
@@ -706,6 +722,13 @@ export function StabilizationPanel() {
                     {expandedSections.gains ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
                   </CardTitle>
                 </CardHeader>
+                {expandedSections.gains && !status?.adaptiveGains && (
+                  <CardContent className="p-3 pt-2">
+                    <div className="text-[11px] text-muted-foreground italic" data-testid="text-gains-empty">
+                      Awaiting telemetry — adaptive gains scale with wind gust + payload-shift estimates. Enable "Adaptive Gains" above and wait for the engine to receive a few telemetry frames.
+                    </div>
+                  </CardContent>
+                )}
                 {expandedSections.gains && status?.adaptiveGains && (
                   <CardContent className="p-3 pt-2 space-y-1">
                     <MetricRow label="Kp (Proportional)" value={status.adaptiveGains.kp.toFixed(3)} />

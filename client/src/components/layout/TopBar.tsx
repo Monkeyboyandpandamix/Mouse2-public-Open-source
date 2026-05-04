@@ -244,6 +244,9 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
             window.dispatchEvent(new CustomEvent('audio-drone-mic-updated', { detail: data }));
           } else if (type === 'audio_tts') {
             window.dispatchEvent(new CustomEvent('audio-tts-broadcast', { detail: data }));
+          } else if (type === 'audio_chunk') {
+            // Mic audio chunk from another GCS — GlobalAudioReceiver plays it.
+            window.dispatchEvent(new CustomEvent('audio-chunk-incoming', { detail: data }));
           } else if (type === 'audio_buzzer') {
             window.dispatchEvent(new CustomEvent('audio-buzzer-played', { detail: data }));
           } else if (type === 'drone_added' || type === 'drone_updated') {
@@ -264,6 +267,32 @@ export function TopBar({ onSettingsClick }: TopBarProps) {
             if (selectedDrone?.id && String(data?.id) === String(selectedDrone.id)) {
               selectDrone(null);
               toast.warning("Selected drone was removed");
+            }
+          } else if (type === 'app_config_updated') {
+            // Unified app-config: a key was changed (by us, by another GCS,
+            // or by external admin tooling via Firebase RTDB). Fan out to
+            // useAppConfig consumers via a CustomEvent and invalidate the
+            // snapshot cache so any non-subscribed reader picks it up.
+            window.dispatchEvent(new CustomEvent('app-config-updated', { detail: data }));
+            void queryClient.invalidateQueries({ queryKey: ["/api/app-config"] });
+          } else if (type === 'mission_updated') {
+            // Mission run state changed (started / waypoint reached / completed).
+            // Refresh both the mission list and the per-mission cache so any
+            // open mission panel reflects the new status without polling.
+            void queryClient.invalidateQueries({ queryKey: ["/api/missions"] });
+            if (data?.missionId) {
+              void queryClient.invalidateQueries({ queryKey: ["/api/missions", data.missionId] });
+            }
+            window.dispatchEvent(new CustomEvent('mission-updated', { detail: data }));
+          } else if (type === 'geofence_breach') {
+            window.dispatchEvent(new CustomEvent('geofence-breach', { detail: data }));
+            if (data?.cleared) {
+              toast.success(`Geofence cleared (${data.zoneId || 'zone'})`);
+            } else {
+              const zone = data?.zoneName || data?.zoneId || 'geofence zone';
+              const action = String(data?.action || 'rtl').toUpperCase();
+              const dispatched = data?.dispatched ? `auto-${action} dispatched` : `${action} not dispatched (insufficient permission)`;
+              toast.error(`Geofence breach: ${zone} — ${dispatched}`);
             }
           }
         } catch (e) {

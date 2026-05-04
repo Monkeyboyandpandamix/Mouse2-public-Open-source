@@ -1,6 +1,7 @@
 import path from "path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { randomBytes, scryptSync, timingSafeEqual } from "crypto";
+import { syncCloudDocument, deleteCloudDocument, cloudSyncEnabled } from "./cloudSync";
 
 export interface AuthUserRecord {
   id: string;
@@ -185,6 +186,47 @@ function readAuthUsers(): AuthUserRecord[] {
 function writeAuthUsers(users: AuthUserRecord[]) {
   mkdirSync(DATA_DIR, { recursive: true });
   writeFileSync(AUTH_USERS_FILE, JSON.stringify(users, null, 2), "utf-8");
+  // Best-effort cloud sync — no-op when Firebase admin is not configured.
+  if (cloudSyncEnabled()) {
+    void (async () => {
+      try {
+        await syncCloudDocument(
+          "auth_users",
+          "registry",
+          { users: users.map((u) => ({ ...u, passwordHash: undefined, passwordSalt: undefined })) },
+          { source: "groundControl", lastUpdated: Date.now() },
+        );
+      } catch (e) {
+        console.warn("[authStore] cloud sync failed:", (e as any)?.message || e);
+      }
+    })();
+  }
+}
+
+export async function syncAuthUserToCloud(user: AuthUserRecord, action: "upsert" | "delete" = "upsert") {
+  if (!cloudSyncEnabled()) return;
+  try {
+    if (action === "delete") {
+      await deleteCloudDocument("auth_users", user.id);
+    } else {
+      await syncCloudDocument(
+        "auth_users",
+        user.id,
+        {
+          id: user.id,
+          username: user.username,
+          fullName: user.fullName,
+          role: user.role,
+          enabled: user.enabled,
+          createdAt: user.createdAt,
+          lastLogin: user.lastLogin,
+        },
+        { source: "groundControl", lastUpdated: Date.now() },
+      );
+    }
+  } catch (e) {
+    console.warn("[authStore] cloud user sync failed:", (e as any)?.message || e);
+  }
 }
 
 function sanitizeUsername(username: string) {

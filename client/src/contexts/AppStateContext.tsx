@@ -10,6 +10,8 @@ import {
   writeStoredSession,
 } from "@/lib/clientState";
 import { dronesApi, operatorPreferencesApi } from "@/lib/api";
+import { queryClient } from "@/lib/queryClient";
+import { operatorPreferencesQueryKey } from "@/hooks/useOperatorPreferences";
 
 interface AppStateContextValue {
   session: ClientSession;
@@ -41,17 +43,24 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
 
   const selectDrone = (drone: Drone | null) => {
     setSelectedDrone(drone);
+    const newId = drone ? drone.id : null;
     if (drone) {
       writeStoredSelectedDrone(drone);
-      if (session.isLoggedIn) {
-        operatorPreferencesApi.update({ selectedDroneId: drone.id }).catch(() => {});
-      }
     } else {
       clearStoredSelectedDrone();
-      if (session.isLoggedIn) {
-        operatorPreferencesApi.update({ selectedDroneId: null }).catch(() => {});
-      }
     }
+    if (session.isLoggedIn) {
+      operatorPreferencesApi
+        .update({ selectedDroneId: newId })
+        .then((prefs) => {
+          // Push to TanStack cache so every consumer of useOperatorPreferences
+          // reflects the new selection without a network round-trip.
+          if (prefs) queryClient.setQueryData(operatorPreferencesQueryKey, prefs);
+        })
+        .catch(() => {});
+    }
+    // Invalidate so any stale subscribers re-fetch.
+    queryClient.invalidateQueries({ queryKey: operatorPreferencesQueryKey });
   };
 
   const refreshSelectedDrone = async (droneId: string) => {

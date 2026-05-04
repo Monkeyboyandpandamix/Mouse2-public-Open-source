@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useAppState } from "@/contexts/AppStateContext";
+import { FcConnectionBadge, useFcConnectionString } from "@/components/shared/FcConnectionBadge";
 import { toast } from "sonner";
 import { reportApiError } from "@/lib/apiErrors";
 import { Lock, RefreshCw, Save } from "lucide-react";
@@ -43,13 +44,8 @@ export function FlightModeMappingPanel() {
   const { selectedDrone } = useAppState();
   const canUse = hasPermission("system_settings") || hasPermission("run_terminal");
   const [busy, setBusy] = useState(false);
-  const [connectionString, setConnectionString] = useState("serial:/dev/ttyACM0:57600");
+  const connectionString = useFcConnectionString();
   const [mapping, setMapping] = useState<MappingState>(initialMapping);
-
-  useEffect(() => {
-    const next = String(selectedDrone?.connectionString || "").trim();
-    if (next) setConnectionString(next);
-  }, [selectedDrone?.connectionString]);
 
   const hasMissing = useMemo(() => Object.values(mapping).some((v) => !Number.isFinite(v)), [mapping]);
 
@@ -120,12 +116,7 @@ export function FlightModeMappingPanel() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <Input
-            value={connectionString}
-            onChange={(e) => setConnectionString(e.target.value)}
-            className="h-8 text-xs font-mono"
-            placeholder="serial:/dev/ttyACM0:57600"
-          />
+          <FcConnectionBadge />
           <div className="grid grid-cols-2 gap-2">
             {[1, 2, 3, 4, 5, 6].map((idx) => {
               const key = `FLTMODE${idx}` as keyof MappingState;

@@ -1,8 +1,10 @@
 import { useState, useEffect, lazy, Suspense, type ComponentType } from "react";
+import { toast as sonnerToast } from "sonner";
 import { TopBar } from "@/components/layout/TopBar";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { AutoStabilizationController } from "@/components/controls/AutoStabilizationController";
 import { MLStabilizationEngine } from "@/components/controls/MLStabilizationEngine";
+import { SensorAnomalyMonitor } from "@/components/controls/SensorAnomalyMonitor";
 import { StabilizationActuatorBridge } from "@/components/controls/StabilizationActuatorBridge";
 import { EmergencyProtocolController } from "@/components/controls/EmergencyProtocolController";
 import { GpsDeniedNavigationController } from "@/components/navigation/GpsDeniedNavigationController";
@@ -14,6 +16,7 @@ import { AlertTriangle, X, Eye, ArrowLeft, Cpu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Card, CardContent } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Drone } from "@shared/schema";
 import { useAppState } from "@/contexts/AppStateContext";
 
@@ -98,6 +101,67 @@ interface Mapping3DStatus {
 
 const MOVED_TO_SETTINGS_TABS = new Set(["modesetup", "mavtools", "rtk", "plugins", "mp-parity", "vehiclesetup"]);
 
+function PriorMappingCaptures() {
+  type MediaItem = { id: string; filename: string; storagePath?: string | null; capturedAt?: string; type?: string };
+  const [items, setItems] = useState<MediaItem[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/media", { credentials: "include" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        const list = Array.isArray(data) ? data : [];
+        const photos = list
+          .filter((a: any) => String(a?.type || "").toLowerCase() === "photo" || String(a?.mimeType || "").startsWith("image/"))
+          .slice(0, 24);
+        setItems(photos);
+      })
+      .catch(() => setItems([]));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return (
+    <div className="p-3 sm:p-4 bg-card rounded-lg border border-border">
+      <h3 className="text-base sm:text-lg font-bold mb-2 flex items-center gap-2">
+        <span className="w-2 h-2 bg-amber-500 rounded-full" />
+        Prior Captures ({items.length})
+      </h3>
+      {items.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No captures yet — fly nadir passes to populate this gallery.</p>
+      ) : (
+        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+          {items.map((it) => (
+            <div
+              key={it.id}
+              className="aspect-square rounded border border-border overflow-hidden bg-black/40 group relative"
+              data-testid={`mapping-capture-${it.id}`}
+            >
+              {it.storagePath ? (
+                <img
+                  src={it.storagePath.startsWith("http") || it.storagePath.startsWith("/") ? it.storagePath : `/${it.storagePath}`}
+                  alt={it.filename}
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).style.display = "none";
+                  }}
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-[10px] text-muted-foreground">
+                  {it.filename}
+                </div>
+              )}
+              <div className="absolute inset-x-0 bottom-0 bg-black/60 text-white text-[9px] px-1 py-0.5 truncate opacity-0 group-hover:opacity-100">
+                {it.filename}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Home() {
   const { isLoggedIn, selectedDrone, selectDrone } = useAppState();
   const [activeTab, setActiveTab] = useState("map");
@@ -119,14 +183,28 @@ export default function Home() {
     lastModelGeneratedAt: null,
   });
   const [mappingBusy, setMappingBusy] = useState(false);
-  const [showPageHelp, setShowPageHelp] = useState(true);
+  const [showPageHelp, setShowPageHelp] = useState(false);
   const pageHelp: Record<string, { title: string; body: string }> = {
-    map: { title: "Map Guide", body: "Use zoom controls to center on drone/operator, verify FAA overlays (enabled by default), and confirm waypoint/telemetry tracks before arming." },
-    mission: { title: "Mission Guide", body: "Select or create a mission, add destination/waypoints, validate authorization if restricted-airspace override is needed, then execute/upload to FC." },
-    optimizer: { title: "Optimizer Guide", body: "Choose a mission with 2+ waypoints, set optimization preferences, run Analyze, then apply suggested reorder/altitude updates back to the mission." },
-    tracking: { title: "Tracking Guide", body: "Switch to webcam or feed mode, lock target boxes, and monitor confidence/motion vectors while stabilization and obstacle events update in real time." },
-    logs: { title: "Flight Logs Guide", body: "Open a session to inspect map replay and telemetry charts, then export CSV bundles or review DataFlash/analysis artifacts." },
-    settings: { title: "Settings Guide", body: "Follow Guided Setup top-to-bottom: Hardware -> Connections/Radio -> Sensors -> Input -> Verify, then Save All and run connection tests." },
+    map: { title: "Live Map", body: "Center on drone/operator with the zoom controls. FAA overlays are on by default — toggle them in the layer menu (top-right). Drone position, heading, and breadcrumbs update from live telemetry." },
+    mission: { title: "Mission Planning", body: "Pick a mission (or create one), then click the map / search an address / enter coordinates to add waypoints. Use Override Restrictions only with proper authorization. Sync to the flight controller from this panel or from Settings → Connections." },
+    optimizer: { title: "Flight Path Optimizer", body: "Select a mission with 2+ waypoints, choose optimization preferences (shortest path, energy, exposure), click Analyze, then Apply to write the reordered waypoints back to the mission." },
+    tracking: { title: "Object Tracking", body: "Choose a video source (webcam, drone feed, or uploaded clip), draw or click a box to lock a target, then monitor re-identification confidence and motion vectors. Multiple targets can be tracked at once." },
+    payload: { title: "Payload / Speaker", body: "Open or close the gripper, run pickup/drop sequences, or start a live broadcast from your microphone to the drone speaker. Audio uses your selected mic and streams as Opus chunks while the broadcast is active." },
+    feeds: { title: "Camera & Sensor Feeds", body: "View the live camera, switch between thermal/main, capture stills, kick off a 3D reconstruction from collected frames, and review BME688 environment readings." },
+    logs: { title: "Flight Logs", body: "Browse session replays on the map with synchronized telemetry charts. Export per-flight CSV bundles or download the original DataFlash logs for offline analysis." },
+    logbook: { title: "Pilot Logbook", body: "Track FAA Part 107 currency: log flights, review hours/landings totals, and export logbook entries as PDF/CSV for recordkeeping." },
+    environment: { title: "Environment (BME688)", body: "Watch live temperature, humidity, pressure, IAQ, and gas resistance from the BME688 sensor. Trends update from the onboard reading stream." },
+    scripts: { title: "Automation Recipes", body: "Bind events (takeoff, landing, low battery, GPS lost, GCS disconnect, manual) to backend-supported actions (arm, disarm, takeoff(20), land, RTL). Toggle each recipe on/off; click Run Now to test." },
+    terminal: { title: "Safe Commands", body: "Browse and run a curated library of MAVLink shell commands by category. Each command's full text is shown before execution; add your own customs as needed." },
+    fcparams: { title: "Flight Controller Params", body: "Read, edit, and bulk-write ArduPilot/PX4 parameters via the connected flight controller. Save profiles per drone for quick rollback." },
+    calibration: { title: "Sensor Calibration", body: "Step through compass, accel, gyro, level, and ESC calibrations. The connection used is the one configured in Drone Selection." },
+    swarm: { title: "Multi-Vehicle Ops", body: "Pick registered drones (single click adds them — no need to type connection strings), build a formation (line/column/wedge/grid), set min spacing for crash avoidance, then arm/disarm/set-mode synchronized across the group." },
+    users: { title: "Users & Access", body: "Create accounts, assign roles, manage groups, and review login history. Per-user permissions control which panels each operator can access." },
+    geofence: { title: "Geofencing", body: "Draw inclusion or exclusion polygons on the map and set altitude limits. Sync to the flight controller from Settings → Connections → Flight Controller Sync." },
+    guiconfig: { title: "GUI Config", body: "Pick the panels you want pinned to the sidebar, configure dashboard widgets, and tune theme/density preferences for your workstation." },
+    settings: { title: "Settings", body: "All connections, cloud (Firebase/Google), API keys, telemetry preferences, audio, video, and integration tests live here. Use the in-page tabs (Connections / Cloud / Sensors / Verify) to navigate." },
+    stabilization: { title: "ML Stabilization", body: "Tune and monitor the on-board ML stabilizer. Watch live PID output, target vs actual attitude, and confidence — adjust weights in the editor and apply." },
+    gpsnav: { title: "GPS-Denied Navigation", body: "Enable visual odometry / dead reckoning / fusion modes for indoor or jamming-prone environments. Calibrate from a known position and watch the estimated-vs-true drift." },
   };
 
   // Listen for session changes (logout from TopBar or UserAccessPanel)
@@ -411,15 +489,58 @@ export default function Home() {
                 DRONE FEED PIPELINE
               </span>
             </div>
-            <p className="text-xs text-muted-foreground mb-3">
-              Feeds use the same camera module as map view, including gimbal/thermal modes and RTSP stream configuration.
-            </p>
-            <div className="relative min-h-[320px] sm:min-h-[460px] rounded-lg border-2 border-primary/40 bg-black/90 overflow-hidden">
-              <VideoFeed />
-            </div>
-            
-            {/* 3D Mapping Section */}
-            <div className="mt-4 sm:mt-6 p-3 sm:p-4 bg-card rounded-lg border border-border">
+            <Tabs
+              defaultValue="live"
+              className="w-full"
+              onValueChange={async (v) => {
+                if (v !== "mapping") return;
+                // Auto-lock gimbal to nadir (-90° pitch) for top-down photogrammetry capture.
+                // Best-effort: surface a clear toast so the operator knows whether the gimbal
+                // actually responded — never silently claim success.
+                try {
+                  const resp = await fetch("/api/mavlink/vehicle/action", {
+                    method: "POST",
+                    credentials: "include",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      connectionString: (selectedDrone as any)?.connectionString || "udp:127.0.0.1:14550",
+                      action: "gimbal",
+                      pitch: -90,
+                      yaw: 0,
+                    }),
+                  });
+                  const data = await resp.json().catch(() => ({}));
+                  if (resp.ok && (data?.success ?? true)) {
+                    sonnerToast.success("Gimbal nadir-lock requested (-90° pitch)");
+                  } else {
+                    sonnerToast.warning(
+                      `Nadir-lock not dispatched: ${data?.error || resp.statusText || "no MAVLink connection"}`
+                    );
+                  }
+                } catch (err: any) {
+                  sonnerToast.warning(`Nadir-lock failed: ${err?.message || "network error"}`);
+                }
+              }}
+            >
+              <TabsList>
+                <TabsTrigger value="live" data-testid="tab-feeds-live">Live Feed</TabsTrigger>
+                <TabsTrigger value="mapping" data-testid="tab-feeds-mapping">3D Mapping</TabsTrigger>
+              </TabsList>
+              <TabsContent value="live" className="mt-3">
+                <p className="text-xs text-muted-foreground mb-3">
+                  Feeds use the same camera module as map view, including gimbal/thermal modes and RTSP stream configuration.
+                </p>
+                <div className="relative min-h-[320px] sm:min-h-[460px] rounded-lg border-2 border-primary/40 bg-black/90 overflow-hidden">
+                  <VideoFeed />
+                </div>
+              </TabsContent>
+              <TabsContent value="mapping" className="mt-3 space-y-4">
+                <div className="p-3 rounded border border-emerald-500/40 bg-emerald-500/10 text-xs text-emerald-700 dark:text-emerald-300">
+                  Gimbal automatically locked to <strong>nadir (-90° pitch)</strong> for top-down capture.
+                  Fly a serpentine pattern at constant altitude for best photogrammetry results.
+                </div>
+                <PriorMappingCaptures />
+            <div className="p-3 sm:p-4 bg-card rounded-lg border border-border">
               <h3 className="text-base sm:text-lg font-bold mb-2 sm:mb-3 flex items-center gap-2">
                 <span className="w-2 h-2 bg-primary rounded-full animate-pulse" />
                 3D Mapping / Photogrammetry
@@ -482,6 +603,8 @@ export default function Home() {
                 </div>
               </div>
             </div>
+              </TabsContent>
+            </Tabs>
           </div>
         );
       case "logs":
@@ -583,6 +706,7 @@ export default function Home() {
       <AutoStabilizationController />
       <MLStabilizationEngine />
       <StabilizationActuatorBridge />
+      <SensorAnomalyMonitor />
       <EmergencyProtocolController />
       <GpsDeniedNavigationController />
       <MLNavigationEngine />
@@ -621,27 +745,6 @@ export default function Home() {
         ))}
       </div>
 
-      {/* Preview Mode Banner */}
-      {previewMode && selectedDrone?.id === "preview-drone" && (
-        <div className="fixed top-0 left-0 right-0 z-[250] bg-amber-500 text-black px-4 py-2 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Eye className="h-4 w-4" />
-            <span className="text-sm font-medium">Preview Mode - No drone connected</span>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-black hover:bg-amber-600"
-            onClick={() => {
-              setPreviewMode(false);
-              selectDrone(null);
-            }}
-          >
-            <ArrowLeft className="h-4 w-4 mr-1" />
-            Back to Drone Selection
-          </Button>
-        </div>
-      )}
       
       {/* Onboard Mode Banner (running on Raspberry Pi) */}
       {isOnboard && selectedDrone?.id === "onboard-local" && (
@@ -677,16 +780,16 @@ export default function Home() {
         <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
         
         <main className="flex-1 relative flex flex-col overflow-hidden">
-          {showPageHelp ? (
+          {showPageHelp && pageHelp[activeTab] && (
             <div className="p-2 sm:p-3 border-b border-border/50">
               <Card className="bg-muted/20 border-primary/20">
                 <CardContent className="py-2 px-3 flex items-start justify-between gap-3">
                   <div>
                     <p className="text-xs font-semibold text-primary">
-                      {pageHelp[activeTab]?.title || "Page Guide"}
+                      {pageHelp[activeTab].title}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {pageHelp[activeTab]?.body || "Use this page to configure and monitor drone operations."}
+                      {pageHelp[activeTab].body}
                     </p>
                   </div>
                   <Button variant="ghost" size="sm" onClick={() => setShowPageHelp(false)} className="h-6 px-2 text-xs">
@@ -695,10 +798,11 @@ export default function Home() {
                 </CardContent>
               </Card>
             </div>
-          ) : (
-            <div className="p-2 border-b border-border/40">
-              <Button variant="ghost" size="sm" onClick={() => setShowPageHelp(true)} className="h-6 px-2 text-xs">
-                Show Page Guide
+          )}
+          {!showPageHelp && pageHelp[activeTab] && (
+            <div className="px-2 pt-1 -mb-1">
+              <Button variant="ghost" size="sm" onClick={() => setShowPageHelp(true)} className="h-5 px-2 text-[10px] text-muted-foreground hover:text-primary">
+                Show {pageHelp[activeTab].title} guide
               </Button>
             </div>
           )}

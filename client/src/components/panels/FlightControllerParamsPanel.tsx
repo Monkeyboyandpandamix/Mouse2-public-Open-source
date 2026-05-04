@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { usePermissions } from "@/hooks/usePermissions";
 import { useAppState } from "@/contexts/AppStateContext";
+import { FcConnectionBadge, useFcConnectionString } from "@/components/shared/FcConnectionBadge";
 import { Download, Upload, RefreshCw, Save, Search, Lock, Layers } from "lucide-react";
 import { ARDUPILOT_CATEGORIES, ARDUPILOT_META_BY_NAME, ARDUPILOT_PARAM_PRESETS } from "@/lib/ardupilotParams";
 
@@ -22,7 +23,7 @@ export function FlightControllerParamsPanel() {
   const { selectedDrone } = useAppState();
   const canEdit = hasPermission("system_settings") || hasPermission("run_terminal");
 
-  const [connectionString, setConnectionString] = useState("serial:/dev/ttyACM0:57600");
+  const connectionString = useFcConnectionString();
   const [params, setParams] = useState<ParamItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
@@ -34,10 +35,7 @@ export function FlightControllerParamsPanel() {
   const [compareInput, setCompareInput] = useState("[");
   const [compareResult, setCompareResult] = useState<any | null>(null);
 
-  useEffect(() => {
-    const next = String(selectedDrone?.connectionString || "").trim();
-    if (next) setConnectionString(next);
-  }, [selectedDrone?.connectionString]);
+  void selectedDrone;
 
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase();
@@ -230,8 +228,8 @@ export function FlightControllerParamsPanel() {
             <span>Flight Controller Parameters</span>
             <Badge variant="outline">ArduPilot / MAVLink2</Badge>
           </CardTitle>
-          <div className="flex gap-2">
-            <Input value={connectionString} onChange={(e) => setConnectionString(e.target.value)} placeholder="serial:/dev/ttyACM0:57600 or udp:127.0.0.1:14550" />
+          <div className="flex gap-2 items-center">
+            <FcConnectionBadge />
             <Button onClick={loadParams} disabled={loading} data-testid="button-load-params">
               <RefreshCw className="h-4 w-4 mr-1" /> Load
             </Button>

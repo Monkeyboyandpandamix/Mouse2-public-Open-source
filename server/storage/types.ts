@@ -65,6 +65,7 @@ export interface IStorage {
   getMediaAsset(id: string): Promise<MediaAsset | undefined>;
   getMediaAssetsByDrone(droneId: string, limit?: number): Promise<MediaAsset[]>;
   getMediaAssetsBySession(sessionId: string): Promise<MediaAsset[]>;
+  getAllMediaAssets(limit?: number): Promise<MediaAsset[]>;
   getPendingMediaAssets(): Promise<MediaAsset[]>;
   createMediaAsset(asset: InsertMediaAsset): Promise<MediaAsset>;
   updateMediaAsset(id: string, asset: Partial<InsertMediaAsset>): Promise<MediaAsset | undefined>;

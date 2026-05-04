@@ -1,5 +1,11 @@
 import { getDb } from "../db/client.js";
 
+const DEFAULT_RECIPE_NAMES = [
+  "Auto-RTL on Low Battery",
+  "Photo at Waypoint",
+  "GPS Denied Navigation",
+] as const;
+
 export interface AutomationRunRecord {
   id: string;
   scriptId: string;
@@ -108,7 +114,92 @@ export class AutomationService {
     const rows = userId
       ? (this.db.prepare("SELECT * FROM automation_recipes WHERE userId = ? ORDER BY createdAt DESC").all(userId) as any[])
       : (this.db.prepare("SELECT * FROM automation_recipes ORDER BY createdAt DESC").all() as any[]);
+    if (userId) {
+      // Backfill any missing default recipes (by name). Existing users created before
+      // the defaults shipped also get the three required entries on next read.
+      const haveNames = new Set(rows.map((r) => String(r.name || "")));
+      const missing = DEFAULT_RECIPE_NAMES.filter((n) => !haveNames.has(n));
+      if (rows.length === 0 || missing.length > 0) {
+        this.seedDefaultRecipes(userId, missing.length > 0 && rows.length > 0 ? missing : undefined);
+        const seeded = this.db
+          .prepare("SELECT * FROM automation_recipes WHERE userId = ? ORDER BY createdAt DESC")
+          .all(userId) as any[];
+        return seeded.map(rowToRecipe);
+      }
+    }
     return rows.map(rowToRecipe);
+  }
+
+  private seedDefaultRecipes(userId: string, onlyNames?: string[]): void {
+    const defaults: Array<Omit<AutomationRecipe, "id" | "createdAt" | "updatedAt" | "userId">> = [
+      {
+        name: "Auto-RTL on Low Battery",
+        description: "Triggers a return-to-launch when battery drops below 25% to safeguard the airframe.",
+        trigger: "battery_low",
+        enabled: true,
+        code: [
+          "// Auto Return-To-Launch on Low Battery",
+          "// Inputs: telemetry.batteryPercent (0-100)",
+          "if (telemetry.batteryPercent <= 25 && telemetry.armed) {",
+          "  await drone.broadcast('Battery critical — initiating Return-To-Launch');",
+          "  await drone.command({ type: 'rtl' });",
+          "  return { ok: true, action: 'rtl', reason: `Battery ${telemetry.batteryPercent}%` };",
+          "}",
+          "return { ok: true, action: 'noop' };",
+        ].join("\n"),
+      },
+      {
+        name: "Photo at Waypoint",
+        description: "Captures a still image and tags it with the waypoint index whenever a waypoint is reached.",
+        trigger: "waypoint_reached",
+        enabled: true,
+        code: [
+          "// Capture a photo whenever the vehicle reaches a waypoint",
+          "// Inputs: event.waypointIndex, telemetry.latitude, telemetry.longitude, telemetry.altitudeRelative",
+          "const tag = `wp-${event.waypointIndex ?? 'unknown'}`;",
+          "const photo = await camera.capturePhoto({",
+          "  tag,",
+          "  metadata: {",
+          "    lat: telemetry.latitude,",
+          "    lon: telemetry.longitude,",
+          "    altRelM: telemetry.altitudeRelative,",
+          "    waypoint: event.waypointIndex,",
+          "  },",
+          "});",
+          "return { ok: true, action: 'photo_captured', assetId: photo?.id ?? null };",
+        ].join("\n"),
+      },
+      {
+        name: "GPS Denied Navigation",
+        description: "Switches to vision-aided LOITER and warns operators when GPS quality degrades.",
+        trigger: "gps_lost",
+        enabled: true,
+        code: [
+          "// Fallback navigation strategy when GPS becomes unreliable",
+          "// Inputs: telemetry.gpsFixType (0-6), telemetry.satellites, vision.visualOdometryReady",
+          "if (telemetry.gpsFixType < 3 || telemetry.satellites < 6) {",
+          "  await drone.broadcast('GPS degraded — switching to vision-aided LOITER');",
+          "  await drone.command({ type: 'set_mode', payload: { mode: 'LOITER' } });",
+          "  if (vision.visualOdometryReady) {",
+          "    await drone.command({ type: 'enable_visual_nav', payload: { source: 'optical_flow' } });",
+          "  }",
+          "  return { ok: true, action: 'gps_denied_fallback', satellites: telemetry.satellites };",
+          "}",
+          "return { ok: true, action: 'noop' };",
+        ].join("\n"),
+      },
+    ];
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(
+      "INSERT INTO automation_recipes (id, userId, name, description, trigger, code, enabled, lastRun, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    const wanted = onlyNames && onlyNames.length > 0
+      ? defaults.filter((r) => onlyNames.includes(r.name))
+      : defaults;
+    for (const r of wanted) {
+      const id = generateId();
+      stmt.run(id, userId, r.name, r.description ?? "", r.trigger, r.code, r.enabled ? 1 : 0, null, now, now);
+    }
   }
 
   getRecipe(id: string): AutomationRecipe | undefined {

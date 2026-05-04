@@ -29,8 +29,8 @@ const LAYERS: LayerConfig[] = [
     label: "FAA UAS Facility Map",
     file: "/airspace/FAA_UAS_FacilityMap_Data.geojson",
     color: "#22c55e",
-    defaultOn: true,
-    maxBytes: 500 * 1024 * 1024,
+    defaultOn: false,
+    maxBytes: 50 * 1024 * 1024,
   },
   {
     id: "national-security",
@@ -38,7 +38,7 @@ const LAYERS: LayerConfig[] = [
     file: "/airspace/National_Security_UAS_Flight_Restrictions.geojson",
     color: "#ef4444",
     defaultOn: true,
-    maxBytes: 200 * 1024 * 1024,
+    maxBytes: 75 * 1024 * 1024,
   },
   {
     id: "part-time-security",

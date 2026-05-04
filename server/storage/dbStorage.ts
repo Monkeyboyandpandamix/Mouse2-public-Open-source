@@ -516,6 +516,13 @@ export class DbStorage implements IStorage {
     return rows.map(rowToMediaAsset);
   }
 
+  async getAllMediaAssets(limit = 100): Promise<MediaAsset[]> {
+    const rows = this.db
+      .prepare('SELECT * FROM media_assets ORDER BY capturedAt DESC LIMIT ?')
+      .all(limit) as any[];
+    return rows.map(rowToMediaAsset);
+  }
+
   async getMediaAssetsBySession(sessionId: string): Promise<MediaAsset[]> {
     const rows = this.db.prepare('SELECT * FROM media_assets WHERE sessionId = ? ORDER BY capturedAt DESC').all(sessionId) as any[];
     return rows.map(rowToMediaAsset);

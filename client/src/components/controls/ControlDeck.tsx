@@ -9,6 +9,12 @@ import { useAppState } from "@/contexts/AppStateContext";
 import { flightSessionsApi, commandsApi } from "@/lib/api";
 import { queryClient } from "@/lib/queryClient";
 import { dispatchBackendCommand } from "@/lib/commandService";
+import {
+  DEFAULT_GAMEPAD_MAPPING,
+  GAMEPAD_MAPPING_STORAGE_KEY,
+  normalizeMapping,
+  type GamepadMapping,
+} from "@shared/gamepadMapping";
 
 interface BaseLocation {
   lat: number;
@@ -54,9 +60,18 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
   const maxAltitudeRef = useRef<number>(0);
   const totalDistanceRef = useRef<number>(0);
   const lastPositionRef = useRef<{lat: number, lng: number} | null>(null);
-  const gamepadArmLatchRef = useRef(false);
-  const gamepadBusyRef = useRef(false);
+  // Per-action cooldown (ms epoch when next press is allowed). A global busy
+  // gate would cause a critical button (e.g. emergency stop) to be silently
+  // dropped if it was pressed during another action's cooldown — which is
+  // unsafe. Each action has its own cooldown, and emergency_stop bypasses
+  // all cooldowns.
+  const actionCooldownRef = useRef<Record<string, number>>({});
+  const buttonLatchRef = useRef<Record<string, boolean>>({});
+  const [gamepadName, setGamepadName] = useState<string | null>(null);
+  const [gamepadActive, setGamepadActive] = useState(false);
+  const gamepadActiveTimerRef = useRef<number | null>(null);
   const lastManualControlErrorRef = useRef(0);
+  const [gamepadMapping, setGamepadMapping] = useState<GamepadMapping>(DEFAULT_GAMEPAD_MAPPING);
   const [leaseHeldBy, setLeaseHeldBy] = useState<string | null>(null);
   const [hasLease, setHasLease] = useState<boolean>(true);
 
@@ -244,38 +259,164 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
     return () => window.removeEventListener("input-settings-changed" as any, loadInputConfig);
   }, []);
 
+  // Track gamepad connect/disconnect so the UI can show a status badge.
+  useEffect(() => {
+    const refresh = () => {
+      const pads = navigator.getGamepads?.() ?? [];
+      const first = Array.from(pads).find(Boolean) as Gamepad | undefined;
+      setGamepadName(first ? first.id : null);
+    };
+    const onConnect = (e: GamepadEvent) => setGamepadName(e.gamepad.id);
+    const onDisconnect = () => refresh();
+    refresh();
+    window.addEventListener("gamepadconnected", onConnect as any);
+    window.addEventListener("gamepaddisconnected", onDisconnect as any);
+    return () => {
+      window.removeEventListener("gamepadconnected", onConnect as any);
+      window.removeEventListener("gamepaddisconnected", onDisconnect as any);
+    };
+  }, []);
+
+  // Load custom gamepad mapping from localStorage (synced via centralConfig
+  // bridge). Critical actions always have a default fallback.
+  useEffect(() => {
+    const load = () => {
+      try {
+        const raw = localStorage.getItem(GAMEPAD_MAPPING_STORAGE_KEY);
+        setGamepadMapping(normalizeMapping(raw ? JSON.parse(raw) : null));
+      } catch {
+        setGamepadMapping(DEFAULT_GAMEPAD_MAPPING);
+      }
+    };
+    load();
+    window.addEventListener("gamepad-mapping-changed" as any, load);
+    return () => window.removeEventListener("gamepad-mapping-changed" as any, load);
+  }, []);
+
   useEffect(() => {
     if (inputConfig.gamepadDevice === "none") return;
     const deadzone = Math.max(0, Math.min(0.25, Number(inputConfig.joystickDeadzone || "5") / 100));
     const applyDeadzone = (v: number) => (Math.abs(v) < deadzone ? 0 : v);
+    const markActive = () => {
+      setGamepadActive(true);
+      if (gamepadActiveTimerRef.current) window.clearTimeout(gamepadActiveTimerRef.current);
+      gamepadActiveTimerRef.current = window.setTimeout(() => setGamepadActive(false), 600);
+    };
+
+    const isPressed = (gp: Gamepad, actionId: keyof GamepadMapping): boolean => {
+      const b = gamepadMapping[actionId];
+      if (!b || b.kind !== "button") return false;
+      return Boolean(gp.buttons?.[b.index]?.pressed);
+    };
+    const readAxis = (gp: Gamepad, actionId: keyof GamepadMapping): number => {
+      const b = gamepadMapping[actionId];
+      if (!b || b.kind !== "axis") return 0;
+      const raw = applyDeadzone(gp.axes?.[b.index] ?? 0);
+      // Clamp to [-1, 1] so the downstream MANUAL_CONTROL math never sends
+      // out-of-spec values even if the operator dialled a high scale.
+      const scaled = raw * (b.scale ?? 1);
+      return Math.max(-1, Math.min(1, scaled));
+    };
+
+    const fireEdge = (
+      actionId: string,
+      pressed: boolean,
+      handler: () => void,
+      opts: { bypassCooldown?: boolean; cooldownMs?: number } = {},
+    ) => {
+      const wasPressed = buttonLatchRef.current[actionId] === true;
+      // Always update the latch so press/release cycles stay in sync, even
+      // when a press is rejected by the cooldown. Otherwise the operator
+      // would have to release+repress before the action could fire again.
+      const cooldownMs = opts.cooldownMs ?? 250;
+      const now = Date.now();
+      const cooldownUntil = actionCooldownRef.current[actionId] || 0;
+      const inCooldown = !opts.bypassCooldown && now < cooldownUntil;
+      if (pressed && !wasPressed && !inCooldown) {
+        actionCooldownRef.current[actionId] = now + cooldownMs;
+        try {
+          handler();
+        } catch (err) {
+          console.warn(`[ControlDeck] gamepad action ${actionId} threw:`, err);
+        }
+      }
+      buttonLatchRef.current[actionId] = pressed;
+    };
+
     const timer = window.setInterval(() => {
       const gamepads = navigator.getGamepads?.();
       const gp = gamepads?.find(Boolean);
       if (!gp) return;
 
-      const armButtonPressed = Boolean(gp.buttons?.[0]?.pressed);
-      if (armButtonPressed && !gamepadArmLatchRef.current && canArmDisarm && !gamepadBusyRef.current) {
-        gamepadBusyRef.current = true;
+      // Surface live axis/button activity for the UI badge.
+      const anyAxis = (gp.axes || []).some((v) => Math.abs(v) > deadzone);
+      const anyBtn = (gp.buttons || []).some((b) => b?.pressed);
+      if (anyAxis || anyBtn) markActive();
+
+      // --- Critical / safety actions (never blocked by isArmed) ---
+      // Emergency stop bypasses ALL cooldowns. It must always be deliverable.
+      fireEdge(
+        "emergency_stop",
+        isPressed(gp, "emergency_stop"),
+        () => {
+          void dispatchCommand("disarm")
+            .then(() => toast.warning("EMERGENCY STOP — disarm sent"))
+            .catch((e) => toast.error(e instanceof Error ? e.message : "Emergency stop failed"));
+        },
+        { bypassCooldown: true, cooldownMs: 0 },
+      );
+      fireEdge("arm_toggle", isPressed(gp, "arm_toggle") && canArmDisarm, () => {
         const newArmed = !isArmed;
         void dispatchCommand(newArmed ? "arm" : "disarm")
-          .then(() => {
-            toast.info(`Arm command acknowledged. Waiting for telemetry to confirm ${newArmed ? "armed" : "disarmed"} state.`);
-          })
-          .catch((error) => {
-            toast.error(error instanceof Error ? error.message : "Gamepad arm/disarm failed");
-          })
-          .finally(() => {
-            gamepadBusyRef.current = false;
-          });
+          .then(() => toast.info(`Gamepad: ${newArmed ? "arm" : "disarm"} acknowledged`))
+          .catch((e) => toast.error(e instanceof Error ? e.message : "Gamepad arm/disarm failed"));
+      });
+      fireEdge("return_to_home", isPressed(gp, "return_to_home") && canFlightControl, () => {
+        void dispatchCommand("rtl")
+          .then(() => toast.success("Gamepad: RTL sent"))
+          .catch((e) => toast.error(e instanceof Error ? e.message : "RTL failed"));
+      });
+
+      // --- Flight modes & commands (require flight control permission) ---
+      if (canFlightControl) {
+        fireEdge("takeoff", isPressed(gp, "takeoff"), () => {
+          void dispatchCommand("takeoff").catch((e) => toast.error(e instanceof Error ? e.message : "Takeoff failed"));
+        });
+        fireEdge("land", isPressed(gp, "land"), () => {
+          void dispatchCommand("land").catch((e) => toast.error(e instanceof Error ? e.message : "Land failed"));
+        });
+        fireEdge("loiter_mode", isPressed(gp, "loiter_mode"), () => {
+          void dispatchCommand("set_mode", { mode: "LOITER" }).catch(() => {});
+        });
+        fireEdge("stabilize_mode", isPressed(gp, "stabilize_mode"), () => {
+          void dispatchCommand("set_mode", { mode: "STABILIZE" }).catch(() => {});
+        });
+        fireEdge("altitude_hold_mode", isPressed(gp, "altitude_hold_mode"), () => {
+          void dispatchCommand("set_mode", { mode: "ALT_HOLD" }).catch(() => {});
+        });
       }
-      gamepadArmLatchRef.current = armButtonPressed;
+
+      // --- Payload / camera ---
+      fireEdge("gripper_toggle", isPressed(gp, "gripper_toggle"), () => {
+        void dispatchCommand(gripperOpen ? "gripper_close" : "gripper_open").catch(() => {});
+      });
+      fireEdge("camera_snapshot", isPressed(gp, "camera_snapshot"), () => {
+        void dispatchCommand("camera_snapshot").catch(() => {});
+      });
+      fireEdge("record_toggle", isPressed(gp, "record_toggle"), () => {
+        void dispatchCommand("record_toggle").catch(() => {});
+      });
+      fireEdge("gimbal_recenter", isPressed(gp, "gimbal_recenter"), () => {
+        void dispatchCommand("gimbal_recenter").catch(() => {});
+      });
 
       if (!isArmed || !canFlightControl) return;
 
-      const rollAxis = applyDeadzone(gp.axes?.[0] ?? 0);
-      const pitchAxis = applyDeadzone(gp.axes?.[1] ?? 0);
-      const yawAxis = applyDeadzone(gp.axes?.[2] ?? 0);
-      const throttleAxis = applyDeadzone(gp.axes?.[3] ?? 0);
+      // --- Continuous axes → MAVLink MANUAL_CONTROL ---
+      const rollAxis = readAxis(gp, "axis_roll");
+      const pitchAxis = readAxis(gp, "axis_pitch");
+      const yawAxis = readAxis(gp, "axis_yaw");
+      const throttleAxis = readAxis(gp, "axis_throttle");
       if (!rollAxis && !pitchAxis && !yawAxis && !throttleAxis) return;
 
       const connectionString = String(selectedDrone?.connectionString || "").trim();
@@ -286,8 +427,8 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
         body: JSON.stringify({
           connectionString,
           x: Math.round(rollAxis * 400),
-          y: Math.round(-pitchAxis * 400),
-          z: Math.round(500 + (-throttleAxis * 250)),
+          y: Math.round(pitchAxis * 400),
+          z: Math.round(500 + throttleAxis * 250),
           r: Math.round(yawAxis * 400),
           buttons: 0,
           durationMs: 200,
@@ -300,7 +441,7 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
       });
     }, 140);
     return () => window.clearInterval(timer);
-  }, [inputConfig, isArmed, canArmDisarm, canFlightControl, dispatchCommand]);
+  }, [inputConfig, isArmed, canArmDisarm, canFlightControl, dispatchCommand, gamepadMapping, gripperOpen, selectedDrone]);
 
   // Load custom widgets from localStorage
   useEffect(() => {
@@ -423,6 +564,25 @@ export function ControlDeck({ activeTab = 'map' }: ControlDeckProps) {
         <div className="flex items-center gap-1 px-2 py-1 bg-destructive/20 border border-destructive/50 rounded-md shrink-0">
           <Circle className="h-3 w-3 fill-destructive text-destructive animate-pulse" />
           <span className="text-[10px] font-mono text-destructive font-semibold">REC</span>
+        </div>
+      )}
+
+      {/* Gamepad / Joystick Status */}
+      {gamepadName && (
+        <div
+          className={cn(
+            "flex items-center gap-1.5 px-2 py-1 rounded-md shrink-0 border",
+            gamepadActive
+              ? "bg-emerald-500/20 border-emerald-500/60 text-emerald-700 dark:text-emerald-400"
+              : "bg-muted border-border text-muted-foreground"
+          )}
+          title={`${gamepadName}${inputConfig.gamepadDevice === "none" ? " — disabled in Settings" : ""}`}
+          data-testid="badge-gamepad-status"
+        >
+          <Circle className={cn("h-2 w-2", gamepadActive ? "fill-emerald-500 text-emerald-500" : "fill-current")} />
+          <span className="text-[10px] font-mono uppercase tracking-wider">
+            {inputConfig.gamepadDevice === "none" ? "Pad: idle" : gamepadActive ? "Pad: live" : "Pad: ready"}
+          </span>
         </div>
       )}
 

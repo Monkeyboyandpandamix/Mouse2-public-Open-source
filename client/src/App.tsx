@@ -2,6 +2,7 @@ import { Switch, Route } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
+import { Toaster as SonnerToaster } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { TelemetryProvider } from "@/contexts/TelemetryContext";
 import { AppStateProvider } from "@/contexts/AppStateContext";
@@ -9,6 +10,9 @@ import NotFound from "@/pages/not-found";
 import Home from "@/pages/home";
 import { Component, type ErrorInfo, type ReactNode, useEffect } from "react";
 import { clearStoredSelectedDrone, clearStoredSession } from "@/lib/clientState";
+import { migrateLegacyLocalStorageKeys } from "@/hooks/useAppConfig";
+import { installLocalStorageMirror, installAppConfigBridge } from "@/lib/centralConfig";
+import { GlobalAudioReceiver } from "@/components/audio/GlobalAudioReceiver";
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -95,29 +99,58 @@ function Router() {
 
 function App() {
   useEffect(() => {
+    // Bootstrap: read theme from localStorage (offline fallback) so the page
+    // doesn't flash. The unified app-config snapshot will overwrite this once
+    // the GET /api/app-config response lands (handled by the listener below).
     const savedTheme = localStorage.getItem('mouse_theme') || 'dark';
-    if (savedTheme === 'light') {
-      document.documentElement.classList.remove('dark');
-      document.documentElement.classList.add('light');
-    } else {
-      document.documentElement.classList.add('dark');
-      document.documentElement.classList.remove('light');
-    }
-
-    const handleThemeChange = (e: Event) => {
-      const customEvent = e as CustomEvent<{ theme?: string }>;
-      const theme = customEvent.detail?.theme;
+    const applyTheme = (theme: string) => {
       if (theme === 'light') {
         document.documentElement.classList.remove('dark');
         document.documentElement.classList.add('light');
-      } else if (theme === 'dark') {
+      } else {
         document.documentElement.classList.add('dark');
         document.documentElement.classList.remove('light');
       }
     };
-    
+    applyTheme(savedTheme);
+
+    // Local in-tab theme changes (legacy event, still emitted by GUIConfigPanel
+    // when the operator picks a new theme from the dropdown).
+    const handleThemeChange = (e: Event) => {
+      const customEvent = e as CustomEvent<{ theme?: string }>;
+      const theme = customEvent.detail?.theme;
+      if (theme === 'light' || theme === 'dark') applyTheme(theme);
+    };
     window.addEventListener('gui-config-changed', handleThemeChange);
-    return () => window.removeEventListener('gui-config-changed', handleThemeChange);
+
+    // Cross-instance / WS-driven theme changes: TopBar dispatches
+    // `app-config-updated` for every centralized key. We react only to ui.theme.
+    const handleAppConfig = (e: Event) => {
+      const detail = (e as CustomEvent<{ key?: string; value?: unknown }>).detail;
+      if (detail?.key === 'ui.theme' && (detail.value === 'light' || detail.value === 'dark')) {
+        applyTheme(String(detail.value));
+        try { localStorage.setItem('mouse_theme', String(detail.value)); } catch {}
+      }
+    };
+    window.addEventListener('app-config-updated', handleAppConfig);
+
+    // Install the global write-through bridges:
+    //   • localStorage.setItem(<legacy_key>, ...) → also PUT /api/app-config
+    //   • app-config-updated WS event → also localStorage.setItem + legacy event
+    // This means existing panels keep working unchanged AND every change is
+    // mirrored to the central backend (Postgres + Firebase RTBD) AND every
+    // connected GCS reflects the change live.
+    installLocalStorageMirror();
+    installAppConfigBridge();
+
+    // Best-effort: copy any legacy localStorage entries up to the central
+    // store on first start. Subsequent runs are a no-op.
+    void migrateLegacyLocalStorageKeys();
+
+    return () => {
+      window.removeEventListener('gui-config-changed', handleThemeChange);
+      window.removeEventListener('app-config-updated', handleAppConfig);
+    };
   }, []);
 
   return (
@@ -127,6 +160,8 @@ function App() {
           <TelemetryProvider>
             <AppErrorBoundary>
               <Toaster />
+              <SonnerToaster richColors closeButton position="top-right" />
+              <GlobalAudioReceiver />
               <Router />
             </AppErrorBoundary>
           </TelemetryProvider>
